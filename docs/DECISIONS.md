@@ -512,14 +512,37 @@ saves — the resulting buckets measure 1.43x against a 1.03x theoretical floor.
 **Kernels, the rest.** 24 of Qwen3.5-4B's 32 layers are linear-attention, and
 without `flash-linear-attention` transformers runs `chunk_gated_delta_rule` on
 its reference PyTorch path — three quarters of the model on the slow route.
-That layer is now uncommented in the image. It had been left out on the grounds
-that a failed build is worse than a slow run; a run that does not fit its
-timeout changes that trade.
+That layer is now in the image. It had been left out on the grounds that a
+failed build is worse than a slow run; a run that does not fit its timeout
+changes that trade.
+
+`causal-conv1d` is **not** included, and the first attempt to add it alongside
+proved why the two are not interchangeable. It is a CUDA *source* build that
+needs `nvcc`, which `debian_slim` does not ship, so the image build dies at
+`Getting requirements to build wheel` with `NameError: name
+'bare_metal_version' is not defined` — a confusing way to say "no compiler".
+Including it would mean an `nvidia/cuda:*-devel` base and a far heavier image,
+to accelerate only the short depthwise convolution.
+`flash-linear-attention` carries the linear-attention core and is pure Python
+and Triton, so it needs no compiler. The lesson is narrower than "install the
+kernels": **a pure-Python wheel and a CUDA source build are different
+decisions**, and bundling them into one turned a correct call into a failed
+build.
 
 **The trade accepted:** length-bucketed batches are more homogeneous in source,
 because length correlates with source here. Over an epoch the shuffled batch
 order distributes them evenly, and the alternative is paying 3x. Worth
 revisiting if the loss curves look source-periodic.
+
+**A caveat on the 23 h figure itself.** It was a *cumulative* rate read at step
+25, so it was dominated by startup — weight loading, allocator warmup, and
+Triton JIT. The 0.8B smoke makes the size of that effect concrete: 4.68 s/step
+over the first 25 steps, 0.40 s/step after, reported cumulatively as 0.33 it/s
+against a true 2.50. `ProgressLog` now measures rate, throughput and ETA over
+the window since the last report. The padding finding stands on its own —
+4.43x was measured offline through the collator, not inferred from the ETA —
+but the 23 h number was inflated by an unknown amount and should not be quoted
+as a baseline.
 
 **The general lesson, restated from ADR-016 because it recurred:** the estimate
 was built from a token count that was correct and a padding factor that was

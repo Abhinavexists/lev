@@ -261,6 +261,13 @@ Losses are windowed **per readout mode**, not blended. The two sit at different
 scales — Mode B starts near `ln(K)`, so ~5.0 for a 151-option question — and a
 single average hides which one is moving.
 
+Rate, throughput and ETA are measured over the window since the last report,
+not cumulatively. Startup — weight load, allocator warmup, and a Triton JIT
+compile that can run for minutes — is a one-off, and a cumulative average never
+stops paying for it. On the 0.8B smoke that was 0.33 it/s reported against a
+2.50 it/s reality, and an ETA wrong by the same factor. **Read the second
+progress line, not the first.**
+
 Throughput counts the tokens actually fed to the model, from the attention
 mask, not `avg_tokens_per_example × batch`. That constant was wrong by 10×
 once (ADR-016); a throughput readout derived from it would have agreed with the

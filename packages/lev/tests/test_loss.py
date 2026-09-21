@@ -472,3 +472,78 @@ class TestLengthBucketing:
         a = [[id(e) for e in b] for b in batcher(rows, epoch=3)]
         b = [[id(e) for e in b] for b in batcher(rows, epoch=3)]
         assert a == b
+
+
+class TestWindowedRate:
+    """Startup cost is a one-off; a cumulative average never stops paying it.
+
+    Measured on the 0.8B Modal smoke: 4.68 s/step for the first 25 steps
+    (weight load + Triton JIT), 0.40 s/step after. Reported cumulatively that
+    is 0.33 it/s against a true 2.50 -- and the ETA is wrong by the same 7.5x,
+    which is how a healthy run gets abandoned for being slow.
+    """
+
+    def test_rate_reflects_the_window_not_the_startup_stall(self, capsys, monkeypatch):
+        import lev.train.loop as loop
+
+        clock = {"t": 0.0}
+        monkeypatch.setattr(loop.time, "monotonic", lambda: clock["t"])
+
+        log = loop.ProgressLog(total_steps=40, log_every=20)
+        # First window: a 100 s stall, then 20 quick steps.
+        clock["t"] = 100.0
+        for step in range(20):
+            clock["t"] += 0.4
+            log.record(step, 1.0, "A", 1e-4, tokens=100)
+        first = capsys.readouterr().out
+
+        # Second window: steady state only.
+        for step in range(20, 40):
+            clock["t"] += 0.4
+            log.record(step, 1.0, "A", 1e-4, tokens=100)
+        second = capsys.readouterr().out
+
+        rate = lambda out: float(re.search(r"([\d.]+) it/s", out).group(1))  # noqa: E731
+        assert rate(second) == pytest.approx(2.5, abs=0.05), second
+        # The steady-state window must not be dragged by the earlier stall.
+        assert rate(second) > 5 * rate(first), f"{rate(first)} -> {rate(second)}"
+
+    def test_eta_uses_the_windowed_rate(self, capsys, monkeypatch):
+        import lev.train.loop as loop
+
+        clock = {"t": 0.0}
+        monkeypatch.setattr(loop.time, "monotonic", lambda: clock["t"])
+        log = loop.ProgressLog(total_steps=1000, log_every=10)
+
+        clock["t"] = 500.0  # a long stall before the first step
+        for step in range(10):
+            clock["t"] += 1.0
+            log.record(step, 1.0, "A", 1e-4, tokens=10)
+        capsys.readouterr()
+        for step in range(10, 20):
+            clock["t"] += 1.0
+            log.record(step, 1.0, "A", 1e-4, tokens=10)
+
+        out = capsys.readouterr().out
+        # 980 steps left at 1 s/step = 0:16:20, not inflated by the 500 s stall.
+        assert "eta 0:16:20" in out, out
+
+    def test_throughput_is_also_windowed(self, capsys, monkeypatch):
+        import lev.train.loop as loop
+
+        clock = {"t": 0.0}
+        monkeypatch.setattr(loop.time, "monotonic", lambda: clock["t"])
+        log = loop.ProgressLog(total_steps=4, log_every=2)
+
+        clock["t"] = 100.0
+        for step in range(2):
+            clock["t"] += 1.0
+            log.record(step, 1.0, "A", 1e-4, tokens=1000)
+        capsys.readouterr()
+        for step in range(2, 4):
+            clock["t"] += 1.0
+            log.record(step, 1.0, "A", 1e-4, tokens=1000)
+
+        out = capsys.readouterr().out
+        # 2000 tokens over 2 s, not 4000 over 102 s.
+        assert "1,000 tok/s" in out, out

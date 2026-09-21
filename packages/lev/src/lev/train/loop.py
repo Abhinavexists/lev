@@ -426,6 +426,9 @@ class ProgressLog:
     two readouts sit at different scales (Mode B starts near `ln(K)`), so a
     single blended average hides which one is actually moving.
 
+    Rate, throughput and ETA are all measured over the window since the last
+    report, not cumulatively from process start -- see `record`.
+
     Throughput counts the tokens actually fed to the model, taken from the
     attention mask. Deriving it from `config.avg_tokens_per_example` instead
     would report the plan rather than the run -- and that constant was wrong by
@@ -439,27 +442,44 @@ class ProgressLog:
         self.start = time.monotonic()
         self.window: dict[str, list[float]] = {}
         self.tokens = 0
+        self.window_tokens = 0
+        self.mark = self.start
+        self.mark_step = 0
 
     def record(self, step: int, loss: float, mode: str, lr: float, tokens: int = 0) -> None:
         self.window.setdefault(mode, []).append(loss)
         self.tokens += tokens
+        self.window_tokens += tokens
         if (step + 1) % self.every and step + 1 != self.total:
             return
 
         done = step + 1
-        # A coarse clock can report zero on a fast first window; never divide by it.
-        elapsed = max(time.monotonic() - self.start, 1e-9)
-        rate = done / elapsed
+        now = time.monotonic()
+        # A coarse clock can report zero on a fast window; never divide by it.
+        elapsed = max(now - self.start, 1e-9)
+        # Rate over the *window*, not since process start. Startup cost is a
+        # one-off -- loading weights, allocator warmup, and with
+        # flash-linear-attention a minutes-long Triton JIT compile -- and a
+        # cumulative average never stops paying for it. Measured on the 0.8B
+        # smoke: 4.68 s/step over the first 25 steps, 0.40 s/step thereafter,
+        # reported cumulatively as 0.33 it/s against a true 2.50. An ETA built
+        # on that is wrong by the same factor, which is how a run gets
+        # abandoned for being slow when it is not.
+        span = max(now - self.mark, 1e-9)
+        rate = (done - self.mark_step) / span
         remaining = (self.total - done) / rate if rate else 0.0
         losses = "  ".join(f"{m}={sum(v) / len(v):.4f}" for m, v in sorted(self.window.items()))
         print(
             f"step {done:>6}/{self.total}  {100 * done / self.total:5.1f}%  "
             f"{losses}  lr={lr:.2e}  {rate:.2f} it/s  "
-            f"{self.tokens / elapsed:,.0f} tok/s  "
+            f"{self.window_tokens / span:,.0f} tok/s  "
             f"elapsed {_hms(elapsed)}  eta {_hms(remaining)}{_gpu_mem()}",
             flush=True,
         )
         self.window.clear()
+        self.window_tokens = 0
+        self.mark = now
+        self.mark_step = done
 
 
 def _hms(seconds: float) -> str:
