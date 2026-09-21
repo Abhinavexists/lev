@@ -8,7 +8,8 @@ the same code path and one changed flag:
 Error codes mirror the real API (422 validation, 429 rate limit, 529 overloaded)
 so client retry logic behaves identically against either.
 
-NOT YET RUN. Start it with `lev serve` and check `/health` first.
+Runs: serves Mode A requests against a local `Qwen/Qwen3.5-4B-Base`. Start it with
+`lev serve` and check `/health` first.
 """
 
 from __future__ import annotations

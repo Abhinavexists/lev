@@ -16,9 +16,11 @@ Why the fork is cheap here specifically: Qwen3.5 is a hybrid, so only 8 of its 3
 layers hold a K/V cache. The other 24 carry small conv/recurrent state. Forking a
 full-attention model's cache N ways is what makes naive implementations slow.
 
-NOT YET RUN ON HARDWARE. The cache-fork path in particular depends on transformers'
-hybrid cache API and must be verified against a real checkpoint before it is trusted.
-`tests/test_engine_contract.py` covers the parts that do not need a GPU.
+Verified end-to-end on `Qwen/Qwen3.5-4B-Base` (CPU, transformers 5.17): Mode A
+answers Choice, Score and Noul in one prefill with `output_tokens == 0`. Mode B is
+written but untrained, so a question routed to it still raises.
+
+The cache fork was the one part that could not be reasoned about -- see `_fork`.
 """
 
 from __future__ import annotations
@@ -152,7 +154,7 @@ class DecisionEngine:
             out = self.model(
                 input_ids=batch,
                 attention_mask=full_attention,
-                past_key_values=_fork(cache, len(suffixes)),
+                past_key_values=_fork(cache, len(suffixes), device),
                 use_cache=False,
             )
 
@@ -202,21 +204,29 @@ class DecisionEngine:
         raise TypeError(f"unknown question type {kind!r}")
 
 
-def _fork(cache, n: int):
-    """Expand a batch-1 cache to `n` rows.
+def _fork(cache, n: int, device=None):
+    """Expand a batch-1 prefix cache to `n` rows, one per question.
 
-    `expand` would alias storage across rows, which is fine for a read-only prefix
-    but breaks the moment anything writes. `copy` is the safe default; optimise it
-    only after measuring, and only with a test that catches aliasing.
+    `batch_repeat_interleave` is the obvious API and it is wrong here: it only
+    exists on full-attention layers. Qwen3.5 is a hybrid -- 24 of its 32 layers
+    are `LinearAttentionLayer`, which holds `conv_states`/`recurrent_states`
+    rather than keys/values and raises `AttributeError` on that call. The hybrid
+    split is the reason we chose this backbone, so the fork has to handle it.
+
+    `reorder_cache` is defined on `CacheLayerMixin`, so *every* layer type
+    implements it, and each one indexes its own state correctly. Selecting index
+    0 `n` times turns one row into `n` -- `index_select` expands, it does not
+    merely permute.
+
+    The cache is deep-copied first because `reorder_cache` mutates in place, and
+    the prefix cache must stay reusable for the next request.
     """
-    if hasattr(cache, "batch_repeat_interleave"):
-        forked = copy.deepcopy(cache)
-        forked.batch_repeat_interleave(n)
-        return forked
-    raise NotImplementedError(
-        "This transformers version exposes no cache-fork API. Either upgrade, or "
-        "run each question as its own forward pass (correct, just slower)."
-    )
+    import torch
+
+    forked = copy.deepcopy(cache)
+    rows = torch.zeros(n, dtype=torch.long, device=device)
+    forked.reorder_cache(rows)
+    return forked
 
 
 def _gini(probs: list[float]) -> float:

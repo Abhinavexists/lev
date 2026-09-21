@@ -174,7 +174,7 @@ Ranked by what they would actually change:
 | Contamination guard | **done, tested** |
 | Training config + budget arithmetic | **done, verified** |
 | Modal app, volumes, smoke path | written, **not yet run** |
-| Decision engine (prefill, fork, readout) | written, **not yet run on hardware** |
+| Decision engine (prefill, fork, readout) | **runs on Qwen3.5-4B-Base**, Mode A verified |
 | Mode B head | written, **untrained** |
 | Data loaders | **the hacking-phase task** |
 

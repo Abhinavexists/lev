@@ -8,10 +8,9 @@
 Zero added parameters, so this works on a stock checkpoint before any training.
 That is why build step 1 in docs/ARCHITECTURE.md §5.9 needs no GPU time at all.
 
-NOT YET RUN ON HARDWARE. The shapes and indexing below follow the reference
-implementations (litjev's `output.logits[i, len(suffix_ids[i]) - 1, candidate_ids[i]]`),
-but this file has not been executed against a real checkpoint. Verify against
-`tests/test_readout_shapes.py` and a real model before trusting it.
+Verified against `Qwen/Qwen3.5-4B-Base`: the indexing below follows litjev's
+`output.logits[i, len(suffix_ids[i]) - 1, candidate_ids[i]]` and produces sane
+distributions on a real checkpoint.
 """
 
 from __future__ import annotations
