@@ -24,7 +24,6 @@ FLOPS_PER_PARAM_PER_TOKEN = 8.0
 
 @dataclass
 class TrainConfig:
-    # --- backbone -----------------------------------------------------------
     # Qwen3.5-4B-Base: 32 layers = 24 linear + 8 full attention, 262k context,
     # natively multimodal. The hybrid split is why a persistent prefix cache is
     # affordable without pretraining one. See §5.1.
@@ -33,7 +32,6 @@ class TrainConfig:
     hidden_size: int = 2560
     dtype: str = "bfloat16"
 
-    # --- adaptation ---------------------------------------------------------
     # LoRA, not full fine-tune: 4B full-FT needs ~64GB of optimiser state and
     # leaves ~16GB for activations, which is too tight at long context. §5.2.
     use_lora: bool = True
@@ -54,14 +52,13 @@ class TrainConfig:
     train_mode_b_head: bool = True
     mode_b_proj_dim: int = 512
 
-    # --- data ---------------------------------------------------------------
+    # Data.
     n_examples: int = 200_000
-    # MEASURED, not assumed: 121 tokens mean over 1,500 rendered prompts from
-    # the real mixture, tokenised with the Qwen3.5 tokenizer. Per source the
-    # mean runs 38 (clinc_oos) to 305 (imdb); p95 over all of them is 390 and
-    # the longest seen is 1,104. The value here was 1,200 -- a guess, and 10x
-    # too high, which made the 4B budget read as 16 hours instead of ~2.
-    # Re-measure with `lev plan --data <dir>` after changing the mixture.
+    # Measured, not assumed: a 121-token mean over 1,500 rendered prompts from
+    # the real mixture under the Qwen3.5 tokenizer. Per source the mean runs 38
+    # (clinc_oos) to 305 (imdb); p95 is 390 and the longest seen is 1,104. A
+    # guessed value here put the 4B budget out by 10x (ADR-016), so re-measure
+    # with `lev plan --data <dir>` after changing the mixture.
     avg_tokens_per_example: int = 128
     # A truncation cap, not the training length. The collator pads to the
     # longest row in the batch, so a generous cap costs nothing except on the
@@ -73,7 +70,7 @@ class TrainConfig:
     # to spread mass instead of guessing confidently. decider's trick. §5.6.
     abstain_fraction: float = 0.1
 
-    # --- optimisation -------------------------------------------------------
+    # Optimisation.
     epochs: int = 3
     # Sized for the data, not for a 4k-token guess. At a ~128-token mean, a
     # batch of 8 makes 75,000 optimiser steps for 600k examples and the run
@@ -82,8 +79,8 @@ class TrainConfig:
     per_device_batch: int = 32
     # Batches are formed from length-sorted windows of this many batches. A
     # batch pads to its longest row, so mixing a 1,300-token review with 31
-    # short tickets spends 4.9x of the forward pass on padding (measured).
-    # Sorting within a window brings that to 1.03x while keeping order random.
+    # short tickets spends 4.43x of the forward pass on padding. Sorting within
+    # a window brings that to 1.43x while keeping the order random. ADR-017.
     bucket_window: int = 64
     grad_accum: int = 1
     learning_rate: float = 1e-4
@@ -97,7 +94,7 @@ class TrainConfig:
     # See readout/mode_b.py for why ordinality stops being free under Mode B.
     ordinal_weight: float = 0.25
 
-    # --- bookkeeping --------------------------------------------------------
+    # Bookkeeping.
     seed: int = 17
     # A long run on a preemptible H100 will be interrupted. Checkpointing
     # every ~2000 steps costs a few seconds and bounds the loss to that much.
@@ -107,7 +104,6 @@ class TrainConfig:
     log_every: int = 25
     output_dir: str = "checkpoints/lev-4b"
 
-    # --- derived ------------------------------------------------------------
     @property
     def tokens_per_epoch(self) -> int:
         return self.n_examples * self.avg_tokens_per_example

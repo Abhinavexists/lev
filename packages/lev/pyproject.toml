@@ -11,7 +11,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Everything that needs a model. Split out so CI and the Mac path stay light.
+# Everything that needs a model. Split out so the test suite and local
+# development install without torch.
 train = [
     "torch>=2.6",
     "transformers>=4.57",

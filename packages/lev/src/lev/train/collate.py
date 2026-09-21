@@ -104,11 +104,11 @@ class ModeBatcher:
 
     **Batches are length-bucketed**, and that is worth as much as everything else
     in this file put together. A batch is padded to its longest row, so the model
-    computes on the rectangle, not on the real tokens. Measured on the real
-    mixture at batch 32: a mean row of 127 tokens pads to a rectangle of 617 --
-    **4.9x of every forward pass spent on padding**, because one 1,300-token
-    imdb review lands in a batch of 32 short banking tickets and drags the whole
-    batch up to it. Sorting by length first brings that to 1.03x.
+    computes on the rectangle, not on the real tokens. Measured through this
+    collator on the real mixture at batch 32, random batching spends **4.43x** of
+    every forward pass on padding -- one 1,300-token imdb review lands among 31
+    short banking tickets and drags the rectangle up to it. Bucketing brings that
+    to 1.43x, against a 1.03x floor. See ADR-017.
 
     Sorting happens inside a shuffled *window*, not globally: a globally sorted
     epoch would feed every short example before every long one, which correlates
@@ -142,7 +142,7 @@ class ModeBatcher:
 
         Tokenising twice -- once to bucket and once to collate -- would cost more
         than the padding it saves. Characters and tokens correlate closely enough
-        that the resulting buckets are near-optimal (1.03x measured).
+        that the buckets land at 1.43x against a 1.03x theoretical floor.
         """
         return len(str(example.state))
 

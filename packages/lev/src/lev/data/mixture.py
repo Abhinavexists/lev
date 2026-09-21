@@ -55,7 +55,8 @@ class MixtureSpec:
     def validate(self) -> None:
         # Raises on any source colliding with an S1Bench evaluation subset. This
         # runs before a single example is loaded, because a contaminated run looks
-        # *better* and would silently invalidate the only number we compete on.
+        # *better* and would silently invalidate the only number this project
+        # competes on.
         assert_clean(self.sources.keys())
         if not self.sources:
             raise ValueError("mixture has no sources")

@@ -59,8 +59,8 @@ def export(
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    # Abstain rows are a training device: scoring them would measure our
-    # abstention rather than our accuracy, and the two are different numbers.
+    # Abstain rows are a training device: scoring them measures abstention
+    # rather than accuracy, and the two are different numbers.
     answerable = [row for row in load_split(data_dir, split) if not row.abstain]
     by_source = _group_by_source(answerable)
 

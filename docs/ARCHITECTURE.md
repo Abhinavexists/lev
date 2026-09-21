@@ -356,36 +356,41 @@ Assumptions stated so you can change them:
 trainable model      4e9 params (backward cost is full-model even under LoRA)
 cost per token       ~8 × N FLOPs   (6 × N fwd+bwd, +33% for grad checkpointing)
                      = 8 × 4e9      = 3.2e10 FLOP/token
-dataset              200,000 question-instances × ~128 tokens (measured) = 2.6e7 tokens/epoch
-epochs               3                                          = 7.2e8 tokens
-total compute        3.2e10 × 7.2e8                             = 2.3e19 FLOPs
+dataset              200,000 question-instances × 128 tokens (measured) = 2.56e7 tokens/epoch
+epochs               3                                          = 7.68e7 tokens
+total compute        3.2e10 × 7.68e7                            = 2.46e18 FLOPs
 H100 effective       ~400 TFLOP/s bf16 (realistic with checkpointing, not peak 990)
 ```
 
-**2.3e19 / 4e14 ≈ 5.8e4 s ≈ 16 GPU-hours** for the full 3-epoch run.
+**2.46e18 / 4e14 ≈ 6.1e3 s ≈ 1.7 GPU-hours** for the full 3-epoch run.
 
-Cross-check on step count: at 4 k sequence × batch 8 = 32 k tokens/step, that is
-≈ 7,300 steps/epoch, ≈ 22,000 steps total, ≈ 2.6 s/step — about 12.6 k tokens/s, which
-is a sane rate for a 4B with checkpointing on one H100.
+Cross-check on step count: batch 32 gives 6,250 steps/epoch, 18,750 total.
 
-**So a full run is under a day, not a week.** That is the real consequence of choosing
-LoRA on a 4B: you can afford maybe a dozen full runs, which means ablations — 2B vs 4B,
-Mode B on vs off, temperature per-type vs global — are affordable rather than
-aspirational. Budget the H100 for **ablations, not for one heroic run**.
+Two corrections this arithmetic has already needed, both from
+[ADR-016](DECISIONS.md#adr-016--sequence-length-is-measured-and-the-budget-was-wrong-by-10x)
+and [ADR-017](DECISIONS.md#adr-017--batches-are-length-bucketed-and-the-budget-was-wrong-again):
+the 128-token mean is measured, not assumed — an earlier guess of 1,200 put this at
+16 hours — and the model computes on the padded batch rectangle, not on real tokens,
+which cost a further 4.4× until batches were length-bucketed. The first measured run
+sustained ~4,200 tok/s against a ~4-hour wall clock, so treat 1.7 h as a floor.
+
+**A full run is hours, not days.** That is the real consequence of choosing LoRA on a
+4B: you can afford many full runs, which means ablations — 2B vs 4B, Mode B on vs off,
+temperature per-type vs global — are affordable rather than aspirational. Budget the
+H100 for **ablations, not for one heroic run**.
 
 ### 5.9 Build order
 
 1. **Mode A readout on stock `Qwen3.5-4B-Base`, serving `/v1/systemone`. No training.**
-   simplejev's evidence says this alone reaches ~0.75 macro. Days, not months.
-2. **Fit a temperature.** Evidence says this is ECE 0.43 → ~0.08. Do it before anything
-   else; it is the cheapest point on the curve.
+   simplejev's evidence says this alone reaches ~0.75 macro. *Done.*
+2. **Fit a temperature.** Evidence says this is ECE 0.43 → ~0.08. The cheapest point
+   on the curve, so it comes before anything else. *Implemented, not yet fitted.*
 3. **Add Mode B** and the router. This is the differentiator — measure A/B agreement
-   where both are valid.
-4. **LoRA fine-tune** with random layout, abstain augmentation, proper scoring.
+   where both are valid. *Done; agreement unmeasured (Q2).*
+4. **LoRA fine-tune** with random layout, abstain augmentation, proper scoring. *Done.*
 5. **RL with a belief reward** — only once 1–4 are measured.
 
-Steps 1–2 require no training at all and should be done on the Mac before the H100 is
-touched.
+Steps 1–2 need no training and run on a laptop, before the H100 is touched.
 
 ### 5.10 What is evidenced and what is projected
 
@@ -396,11 +401,15 @@ Stated plainly, because the distinction matters:
   each implementation surveyed.
 - **Taken from others' published numbers:** the 0.7189 target (reflex), 0.7033
   (decider-2b), the schema-first cost table, ECE 0.0849 vs 0.4252.
-- **Projected, not measured:** that this combination reaches Jev-level calibration; the
-  16-hour budget; that Mode B closes the option-ceiling gap without costing accuracy.
+- **Measured since:** the 128-token mean and the padding factor (§5.8); that both
+  readouts serve and train; that `levbench` reproduces Jev's published per-subset
+  numbers within ±0.4 pp on 5 of 6.
+- **Projected, not measured:** that this combination reaches Jev-level calibration;
+  the wall-clock of a full run; that Mode B closes the option-ceiling gap without
+  costing accuracy.
 
-**Nothing in this design has been run by me, and `levbench` has still never touched the
-live Jev API.** The design is evidenced; its outcome is a hypothesis.
+**No trained checkpoint has been evaluated yet.** The design is evidenced, the pipeline
+is exercised, and the outcome is still a hypothesis.
 
 ## 6. How the harness validates this
 

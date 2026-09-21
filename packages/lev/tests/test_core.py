@@ -56,7 +56,7 @@ class TestRouter:
         assert r.codes == ["A", "B", "C"]
 
     def test_falls_through_to_mode_b_instead_of_rejecting(self, poor_tokenizer):
-        """The differentiator: where other implementations reject, we route."""
+        """The differentiator: where other implementations reject, lev routes."""
         q = Choice(criteria={k: None for k in "abcdefgh"})
         r = route(q, poor_tokenizer)
         assert r.mode is Mode.CANDIDATE_PATH

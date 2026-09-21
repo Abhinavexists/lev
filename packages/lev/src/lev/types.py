@@ -69,7 +69,7 @@ type Question = Annotated[Noul | Choice | Score, Field(discriminator="type")]
 class NoulAnswer(BaseModel):
     type: Literal["noul"] = "noul"
     noul: float
-    # Ours, not Jev's — see the module docstring.
+    # A lev addition, absent from Jev — see the module docstring.
     probabilities: dict[int, float] | None = None
     confidence: float | None = None
 
@@ -94,7 +94,7 @@ type Answer = Annotated[NoulAnswer | ChoiceAnswer | ScoreAnswer, Field(discrimin
 
 class Usage(BaseModel):
     input_tokens: int
-    # Always 0. We never generate; answers are read out of a logit vector.
+    # Always 0: nothing is generated, answers are read from a logit vector.
     output_tokens: int = 0
     cached_input_tokens: int = 0
 

@@ -144,7 +144,7 @@ def build_dataset(
             ),
             schema_first_fraction=schema_first_fraction,
             # Abstain augmentation is a training device. Unanswerable rows in the
-            # test split would measure our abstention, not our accuracy.
+            # test split would measure abstention, not accuracy.
             abstain_fraction=abstain_fraction if is_train else 0.0,
             # A different stream per split, so the three do not replay the same
             # layout and abstain decisions in lockstep.

@@ -41,7 +41,7 @@ def predicted_label(answer: Any) -> Any:
     if kind == "noul":
         return float(answer.noul) >= 0.5
     if kind == "choice":
-        # Trust the model's own `choice` over our argmax -- they can disagree
+        # Trust the model's own `choice` over a recomputed argmax -- they disagree
         # on ties, and `choice` is what a caller would actually act on.
         return answer.choice
     if kind == "score":

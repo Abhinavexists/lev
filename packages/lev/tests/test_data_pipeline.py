@@ -1,8 +1,9 @@
 """The data pipeline: registry, sampling, splits, and the guards around them.
 
-Everything here runs offline. `load_source` takes an injected `load_dataset`, so
-the only thing a network would add is a slower test that fails when HF is down.
-`test_sources_live.py` is where the real ids get checked.
+Everything here runs offline: `load_source` takes an injected `load_dataset`, so
+a network would only add a slower test that fails when HF is down. Nothing here
+checks that the real dataset ids still resolve -- a dead or renamed id surfaces
+on the next `lev data build`.
 """
 
 from __future__ import annotations

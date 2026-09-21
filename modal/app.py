@@ -66,7 +66,7 @@ image = (
     # the short depthwise conv. Unpinned because it tracks torch closely; if the
     # build breaks, delete this layer -- the run gets slow, not wrong.
     .pip_install("flash-linear-attention")
-    # The package last, so editing our code does not invalidate the expensive
+    # The package last, so editing it does not invalidate the expensive
     # dependency layer above. `add_local_dir`, not `add_local_python_source`:
     # the latter resolves through the local interpreter's import system and so
     # fails unless `lev` is installed in whichever Python runs the `modal` CLI.

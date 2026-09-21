@@ -74,8 +74,6 @@ class DecisionEngine:
         self.mode_b_head = mode_b_head
         self._candidate_cache: dict[tuple[str, ...], Any] = {}
 
-    # -- public API ---------------------------------------------------------
-
     def system_one(self, state, questions: dict[str, Question]) -> SystemOneResponse:
         routes = route_all(questions, self.tokenizer, self.config.max_label_options)
 
@@ -109,8 +107,6 @@ class DecisionEngine:
                 cached_input_tokens=len(prefix_ids),
             ),
         )
-
-    # -- internals ----------------------------------------------------------
 
     def _render(self, state, questions: dict[str, Question], routes: dict[str, Route]):
         codes = {name: route.codes for name, route in routes.items()}

@@ -1,33 +1,35 @@
 """The training sources: public classification datasets, cast as typed questions.
 
-Every source here is a plain labelled-classification dataset. That is deliberate.
-A Jev-like model is not learning world knowledge, it is learning to put *calibrated
-mass on a candidate set* -- so the supervision we need is a gold label plus an
-explicit option set, which is exactly what a classification corpus is.
+Every source is a plain labelled-classification dataset, deliberately. A Jev-like
+model is not learning world knowledge, it is learning to put *calibrated mass on a
+candidate set*, so the supervision it needs is a gold label plus an explicit option
+set -- which is exactly what a classification corpus is.
 
 Three things the registry has to get right:
 
-  primitive coverage  Choice, Score and Noul all need supervision. A mixture of
-                      only Choice teaches nothing about the 9-rating-token Noul
+  primitive coverage  Choice, Score and Noul all need supervision. A Choice-only
+                      mixture teaches nothing about the 9-rating-token Noul
                       readout or the ordinal structure of Score.
-  Mode B coverage     banking77 (77 intents) and clinc_oos (150) are the *only*
-                      sources whose option sets overflow single-token label codes.
-                      Without them Mode B -- the differentiator -- never trains.
-                      See `MODE_B_SOURCES`; the default mixture weights them up.
-  cleanliness         every id is checked against the ADR-009 block list at import
-                      of the registry, not at load time.
+  Mode B coverage     banking77 (77 intents) and clinc_oos (151) are the *only*
+                      sources whose option sets overflow single-token label codes,
+                      so without them Mode B -- the differentiator -- never trains.
+                      `default_weights` weights them up; see `MODE_B_SOURCES`.
+  cleanliness         every id is checked against the ADR-009 block list when this
+                      module is imported, not when a loader runs.
 
-Label names come from the dataset's own `ClassLabel` feature wherever possible
-rather than being retyped here, because a silently reordered label list turns into
-a wrong gold answer that no test would catch.
+Label names come from the dataset's own `ClassLabel` feature rather than being
+retyped here: a silently reordered label list becomes a wrong gold answer, and no
+offline test would catch it.
 
-Every id here is parquet-backed and loads under `datasets>=5`, which no longer
-executes dataset scripts. That ruled out three otherwise-good candidates:
-`CogComp/trec` and `takala/financial_phrasebank` have no parquet mirror carrying
-their label names, and are omitted rather than pinned to a reordered third-party
-copy; `PolyAI/banking77` is script-backed, so we use `legacy-datasets/banking77`,
-which is the same corpus with its `ClassLabel` intact. `test_sources.py` asserts
-the whole registry stays loadable so this cannot rot silently.
+Every id is parquet-backed and loads under `datasets>=5`, which no longer executes
+dataset scripts. That ruled out three otherwise-good candidates. `CogComp/trec` and
+`takala/financial_phrasebank` have no parquet mirror carrying their label names, and
+are omitted rather than pinned to a reordered third-party copy. `PolyAI/banking77` is
+script-backed, so the registry uses `legacy-datasets/banking77` -- the same corpus
+with its `ClassLabel` intact.
+
+**Loadability is not covered by the test suite**, which injects fake loaders so it
+can run offline. A dead or renamed id surfaces only on the next real `data build`.
 """
 
 from __future__ import annotations
@@ -44,7 +46,7 @@ from .contamination import assert_clean
 from .mixture import Example
 
 # Options beyond this many cannot get a single-token label code in any tokenizer
-# we target (A..Z is 26). Sources above it are the Mode B training signal.
+# targeted here (A..Z is 26). Sources above it are the Mode B training signal.
 SINGLE_TOKEN_CODE_CEILING = 26
 
 # Sources known to exceed the ceiling but whose label names are read from the
@@ -86,7 +88,7 @@ class SourceSpec:
 
 
 REGISTRY: dict[str, SourceSpec] = {
-    # ---- Choice: small, well-separated option sets -------------------------
+    # Choice: small, well-separated option sets.
     "ag_news": SourceSpec(
         name="ag_news",
         hf_id="fancyzhx/ag_news",
@@ -111,7 +113,7 @@ REGISTRY: dict[str, SourceSpec] = {
         primitive="choice",
         instructions="What kind of thing is this article about?",
     ),
-    # ---- Mode B: option sets too large for single-token label codes --------
+    # Mode B: option sets too large for single-token label codes.
     "banking77": SourceSpec(
         name="banking77",
         hf_id="legacy-datasets/banking77",
@@ -129,7 +131,7 @@ REGISTRY: dict[str, SourceSpec] = {
         primitive="choice",
         instructions="What is the user asking the assistant to do?",
     ),
-    # ---- Score: genuinely ordered levels ------------------------------------
+    # Score: genuinely ordered levels.
     "yelp_review_full": SourceSpec(
         name="yelp_review_full",
         hf_id="Yelp/yelp_review_full",
@@ -154,7 +156,7 @@ REGISTRY: dict[str, SourceSpec] = {
             "very positive",
         ),
     ),
-    # ---- Noul: a single yes/no proposition ----------------------------------
+    # Noul: a single yes/no proposition.
     "imdb": SourceSpec(
         name="imdb",
         hf_id="stanfordnlp/imdb",

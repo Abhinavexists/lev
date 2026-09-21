@@ -94,7 +94,7 @@ def batching_tokenizer() -> BatchingTokenizer:
     return BatchingTokenizer({f" {c}" for c in ascii_uppercase} | {f" {i}" for i in range(9)})
 
 
-# -- builders shared by the training-side tests -------------------------------
+# Builders shared by the training-side tests.
 
 
 @pytest.fixture

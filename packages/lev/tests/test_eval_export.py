@@ -93,7 +93,7 @@ class TestExport:
         assert items[0].labels["a"] in questions["a"].criteria
 
     def test_abstain_rows_are_excluded(self, tmp_path):
-        """Scoring them would measure our abstention, not our accuracy."""
+        """Scoring them measures abstention, not accuracy."""
         rows = [example(CHOICE, i % 2, i, source="a") for i in range(MIN_USEFUL_ITEMS + 10)]
         rows += [example(CHOICE, 0, 999, source="a", abstain=True) for _ in range(20)]
         out = tmp_path / "eval"

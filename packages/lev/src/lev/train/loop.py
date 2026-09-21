@@ -181,11 +181,10 @@ def candidate_logits(model, batch, head=None):
 
         flat = batch.candidate_index.reshape(-1)
         reprs = candidate_repr[flat].view(*batch.candidate_index.shape, -1)  # (B, K, H)
-        # The head is kept at full precision beside a bf16 backbone, so the
-        # hidden states have to be cast *up* to the head's dtype. Casting the
-        # other way -- to the activations' dtype, which is what this line did
-        # first -- raises on any GPU run and is invisible on CPU, where the
-        # backbone is fp32 already and the two dtypes coincide.
+        # The head is kept at full precision beside a bf16 backbone, so hidden
+        # states must be cast *up* to the head's dtype. Casting down to the
+        # activations' dtype instead raises on any GPU run, and is invisible on
+        # CPU where the backbone is fp32 and the two dtypes coincide.
         target_dtype = next(head.parameters()).dtype
         logits = head(question_repr.to(target_dtype), reprs.to(target_dtype), batch.candidate_mask)
 
@@ -247,9 +246,9 @@ def prepare_data(config: TrainConfig, data_dir: str):
     if not train:
         raise ValueError(f"{root / 'train.jsonl'} is empty")
 
-    # The guard again, at the last possible moment. The manifest records what was
-    # loaded months ago on another machine; re-checking it here is cheap and is
-    # the only place that catches a hand-edited mixture.
+    # The guard again, at the last possible moment. The manifest only records
+    # what some earlier run loaded, possibly on another machine; re-checking is
+    # cheap and is the only place that catches a hand-edited mixture.
     manifest_path = root / MANIFEST
     if manifest_path.is_file():
         import json

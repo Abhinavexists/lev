@@ -45,7 +45,7 @@ def cmd_plan(args: argparse.Namespace) -> None:
     """Print the training budget for a preset without spending it."""
     from .train.config import PRESETS
 
-    # argparse `choices` rejects an unknown preset before we get here.
+    # argparse `choices` rejects an unknown preset before this point.
     config = PRESETS[args.preset]
     if args.data:
         measured = _measure_tokens(config, args.data)

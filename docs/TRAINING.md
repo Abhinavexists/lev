@@ -221,7 +221,7 @@ overhead long before it was bound by FLOPs. Hence `per_device_batch = 32`.
 
 **This arithmetic still under-predicts, and the first real run proved it.**
 It assumes the model computes on the real tokens; it computes on the padded
-rectangle. Batches are now length-bucketed, which takes padding from 4.43x to
+rectangle. Batches are length-bucketed, which takes padding from 4.43x to
 1.43x, and the linear-attention kernels are installed. Treat ~2 h as a floor
 rather than an estimate until a full run lands — the measured figure before
 those two fixes was 23 h. [ADR-017.](DECISIONS.md#adr-017--batches-are-length-bucketed-and-the-budget-was-wrong-again)
@@ -390,9 +390,13 @@ Two bugs came out of running it that no test had caught:
 | Held-out eval export | **done — 2,760 items, ±4pts** |
 | Collator, both readouts, loss | **done, exercised on a real backbone** |
 | Training loop, checkpointing | **done — runs, writes adapter + head** |
-| Modal app, image, volumes | **image builds; `download` run green on Modal** |
-| Modal `build_data` / `smoke` / `train` / `serve` | written, **not yet run remotely** |
+| Modal app, image, volumes | **image builds on Modal** |
+| Modal `download` / `build_data` / `smoke` | **run green on Modal** |
+| Modal `train` | **runs on an H100**; no full run completed |
+| Modal `serve` / `calibrate` | written, **not yet run remotely** |
 | Decision engine (prefill, fork, readout) | **runs on Qwen3.5-4B-Base**, Mode A verified |
 | Mode B head | **trains**, untrained at scale |
 
-Everything marked "not yet run" says so in its module docstring too.
+Everything marked "not yet run" says so in its module docstring too. No trained
+checkpoint has been evaluated, so no accuracy or calibration number here comes from
+a model this repository produced.

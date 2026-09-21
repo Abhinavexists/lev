@@ -187,15 +187,17 @@ transport with no key at all.
 | Held-out eval export (2,760 items, ±4 pts) | **done**, round-trips into levbench |
 | Collator, both readouts, objective | **done, tested** |
 | Training loop + checkpointing | **done** — 30 steps on Qwen3.5-0.8B-Base, both modes, losses finite |
-| Modal app, image, volumes | **image builds; `download` run green on Modal** |
-| Modal `build_data` / `smoke` / `train` / `serve` | written, **not yet run remotely** |
+| Modal app, image, volumes | **image builds on Modal** |
+| Modal `download` / `build_data` / `smoke` | **run green on Modal** |
+| Modal `train` | **runs on an H100**; no full run completed |
+| Modal `serve` / `calibrate` | written, **not yet run remotely** |
 | Decision engine (prefill, fork, readout) | **runs on Qwen3.5-4B-Base**, Mode A verified |
 | Mode B head | **trains and serves**; untrained at scale |
 
-Every module that has not been executed says so in its own docstring. **Nothing here
-has been trained at scale yet** — the pipeline runs end to end and produces a
-checkpoint, but the 4B run has not happened, so the design is evidenced and its
-outcome is still a hypothesis.
+Every module that has not been executed says so in its own docstring. **No trained
+checkpoint has been evaluated yet** — the pipeline runs end to end on an H100 and
+produces checkpoints, but nothing has been measured off one, so the design is
+evidenced and its outcome is still a hypothesis.
 
 ---
 
