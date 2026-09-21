@@ -298,7 +298,12 @@ def run_training(
     device = _device_of(model)
 
     collator = DecisionCollator(tokenizer, max_seq_len=config.max_seq_len)
-    batcher = ModeBatcher(tokenizer, batch_size=config.per_device_batch)
+    batcher = ModeBatcher(
+        tokenizer,
+        batch_size=config.per_device_batch,
+        bucket_window=config.bucket_window,
+        seed=config.seed,
+    )
 
     params = [p for p in model.parameters() if p.requires_grad]
     if head is not None:
@@ -335,8 +340,10 @@ def run_training(
 
     for epoch in range(config.epochs):
         order = list(train)
+        # Shuffled before bucketing so window membership differs per epoch; the
+        # batcher then sorts within each window and shuffles the batch order.
         rng.shuffle(order)
-        for group in batcher(order):
+        for group in batcher(order, epoch=epoch):
             batch = _to_device(collator(group), device)
             logits = candidate_logits(model, batch, head)
             loss = decision_loss(
@@ -440,7 +447,8 @@ class ProgressLog:
             return
 
         done = step + 1
-        elapsed = time.monotonic() - self.start
+        # A coarse clock can report zero on a fast first window; never divide by it.
+        elapsed = max(time.monotonic() - self.start, 1e-9)
         rate = done / elapsed
         remaining = (self.total - done) / rate if rate else 0.0
         losses = "  ".join(f"{m}={sum(v) / len(v):.4f}" for m, v in sorted(self.window.items()))

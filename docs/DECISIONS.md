@@ -478,6 +478,58 @@ constant and the H100 throughput figure are still assumptions, so Q5 stays open.
 
 ---
 
+## ADR-017 — Batches are length-bucketed, and the budget was wrong again
+
+**Accepted.** Measured on the first real H100 run, not predicted.
+
+The first `train --preset 4b` on Modal reported:
+
+```
+step 25/18750  0.1%  A=5.7621  B=5.1222  lr=4.45e-06  0.22 it/s  826 tok/s  eta 23:13:22  mem 29.3G
+```
+
+**23 hours against a 24-hour timeout**, and 826 tok/s where ADR-016's arithmetic
+implied ~12,000. Two causes, both measured afterwards:
+
+**Padding, 4.4x.** A batch is padded to its longest row, so the model computes
+on the rectangle rather than on the real tokens. The mixture is bimodal — a
+banking intent is ~39 tokens and an imdb review reaches 1,300 — so one long row
+in a batch of 32 drags the whole batch up to it. Through the real collator on
+the real mixture:
+
+| batching | real tokens | padded | waste |
+|---|---|---|---|
+| random | 380,794 | 1,686,163 | **4.43x** |
+| length-bucketed | 380,794 | 542,779 | **1.43x** |
+
+`ModeBatcher` now sorts by length inside a shuffled window of `bucket_window`
+(64) batches, then shuffles the batch order. Sorting globally would feed every
+short example before every long one and correlate length with step number;
+sorting within a window keeps the order effectively random. The proxy is
+character count, because tokenising twice would cost more than the padding it
+saves — the resulting buckets measure 1.43x against a 1.03x theoretical floor.
+
+**Kernels, the rest.** 24 of Qwen3.5-4B's 32 layers are linear-attention, and
+without `flash-linear-attention` transformers runs `chunk_gated_delta_rule` on
+its reference PyTorch path — three quarters of the model on the slow route.
+That layer is now uncommented in the image. It had been left out on the grounds
+that a failed build is worse than a slow run; a run that does not fit its
+timeout changes that trade.
+
+**The trade accepted:** length-bucketed batches are more homogeneous in source,
+because length correlates with source here. Over an epoch the shuffled batch
+order distributes them evenly, and the alternative is paying 3x. Worth
+revisiting if the loss curves look source-periodic.
+
+**The general lesson, restated from ADR-016 because it recurred:** the estimate
+was built from a token count that was correct and a padding factor that was
+assumed to be 1. Both ADR-016 and this one are the same failure — an unmeasured
+term in the budget — and the throughput readout that exposed it only existed
+because the loop had been made to print (see `ProgressLog`). Q5 stays open until
+a full run lands.
+
+---
+
 ## Open questions
 
 | # | Question | How it gets settled |
@@ -486,7 +538,7 @@ constant and the H100 throughput figure are still assumptions, so Q5 stays open.
 | **Q2** | Do Mode A and Mode B agree where both are valid? | Explicit eval ([ADR-005](#adr-005--dual-mode-readout-the-differentiator)). A correctness gate, not a nice-to-have |
 | **Q3** | Can a *state* cache persist across requests? | decider persists a **schema** cache; persisting state is unclaimed and is the genuinely novel direction |
 | **Q4** | Does Mode B cost accuracy under the ceiling? | Ablation: Mode B forced on small option sets vs Mode A |
-| **Q5** | Is the ~2 h estimate right? | Sequence length is now measured (ADR-016); throughput is not. `modal run modal/app.py::smoke`, then extrapolate from measured steps/s. Note that 24 of the 32 layers run on a reference PyTorch path unless `flash-linear-attention` is installed, so the first measurement may not be the ceiling |
+| **Q5** | How long does a 4B run actually take? | Measured once at 23 h before bucketing (ADR-017). Sequence length and padding are now both measured; kernel throughput is not. `modal run modal/app.py::smoke`, then extrapolate from measured steps/s. Note that 24 of the 32 layers run on a reference PyTorch path unless `flash-linear-attention` is installed, so the first measurement may not be the ceiling |
 | **Q6** | Does an instruct checkpoint fix zero-shot Noul, or does the scale need training either way? | Re-run the eval on `Qwen3.5-4B` (instruct) and compare `is_urgent` against the 0.292 base-rate collapse |
 | **Q7** | Do nine public classification corpora transfer to support-triage states? | Train, then eval on both the generated set *and* the 24-item fixture. Agreement between them is the signal; the fixture alone cannot resolve it |
 | **Q8** | Is 25% the right Mode B share? | Ablation at 10% / 25% / 40%, read on banking77 and clinc_oos accuracy against Mode A sources' regression |

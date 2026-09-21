@@ -63,14 +63,17 @@ image = (
         "fastapi==0.141.1",
         "huggingface-hub==1.32.0",
     )
-    # Speed only, never correctness. 24 of Qwen3.5-4B's 32 layers are
-    # linear-attention, and without these transformers logs
-    # "`chunk_gated_delta_rule` is falling back to its reference PyTorch
-    # implementation" and runs most of the model on the slow path. Left
-    # unpinned-and-commented rather than pinned blind: the image build has not
-    # been exercised here, and a failed build is a worse first run than a slow
-    # one. Uncomment, and drop them again if the build breaks.
-    # .pip_install("flash-linear-attention", "causal-conv1d")
+    # Speed only, never correctness -- but not optional in practice. 24 of
+    # Qwen3.5-4B's 32 layers are linear-attention, and without these
+    # transformers logs "`chunk_gated_delta_rule` is falling back to its
+    # reference PyTorch implementation" and runs three quarters of the model on
+    # a reference path. The first real run measured 826 tok/s and a 23-hour ETA
+    # against a 24-hour timeout, so this stopped being a nice-to-have.
+    #
+    # Unpinned deliberately: these track the transformers/torch pair closely and
+    # a stale pin breaks the build. If the build does break, delete this layer --
+    # the run gets slow again, not wrong.
+    .pip_install("flash-linear-attention", "causal-conv1d")
     # The package itself last, so editing our code does not invalidate the
     # expensive dependency layer above.
     #

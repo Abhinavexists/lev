@@ -218,6 +218,13 @@ a 10x error, on the number you use to decide whether a run is affordable. Run
 At a 128-token mean the batch size matters more than the sequence cap: a batch
 of 8 would make 75,000 optimiser steps and the run would be bound by step
 overhead long before it was bound by FLOPs. Hence `per_device_batch = 32`.
+
+**This arithmetic still under-predicts, and the first real run proved it.**
+It assumes the model computes on the real tokens; it computes on the padded
+rectangle. Batches are now length-bucketed, which takes padding from 4.43x to
+1.43x, and the linear-attention kernels are installed. Treat ~2 h as a floor
+rather than an estimate until a full run lands — the measured figure before
+those two fixes was 23 h. [ADR-017.](DECISIONS.md#adr-017--batches-are-length-bucketed-and-the-budget-was-wrong-again)
 ```
 
 `make plan` recomputes this from the config, so changing any knob shows the new cost

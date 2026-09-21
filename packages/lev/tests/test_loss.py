@@ -5,6 +5,8 @@ torch is in the `train` extra, so these skip on a bare `uv sync`.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -298,8 +300,16 @@ class TestProgressLog:
         log = self.make(capsys, total=1, every=1)
         log.record(0, 1.0, "A", 1e-4, tokens=4096)
         out = capsys.readouterr().out
-        assert "tok/s" in out
-        assert "0 tok/s" not in out.replace(",", "")
+        # Parse the value rather than substring-match it: a fast window makes
+        # the rate large, and "4096000000 tok/s" contains "0 tok/s".
+        match = re.search(r"([\d,]+) tok/s", out)
+        assert match, out
+        assert int(match.group(1).replace(",", "")) > 0
+
+    def test_throughput_is_zero_when_nothing_was_counted(self, capsys):
+        log = self.make(capsys, total=1, every=1)
+        log.record(0, 1.0, "A", 1e-4)
+        assert re.search(r"\b0 tok/s", capsys.readouterr().out)
 
     def test_hms_formats_hours(self):
         from lev.train.loop import _hms
@@ -397,3 +407,68 @@ def make_batching_tokenizer():
     from conftest import BatchingTokenizer
 
     return BatchingTokenizer({f" {c}" for c in ascii_uppercase} | {f" {i}" for i in range(9)})
+
+
+class TestLengthBucketing:
+    """A batch pads to its longest row, so compute is the rectangle.
+
+    Measured on the real mixture at batch 32: random batching wastes 4.43x of
+    every forward pass on padding, bucketing brings it to 1.43x. That is the
+    difference between a 23-hour run and a 7-hour one.
+    """
+
+    def rows(self, n=512):
+        import random as _r
+
+        rng = _r.Random(0)
+        # Bimodal, like the real mixture: short intents and long reviews.
+        return [
+            example(choice(4), target=i % 4, state="x" * rng.choice([20, 20, 20, 1200]))
+            for i in range(n)
+        ]
+
+    def waste(self, batches):
+        real = sum(sum(len(str(e.state)) for e in b) for b in batches)
+        padded = sum(len(b) * max(len(str(e.state)) for e in b) for b in batches)
+        return padded / real
+
+    def test_bucketing_cuts_padding_waste(self, batching_tokenizer):
+        rows = self.rows()
+        unbucketed = ModeBatcher(batching_tokenizer, 32, bucket_window=1)
+        bucketed = ModeBatcher(batching_tokenizer, 32, bucket_window=8)
+        before = self.waste(list(unbucketed(rows)))
+        after = self.waste(list(bucketed(rows)))
+        assert before > 2.0, f"fixture is not bimodal enough to show the effect ({before:.2f})"
+        # A relative claim, not an absolute one: the absolute floor depends on
+        # how the window boundary falls, and what matters is the multiple of
+        # compute saved. On the real mixture this is 4.43x -> 1.43x.
+        assert after < before / 2, f"bucketing only got {before:.2f}x -> {after:.2f}x"
+        assert after < 1.5, f"bucketing left {after:.2f}x waste"
+
+    def test_no_example_is_lost_or_duplicated(self, batching_tokenizer):
+        rows = self.rows(300)
+        batched = [e for b in ModeBatcher(batching_tokenizer, 32, bucket_window=4)(rows) for e in b]
+        assert len(batched) == len(rows)
+        assert {id(e) for e in batched} == {id(e) for e in rows}
+
+    def test_batches_stay_mode_homogeneous(self, batching_tokenizer):
+        """Bucketing must not undo the mode grouping the collator relies on."""
+        rows = self.rows(100) + [example(choice(40), target=0) for _ in range(60)]
+        batcher = ModeBatcher(batching_tokenizer, 16, bucket_window=4)
+        for group in batcher(rows):
+            assert len({batcher.route_for(e).mode for e in group}) == 1
+
+    def test_batch_order_differs_between_epochs(self, batching_tokenizer):
+        """Length must not track step number, or the schedule correlates with it."""
+        rows = self.rows(256)
+        batcher = ModeBatcher(batching_tokenizer, 32, bucket_window=4)
+        first = [len(str(b[0].state)) for b in batcher(rows, epoch=0)]
+        second = [len(str(b[0].state)) for b in batcher(rows, epoch=1)]
+        assert first != second
+
+    def test_ordering_is_reproducible_for_a_given_epoch(self, batching_tokenizer):
+        rows = self.rows(256)
+        batcher = ModeBatcher(batching_tokenizer, 32, bucket_window=4)
+        a = [[id(e) for e in b] for b in batcher(rows, epoch=3)]
+        b = [[id(e) for e in b] for b in batcher(rows, epoch=3)]
+        assert a == b
