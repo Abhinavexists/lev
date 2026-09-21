@@ -52,11 +52,33 @@ def top_two_margin(p: Distribution) -> float:
     return a - b
 
 
+def normalized_max_prob(p: Distribution) -> float:
+    """Max probability, chance-corrected: (K*max - 1) / (K - 1).
+
+    The max_prob analogue of `gini`. Worth testing separately because a raw
+    max_prob of 0.5 means something different over 2 candidates than over 20.
+    """
+    k = len(p)
+    if k <= 1:
+        return 1.0
+    return (k * max(p) - 1.0) / (k - 1)
+
+
+def top_two_ratio(p: Distribution) -> float:
+    """Share of the top two candidates' mass held by the winner."""
+    if len(p) < 2:
+        return 1.0
+    a, b = sorted(p, reverse=True)[:2]
+    return a / (a + b) if (a + b) else 1.0
+
+
 CANDIDATES: dict[str, Callable[[Distribution], float]] = {
     "gini": gini,
     "max_prob": max_prob,
+    "norm_max_prob": normalized_max_prob,
     "1-norm_entropy": one_minus_normalized_entropy,
     "top_two_margin": top_two_margin,
+    "top_two_ratio": top_two_ratio,
 }
 
 
@@ -108,6 +130,28 @@ def identify(samples: list[tuple[Distribution, float]]) -> list[Fit]:
     return sorted(fits, key=lambda f: f.max_abs_error)
 
 
+def identify_by_size(samples: list[tuple[Distribution, float]]) -> dict[int, list[Fit]]:
+    """`identify` per candidate-set size.
+
+    A formula that holds for 4-option Choice and fails for 3-level Score looks
+    like "no match" when the two are pooled. Splitting by size separates them,
+    because question type and candidate count coincide in practice.
+    """
+    by_size: dict[int, list[tuple[Distribution, float]]] = {}
+    for dist, reported in samples:
+        by_size.setdefault(len(dist), []).append((dist, reported))
+    return {size: identify(group) for size, group in sorted(by_size.items())}
+
+
+def worst_residuals(
+    samples: list[tuple[Distribution, float]], name: str, limit: int = 3
+) -> list[tuple[Distribution, float, float]]:
+    """The samples a candidate fits worst, as (distribution, reported, predicted)."""
+    fn = CANDIDATES[name]
+    scored = [(dist, reported, fn(dist)) for dist, reported in samples]
+    return sorted(scored, key=lambda row: abs(row[2] - row[1]), reverse=True)[:limit]
+
+
 def format_fits(fits: list[Fit]) -> str:
     if not fits:
         return "No answers carried both `probabilities` and `confidence`."
@@ -130,4 +174,39 @@ def format_fits(fits: list[Fit]) -> str:
         )
     else:
         out.append("No candidate matched -- the formula is none of these.")
+    return "\n".join(out)
+
+
+def format_diagnosis(samples: list[tuple[Distribution, float]]) -> str:
+    """Per-size fits and the worst residuals, for when nothing matches overall."""
+    out: list[str] = []
+
+    off = [abs(sum(dist) - 1.0) for dist, _ in samples]
+    if off:
+        out.append(
+            f"distributions sum to 1 within {max(off):.4g} "
+            f"(mean {sum(off) / len(off):.4g}) -- larger means the API truncates, "
+            f"and every candidate is then computed on an incomplete vector"
+        )
+
+    for size, fits in identify_by_size(samples).items():
+        best = fits[0]
+        out.append(
+            f"\nK={size}  n={best.n}   best: {best.name} "
+            f"(mean {best.mean_abs_error:.6f}, max {best.max_abs_error:.6f})"
+            f"{'  MATCH' if best.matches else ''}"
+        )
+        for f in fits[1:3]:
+            out.append(f"           then: {f.name} (max {f.max_abs_error:.6f})")
+
+    overall = identify(samples)
+    if overall:
+        name = overall[0].name
+        out.append(f"\nworst residuals for {name}:")
+        for dist, reported, predicted in worst_residuals(samples, name):
+            shown = ", ".join(f"{p:.3f}" for p in sorted(dist, reverse=True)[:5])
+            out.append(
+                f"  reported {reported:.4f}  {name} {predicted:.4f}  "
+                f"diff {predicted - reported:+.4f}   dist=[{shown}]"
+            )
     return "\n".join(out)

@@ -332,3 +332,41 @@ def test_detectable_difference_shrinks_with_n() -> None:
     assert detectable_difference(24) > 0.15, "24 items cannot resolve a 5-point gain"
     assert detectable_difference(2000) < 0.02
     assert detectable_difference(0) == 1.0
+
+
+def test_pooling_can_hide_a_formula_that_holds_per_candidate_set_size() -> None:
+    """Two formulas, one per size, look like "no match" when pooled.
+
+    This is the shape the live Jev run produced: nothing matched overall, and
+    the pooled view could not say which samples broke it.
+    """
+    four = [0.7, 0.1, 0.1, 0.1]
+    three = [0.5, 0.3, 0.2]
+    samples = [(four, confidence_id.max_prob(four))] * 6
+    samples += [(three, confidence_id.gini(three))] * 6
+
+    assert not any(f.matches for f in confidence_id.identify(samples)), (
+        "pooled fit should fail; that is the situation this diagnosis exists for"
+    )
+
+    by_size = confidence_id.identify_by_size(samples)
+    assert by_size[4][0].name == "max_prob" and by_size[4][0].matches
+    assert by_size[3][0].name == "gini" and by_size[3][0].matches
+
+
+def test_worst_residuals_surfaces_the_samples_that_break_a_candidate() -> None:
+    fits_well = [0.9, 0.1]
+    breaks_it = [0.5, 0.5]
+    samples = [(fits_well, confidence_id.max_prob(fits_well)), (breaks_it, 0.99)]
+
+    worst = confidence_id.worst_residuals(samples, "max_prob", limit=1)
+    distribution, reported, predicted = worst[0]
+    assert distribution == breaks_it
+    assert reported == 0.99
+    assert abs(predicted - 0.5) < 1e-9
+
+
+def test_diagnosis_reports_whether_distributions_are_complete() -> None:
+    """A truncated distribution makes every candidate wrong for the same reason."""
+    truncated = [(([0.6, 0.3]), 0.6)]
+    assert "sum to 1 within 0.1" in confidence_id.format_diagnosis(truncated)
