@@ -84,12 +84,37 @@ def run_training(
 ) -> dict:
     """Train, checkpointing periodically so a long run survives a preemption."""
     config.validate()
-    Path(config.output_dir).mkdir(parents=True, exist_ok=True)
 
+    # Everything cheap and fallible happens before the model is touched. Loading
+    # a multi-GB checkpoint and *then* discovering the data is missing costs real
+    # GPU minutes on Modal, and it is the failure that happens most often.
+    prepare_data(config, data_dir)
+
+    Path(config.output_dir).mkdir(parents=True, exist_ok=True)
     model, tokenizer = build_model(config, model_cache)
     raise NotImplementedError(
-        "The data pipeline is the hacking-phase task: implement loaders in "
-        "lev.data.mixture, then batch them through decision_loss above. "
-        "Everything around it -- model, LoRA, loss, checkpointing, Modal wiring -- "
-        "is in place. See docs/TRAINING.md."
+        "Batching and the optimiser step are still to write. The model, LoRA, "
+        "loss and checkpointing are in place. See docs/TRAINING.md."
+    )
+
+
+def prepare_data(config: TrainConfig, data_dir: str):
+    """Resolve and validate the training mixture. Must run before the model loads.
+
+    Raises with an actionable message rather than returning empty: a training run
+    that silently trains on nothing wastes the whole budget.
+    """
+    from pathlib import Path as _Path
+
+    root = _Path(data_dir)
+    if not root.is_dir():
+        raise FileNotFoundError(f"data directory {data_dir!r} does not exist")
+
+    raise NotImplementedError(
+        f"No training mixture is defined yet, so there is nothing to train on. "
+        f"Implement the per-source loaders and pass them to "
+        f"`lev.data.mixture.build_mixture`, which already enforces the "
+        f"contamination guard. Blocked subsets: see ADR-009. "
+        f"(data_dir={data_dir!r} currently holds "
+        f"{sorted(p.name for p in root.iterdir())})"
     )
