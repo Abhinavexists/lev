@@ -553,6 +553,84 @@ a full run lands.
 
 ---
 
+## ADR-018 — What the first trained checkpoint actually shows
+
+**Accepted.** Measured on 1,800 held-out items, `step-18750`, `modal run
+modal/app.py::evaluate`.
+
+Training: 18,750 steps, ~4h50 on one H100, every loss finite. Mode A 1.754 →
+0.233, Mode B 4.843 → 0.813 from an `ln(151) = 5.02` chance start.
+
+| | uncalibrated | calibrated |
+|---|---|---|
+| accuracy | 0.856 ±0.016 | 0.856 ±0.016 |
+| ECE | 0.1162 | **0.0529** |
+
+Four findings, in descending order of how much they change the design.
+
+**Q6 is closed: the Noul collapse was a base-checkpoint artefact.** Untrained,
+the model answered "urgent" for everything — 0.292, `P(8) ≈ 0.8` regardless of
+content (ADR-007). Trained: imdb 0.975, rotten_tomatoes 0.915. Mapping the
+binary class onto the *ends* of the 0-8 rating scale rather than passing it
+through as a class index is what fixed it.
+
+**Mode B works, and it is the differentiator.** banking77 0.870 over 77 options,
+clinc_oos 0.865 over **151** — within 6 points of Mode A's average, with no
+option ceiling. Every Family-A implementation surveyed in ARCHITECTURE.md §2
+either caps the option count or rejects the request at this point.
+
+**Per-bucket calibration was the right call, and now there is evidence.**
+`choice:B` fitted to T=1.033 — the candidate-path head came out essentially
+calibrated on its own — while Mode A needed 2.084 (choice), 2.981 (noul) and
+4.096 (score). A single global temperature of ~2.5 would have actively damaged
+Mode B. That rule was argued from first principles in `calibrate.py`; it is now
+measured.
+
+Two sources got *worse* ECE under calibration: dbpedia_14 0.0049 → 0.0149 and
+imdb 0.0244 → 0.0427. Both were already near-perfectly calibrated and were
+over-softened, because the bucket key is `(type, mode)` and is shared across
+every source in the bucket. Log loss improved on both, so the temperature is
+net-positive even there, but per-source calibration is the obvious refinement.
+
+**Score is the weak spot.** sst5 0.545, yelp_review_full 0.680; everything else
+is ≥0.865. Both are 5-level ordered scales where adjacent levels are genuinely
+ambiguous. sst5 also had the worst uncalibrated ECE at 0.4336. A next run should
+target Score specifically.
+
+**These numbers are not comparable to Jev's 0.7751 / 0.0764.** This is a
+held-out split of the same nine corpora the model trained on — in-distribution.
+S1Bench is thirteen different subsets, deliberately blocked from training
+(ADR-009) and still untouched. Reporting 0.856 against Jev's 0.7751 would be the
+exact error the contamination guard exists to prevent.
+
+---
+
+## ADR-019 — The evaluation is not bit-reproducible, so the report states its interval
+
+**Accepted.**
+
+Two runs of `evaluate` over the same checkpoint and the same data disagreed:
+yelp_review_full accuracy 0.685 → 0.680 (one item in 200), clinc_oos ECE 0.0515
+→ 0.0421. Accuracy on the other eight sources was identical.
+
+The cause is GPU kernel non-determinism: bf16 reductions and the Triton
+linear-attention kernels do not pin their reduction order, so logits differ in
+the last bits and items near a decision boundary flip. clinc_oos moved most
+because a 151-way softmax has many near-ties sitting on bin edges and ECE is a
+*binned* statistic; log loss barely moved (0.4871 → 0.4873), which is the tell
+that nothing real changed.
+
+`torch.use_deterministic_algorithms(True)` was rejected: it would likely refuse
+the linear-attention kernels and give back most of the speedup ADR-017 bought,
+to remove a difference that is far inside the sampling interval anyway.
+
+Instead the report prints its own resolution — a 95% half-width on every
+accuracy, ±0.048 at n=200 and ±0.016 at n=1,800, with a standing note that ECE
+moves below ~0.01 are noise. A four-decimal table that is reproducible to two is
+worse than no table, because a reader takes the fourth decimal for a result.
+
+---
+
 ## Open questions
 
 | # | Question | How it gets settled |
@@ -562,6 +640,7 @@ a full run lands.
 | **Q3** | Can a *state* cache persist across requests? | decider persists a **schema** cache; persisting state is unclaimed and is the genuinely novel direction |
 | **Q4** | Does Mode B cost accuracy under the ceiling? | Ablation: Mode B forced on small option sets vs Mode A |
 | **Q5** | How long does a 4B run actually take? | Measured once at 23 h before bucketing (ADR-017). Sequence length and padding are now both measured; kernel throughput is not. `modal run modal/app.py::smoke`, then extrapolate from measured steps/s. Note that 24 of the 32 layers run on a reference PyTorch path unless `flash-linear-attention` is installed, so the first measurement may not be the ceiling |
-| **Q6** | Does an instruct checkpoint fix zero-shot Noul, or does the scale need training either way? | Re-run the eval on `Qwen3.5-4B` (instruct) and compare `is_urgent` against the 0.292 base-rate collapse |
+| ~~Q6~~ | ~~Does an instruct checkpoint fix zero-shot Noul?~~ | **Closed by ADR-018.** Training fixed it: 0.292 untrained → 0.975/0.915. The instruct checkpoint was never needed |
 | **Q7** | Do nine public classification corpora transfer to support-triage states? | Train, then eval on both the generated set *and* the 24-item fixture. Agreement between them is the signal; the fixture alone cannot resolve it |
+| **Q9** | How does lev compare to Jev on S1Bench? | No harness exists. The thirteen subsets are blocked from training and untouched, so the comparison is available but unbuilt — see ADR-018 |
 | **Q8** | Is 25% the right Mode B share? | Ablation at 10% / 25% / 40%, read on banking77 and clinc_oos accuracy against Mode A sources' regression |

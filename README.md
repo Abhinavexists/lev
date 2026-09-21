@@ -189,15 +189,17 @@ transport with no key at all.
 | Training loop + checkpointing | **done** — 30 steps on Qwen3.5-0.8B-Base, both modes, losses finite |
 | Modal app, image, volumes | **image builds on Modal** |
 | Modal `download` / `build_data` / `smoke` | **run green on Modal** |
-| Modal `train` | **runs on an H100**; no full run completed |
-| Modal `serve` / `calibrate` | written, **not yet run remotely** |
+| Modal `train` / `calibrate` / `evaluate` | **complete 4B run, calibrated and scored** ([ADR-018](docs/DECISIONS.md#adr-018--what-the-first-trained-checkpoint-actually-shows)) |
+| Modal `serve` | written, **not yet run remotely** |
 | Decision engine (prefill, fork, readout) | **runs on Qwen3.5-4B-Base**, Mode A verified |
 | Mode B head | **trains and serves**; untrained at scale |
 
-Every module that has not been executed says so in its own docstring. **No trained
-checkpoint has been evaluated yet** — the pipeline runs end to end on an H100 and
-produces checkpoints, but nothing has been measured off one, so the design is
-evidenced and its outcome is still a hypothesis.
+Every module that has not been executed says so in its own docstring. A 4B
+checkpoint has been trained, calibrated and scored: **0.856 accuracy, ECE 0.1162 →
+0.0529** on 1,800 held-out items. Those are in-distribution numbers on a held-out
+split of the training corpora and are **not comparable to Jev's 0.7751 / 0.0764** —
+S1Bench is thirteen different subsets, blocked from training and still unrun.
+[ADR-018.](docs/DECISIONS.md#adr-018--what-the-first-trained-checkpoint-actually-shows)
 
 ---
 

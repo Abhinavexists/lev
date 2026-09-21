@@ -392,8 +392,8 @@ Two bugs came out of running it that no test had caught:
 | Training loop, checkpointing | **done — runs, writes adapter + head** |
 | Modal app, image, volumes | **image builds on Modal** |
 | Modal `download` / `build_data` / `smoke` | **run green on Modal** |
-| Modal `train` | **runs on an H100**; no full run completed |
-| Modal `serve` / `calibrate` | written, **not yet run remotely** |
+| Modal `train` / `calibrate` / `evaluate` | **complete 4B run, calibrated and scored** ([ADR-018](DECISIONS.md#adr-018--what-the-first-trained-checkpoint-actually-shows)) |
+| Modal `serve` | written, **not yet run remotely** |
 | Decision engine (prefill, fork, readout) | **runs on Qwen3.5-4B-Base**, Mode A verified |
 | Mode B head | **trains**, untrained at scale |
 

@@ -254,6 +254,47 @@ def calibrate(preset: str = "4b", split: str = "calibration") -> dict:
     )
 
 
+@app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=2 * 60 * 60)
+def evaluate(
+    preset: str = "4b",
+    split: str = "test",
+    limit_per_source: int | None = None,
+) -> dict:
+    """Score the newest checkpoint on a held-out split, with and without the
+    fitted temperature.
+
+    Runs in the container so the checkpoint and the data stay on their volumes.
+    Reports both so the temperature's effect is visible: it cannot change
+    accuracy, only calibration.
+    """
+    from lev.calibrate import CalibrationProfile
+    from lev.train.config import PRESETS
+    from lev.train.evaluate import evaluate_split
+
+    config = PRESETS[preset]
+    config.output_dir = f"{CKPT_DIR}/{preset}"
+
+    profile = CalibrationProfile()
+    calibration = Path(config.output_dir) / "calibration.json"
+    if calibration.is_file():
+        profile = CalibrationProfile.load(calibration)
+    else:
+        print(f"WARNING: no calibration at {calibration}; both reports are uncalibrated")
+
+    plain, tuned = evaluate_split(
+        config.output_dir,
+        DATA_DIR,
+        split=split,
+        config=config,
+        profile=profile,
+        limit_per_source=limit_per_source,
+    )
+    print(plain.summary())
+    print()
+    print(tuned.summary())
+    return {"uncalibrated": plain.summary(), "calibrated": tuned.summary()}
+
+
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, scaledown_window=300)
 @modal.asgi_app()
 def serve():
