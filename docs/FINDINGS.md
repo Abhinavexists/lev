@@ -75,7 +75,11 @@ The plan's §15 treats calibration and confidence as one training objective. The
 - `probabilities` is the distribution. **This** is the object that is calibrated, and what log loss / Brier / ECE apply to.
 - `confidence` is "a statistic computed from the probability distribution the answer already gives you" — a deterministic concentration measure over `probabilities`. Concentrated → high; flat → low.
 
-**Which statistic is it?** The docs never say. LitJev, reproducing the schema, uses normalized Gini concentration `(K·Σp² − 1)/(K − 1)` while explicitly disclaiming parity with Jev. Since every Choice and Score answer returns *both* `probabilities` and `confidence`, the formula is directly identifiable from responses — `levbench confidence` tests Gini, max-probability, `1 − normalized entropy` and top-two margin against live answers. Its known-answer test confirms it discriminates all four uniquely.
+**Which statistic is it?** [MEASURED] It is **chance-corrected max probability**, `(K·max(p) − 1)/(K − 1)`, rounded to 2 decimal places. Measured over 48 live Choice and Score answers from `jev-latest`: mean absolute error 0.0026, max 0.0100, where every other candidate is an order of magnitude worse.
+
+LitJev, reproducing the schema, uses normalized Gini concentration `(K·Σp² − 1)/(K − 1)` while disclaiming parity with Jev — and it is **wrong, but only in the inner statistic**. The chance-correcting wrapper `(K·x − 1)/(K − 1)` is right; `x` is the maximum, not the sum of squares. Gini came second-*worst* of six candidates (mean 0.0430).
+
+The identification took two corrections to the tool. Pooling all sizes hid the answer, and a flat 5e-3 match threshold rejected it: the normalisation amplifies Jev's 2dp rounding by `K/(K−1)`, putting the true formula at 0.0100 — twice a threshold set for statistics that pass rounding through unchanged. `levbench confidence` now derives its tolerance from the detected quantisation and each formula's measured sensitivity to it.
 
 **And confidence is not an accuracy estimate.** Bespoke Nimble states it plainly for its own model: *"a confidence of 0.9 does not mean that the answer is right 90% of the time."* Whether Jev's is better behaved is exactly what ECE and selective accuracy in this harness are for.
 

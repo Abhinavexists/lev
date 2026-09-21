@@ -82,22 +82,51 @@ CANDIDATES: dict[str, Callable[[Distribution], float]] = {
 }
 
 
+def detect_precision(values: list[float], max_decimals: int = 6) -> float:
+    """The quantisation step every value is a multiple of, or 0 if none is.
+
+    The API rounds before sending, and how hard it rounds sets the floor on any
+    match. Detecting it from the data beats assuming it.
+    """
+    for decimals in range(1, max_decimals + 1):
+        unit = 10.0**-decimals
+        if all(abs(v / unit - round(v / unit)) < 1e-6 for v in values):
+            return unit
+    return 0.0
+
+
+def rounding_sensitivity(fn: Callable[[Distribution], float], p: Distribution, eps: float) -> float:
+    """How far `fn` can move when each probability is off by up to `eps`.
+
+    Statistics are not equally forgiving of a rounded input. `max_prob` passes
+    the error straight through; `gini` and `norm_max_prob` divide by (K-1) and
+    so amplify it by K/(K-1). Measuring per formula avoids one tolerance that
+    is too tight for some and too loose for others.
+    """
+    base = fn(p)
+    raised = fn([min(1.0, x + eps) for x in p])
+    lowered = fn([max(0.0, x - eps) for x in p])
+    return max(abs(raised - base), abs(lowered - base))
+
+
 @dataclass
 class Fit:
     name: str
     n: int
     mean_abs_error: float
     max_abs_error: float
+    tolerance: float = 5e-3
 
     @property
     def matches(self) -> bool:
-        """Within float-rounding of the reported value across every sample.
+        """Within what the API's own rounding could account for.
 
-        The API rounds probabilities before sending them, so an exact match is
-        not achievable; 5e-3 is loose enough to survive that rounding and tight
-        enough that only one candidate should pass.
+        The tolerance is the reported value's rounding plus however much that
+        rounding can move this particular statistic -- not a flat constant. A
+        flat 5e-3 silently rejected the correct formula for Jev, because
+        `norm_max_prob` amplifies a 2dp rounding by K/(K-1) and lands at 0.01.
         """
-        return self.max_abs_error < 5e-3
+        return self.max_abs_error <= self.tolerance
 
 
 def collect(answers: list[Any]) -> list[tuple[Distribution, float]]:
@@ -114,17 +143,24 @@ def collect(answers: list[Any]) -> list[tuple[Distribution, float]]:
 
 def identify(samples: list[tuple[Distribution, float]]) -> list[Fit]:
     """Rank candidate formulas by how closely they reproduce `confidence`."""
+    everything = [v for dist, reported in samples for v in (*dist, reported)]
+    eps = detect_precision(everything) / 2
+
     fits: list[Fit] = []
     for name, fn in CANDIDATES.items():
         errors = [abs(fn(dist) - reported) for dist, reported in samples]
         if not errors:
             continue
+        tolerance = max(
+            (eps + rounding_sensitivity(fn, dist, eps) for dist, _ in samples), default=0.0
+        )
         fits.append(
             Fit(
                 name=name,
                 n=len(errors),
                 mean_abs_error=sum(errors) / len(errors),
                 max_abs_error=max(errors),
+                tolerance=max(tolerance, 1e-9),
             )
         )
     return sorted(fits, key=lambda f: f.max_abs_error)
@@ -157,12 +193,13 @@ def format_fits(fits: list[Fit]) -> str:
         return "No answers carried both `probabilities` and `confidence`."
     out = [
         "=== confidence formula identification ===",
-        f"{'statistic':<16} {'n':>4}  {'mean abs err':>13}  {'max abs err':>12}  match",
+        f"{'statistic':<16} {'n':>4}  {'mean abs err':>13}  {'max abs err':>12}  "
+        f"{'tolerance':>10}  match",
     ]
     for f in fits:
         out.append(
             f"{f.name:<16} {f.n:>4}  {f.mean_abs_error:>13.6f}  "
-            f"{f.max_abs_error:>12.6f}  {'YES' if f.matches else '-'}"
+            f"{f.max_abs_error:>12.6f}  {f.tolerance:>10.6f}  {'YES' if f.matches else '-'}"
         )
     winners = [f.name for f in fits if f.matches]
     out.append("")

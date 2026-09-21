@@ -370,3 +370,44 @@ def test_diagnosis_reports_whether_distributions_are_complete() -> None:
     """A truncated distribution makes every candidate wrong for the same reason."""
     truncated = [(([0.6, 0.3]), 0.6)]
     assert "sum to 1 within 0.1" in confidence_id.format_diagnosis(truncated)
+
+
+def test_tolerance_accounts_for_how_much_a_statistic_amplifies_rounding() -> None:
+    """A flat threshold rejects correct formulas that divide by (K-1).
+
+    Jev rounds to 2dp. `max_prob` passes that error straight through, but
+    `norm_max_prob` multiplies it by K/(K-1) and lands at 0.010 -- twice the
+    flat 5e-3 this once used, so the right answer was reported as no match.
+    """
+    import random
+
+    rng = random.Random(0)
+    samples = []
+    for size in (4, 3):
+        for _ in range(24):
+            raw = [rng.random() for _ in range(size)]
+            total = sum(raw)
+            exact = [x / total for x in raw]
+            samples.append(
+                ([round(x, 2) for x in exact], round(confidence_id.normalized_max_prob(exact), 2))
+            )
+
+    fits = {f.name: f for f in confidence_id.identify(samples)}
+    assert fits["norm_max_prob"].matches, fits["norm_max_prob"]
+    assert fits["norm_max_prob"].tolerance > 5e-3, "tolerance did not widen for amplification"
+    assert not fits["gini"].matches, "tolerance widened so far it accepts the wrong formula"
+
+
+def test_an_unamplified_statistic_keeps_a_tight_tolerance() -> None:
+    """`max_prob` does not divide by (K-1), so its tolerance stays near eps."""
+    exact = [[0.62, 0.21, 0.17], [0.44, 0.33, 0.23]]
+    samples = [(p, round(max(p), 2)) for p in exact]
+    fits = {f.name: f for f in confidence_id.identify(samples)}
+    assert fits["max_prob"].matches
+    assert fits["max_prob"].tolerance < fits["norm_max_prob"].tolerance
+
+
+def test_detect_precision_reads_the_quantisation_off_the_data() -> None:
+    assert confidence_id.detect_precision([0.25, 0.5, 0.75]) == pytest.approx(0.01)
+    assert confidence_id.detect_precision([0.125, 0.5]) == pytest.approx(0.001)
+    assert confidence_id.detect_precision([0.1234567]) == 0.0

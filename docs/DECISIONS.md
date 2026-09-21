@@ -635,7 +635,7 @@ worse than no table, because a reader takes the fourth decimal for a result.
 
 | # | Question | How it gets settled |
 |---|---|---|
-| **Q1** | Is Jev's `confidence` normalised Gini? | `levbench confidence` against the live API. Identifier is validated by a known-answer test |
+| ~~Q1~~ | ~~Is Jev's `confidence` normalised Gini?~~ | **Closed: no.** It is chance-corrected *max probability*, `(K·max − 1)/(K − 1)`, rounded to 2dp — mean abs error 0.0026 over 48 live answers. Gini shares the wrapper and has the wrong inner statistic. See FINDINGS.md §confidence |
 | **Q2** | Do Mode A and Mode B agree where both are valid? | Explicit eval ([ADR-005](#adr-005--dual-mode-readout-the-differentiator)). A correctness gate, not a nice-to-have |
 | **Q3** | Can a *state* cache persist across requests? | decider persists a **schema** cache; persisting state is unclaimed and is the genuinely novel direction |
 | **Q4** | Does Mode B cost accuracy under the ceiling? | Ablation: Mode B forced on small option sets vs Mode A |
