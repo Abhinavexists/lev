@@ -15,7 +15,7 @@ tests never touch the network.
 from __future__ import annotations
 
 import random
-from collections.abc import Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 
 from ..prompt import Layout
@@ -56,14 +56,17 @@ class MixtureSpec:
         # Raises on any source colliding with an S1Bench evaluation subset. This
         # runs before a single example is loaded, because a contaminated run looks
         # *better* and would silently invalidate the only number we compete on.
-        assert_clean(self.sources)
+        assert_clean(self.sources.keys())
         if not self.sources:
             raise ValueError("mixture has no sources")
         if abs(sum(self.sources.values()) - 1.0) > 1e-6:
             raise ValueError(f"source weights must sum to 1, got {sum(self.sources.values())}")
 
 
-def build_mixture(spec: MixtureSpec, loaders: dict[str, callable]) -> Iterator[Example]:
+Loader = Callable[[], Iterable[Example]]
+
+
+def build_mixture(spec: MixtureSpec, loaders: dict[str, Loader]) -> Iterator[Example]:
     """Yield `spec.n_examples`, respecting weights, layout split and abstain rate.
 
     `loaders` maps a source name to a callable returning an iterable of Examples.
@@ -81,7 +84,7 @@ def build_mixture(spec: MixtureSpec, loaders: dict[str, callable]) -> Iterator[E
             raise ValueError(f"source {name!r} yielded no examples")
 
     names = list(spec.sources)
-    weights = [spec.sources[n] for n in names]
+    weights = [spec.sources[name] for name in names]
 
     for _ in range(spec.n_examples):
         source = rng.choices(names, weights=weights, k=1)[0]
@@ -89,51 +92,53 @@ def build_mixture(spec: MixtureSpec, loaders: dict[str, callable]) -> Iterator[E
         layout = (
             Layout.SCHEMA_FIRST if rng.random() < spec.schema_first_fraction else Layout.STATE_FIRST
         )
-        if rng.random() < spec.abstain_fraction:
-            yield _abstain_from(example, pools, names, source, layout, rng, spec.adjacent)
-        else:
-            yield Example(
-                state=example.state,
-                name=example.name,
-                question=example.question,
-                target=example.target,
-                layout=layout,
-                source=source,
-            )
+
+        abstain = rng.random() < spec.abstain_fraction
+        state = example.state
+        soft_target = None
+        if abstain:
+            # Replace the state, so the question becomes genuinely unanswerable,
+            # and supervise a uniform distribution: with no evidence every
+            # candidate is equally supported, and that is the calibrated answer
+            # rather than a hedge. See ADR-012.
+            state = _donor_state(pools, source, spec.adjacent, rng)
+            n_candidates = candidate_count(example.question)
+            soft_target = [1.0 / n_candidates] * n_candidates
+
+        yield Example(
+            state=state,
+            name=example.name,
+            question=example.question,
+            # Kept for bookkeeping on abstain rows; the loss reads soft_target.
+            target=example.target,
+            layout=layout,
+            source=source,
+            abstain=abstain,
+            soft_target=soft_target,
+        )
 
 
-def _abstain_from(example, pools, names, source, layout, rng, adjacent=None) -> Example:
-    """Build an unanswerable example by pairing a question with a foreign state.
+def _donor_state(
+    pools: dict[str, list[Example]],
+    source: str,
+    adjacent: dict[str, frozenset[str]],
+    rng: random.Random,
+):
+    """A state borrowed from a source that cannot answer `source`'s question.
 
-    Flagging an otherwise normal example `abstain=True` -- which is what an
-    earlier version of this function did -- is worse than not augmenting at all:
-    the state still determines the answer, so the only thing the model learns is
-    to be unsure when it should not be. The question has to become genuinely
-    unanswerable, and the way to do that is to take the state away.
+    "A different source" is not sufficient. imdb and rotten_tomatoes are both
+    movie reviews, so pairing one's question with the other's state leaves the
+    question perfectly answerable while it gets labelled uniform -- the exact
+    mislabelling abstain augmentation exists to avoid. `adjacent` carries those
+    exclusions; see `sources.ADJACENT`.
 
-    The substituted state is drawn from a *different and non-adjacent* source
-    so it cannot accidentally answer the question, and the target is uniform
-    because with no evidence every candidate is equally supported. That uniform
-    vector is the calibrated answer, and teaching it is the point.
-
-    "Different" alone is not enough. imdb and rotten_tomatoes are both movie
-    reviews, so pairing one's question with the other's state produces a fully
-    answerable example labelled uniform -- the precise mislabelling this is
-    meant to avoid, on roughly 1% of rows. `spec.adjacent` carries the
-    exclusions; an empty map means callers who have not declared any.
+    Falls back to any other source, then to any source at all, so a narrow
+    mixture still yields an example rather than raising.
     """
-    excluded = {source} | set((adjacent or {}).get(source, ()))
-    others = [n for n in names if n not in excluded] or [n for n in names if n != source] or names
-    donor_source = rng.choice(others)
-    donor = rng.choice(pools[donor_source])
-    n_candidates = candidate_count(example.question)
-    return Example(
-        state=donor.state,
-        name=example.name,
-        question=example.question,
-        target=example.target,  # retained for bookkeeping; the loss uses soft_target
-        layout=layout,
-        source=source,
-        abstain=True,
-        soft_target=[1.0 / n_candidates] * n_candidates,
+    excluded = {source} | set(adjacent.get(source, ()))
+    eligible = (
+        [name for name in pools if name not in excluded]
+        or [name for name in pools if name != source]
+        or list(pools)
     )
+    return rng.choice(pools[rng.choice(eligible)]).state

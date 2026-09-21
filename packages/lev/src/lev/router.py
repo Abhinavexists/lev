@@ -12,7 +12,6 @@ you swap tokenizers.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -46,21 +45,6 @@ def candidate_count(question: Question) -> int:
     raise TypeError(f"unknown question type {type(question).__name__}")
 
 
-def candidate_texts(question: Question) -> list[str]:
-    """The strings Mode B scores: the option's own text, not a label code.
-
-    Lives here rather than in `lev.train` because the serving engine needs the
-    same list, and the engine must not import the training package.
-    """
-    if question.type == "noul":
-        return list(NOUL_RATING_TOKENS)
-    if question.type == "score":
-        return [
-            c if isinstance(c, str) else json.dumps(c, sort_keys=True) for c in question.criteria
-        ]
-    return list(question.criteria)
-
-
 def route(question: Question, tokenizer, max_label_options: int | None = None) -> Route:
     """Pick a mode for one question.
 
@@ -76,7 +60,7 @@ def route(question: Question, tokenizer, max_label_options: int | None = None) -
 
     if isinstance(question, Noul):
         # Noul's candidates are the fixed rating scale, not user-supplied.
-        codes = single_token_codes(tokenizer, n, prefix=" ") or None
+        codes = single_token_codes(tokenizer, n, prefix=" ")
         if codes is None:
             return Route(Mode.CANDIDATE_PATH, None, "rating tokens are not single tokens")
         return Route(Mode.LABEL_TOKEN, codes, "rating scale")
@@ -90,4 +74,4 @@ def route(question: Question, tokenizer, max_label_options: int | None = None) -
 def route_all(
     questions: dict[str, Question], tokenizer, max_label_options: int | None = None
 ) -> dict[str, Route]:
-    return {n: route(q, tokenizer, max_label_options) for n, q in questions.items()}
+    return {name: route(q, tokenizer, max_label_options) for name, q in questions.items()}

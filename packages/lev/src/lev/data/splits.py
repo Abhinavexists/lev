@@ -35,6 +35,10 @@ class Split(StrEnum):
     TEST = "test"
 
 
+# Changing this re-splits every row, so a model trained before the change and one
+# trained after are no longer comparable. Version it rather than edit it.
+SPLIT_SALT = "lev-split-v1"
+
 # Fitting a temperature needs far fewer rows than fitting a model, and the test
 # split only has to be big enough to separate two runs. Everything else trains.
 DEFAULT_FRACTIONS: dict[Split, float] = {
@@ -53,7 +57,7 @@ def row_key(source: str, index: int, text: str) -> str:
     return f"{source}|{index}|{text[:512]}"
 
 
-def bucket(key: str, salt: str = "lev-split-v1") -> float:
+def hash_position(key: str, salt: str = SPLIT_SALT) -> float:
     """Map a key to a uniform float in [0, 1). Stable across processes.
 
     `hash()` is deliberately not used: Python salts it per process, so a split
@@ -66,10 +70,10 @@ def bucket(key: str, salt: str = "lev-split-v1") -> float:
 def assign(
     key: str,
     fractions: dict[Split, float] | None = None,
-    salt: str = "lev-split-v1",
+    salt: str = SPLIT_SALT,
 ) -> Split:
     fractions = fractions or DEFAULT_FRACTIONS
-    position = bucket(key, salt)
+    position = hash_position(key, salt)
     cumulative = 0.0
     for split in (Split.TRAIN, Split.CALIBRATION, Split.TEST):
         cumulative += fractions[split]
@@ -96,16 +100,16 @@ class SplitReport:
 def split_examples(
     examples: Iterable[Example],
     fractions: dict[Split, float] | None = None,
-    salt: str = "lev-split-v1",
+    salt: str = SPLIT_SALT,
 ) -> dict[Split, list[Example]]:
-    out: dict[Split, list[Example]] = {s: [] for s in Split}
-    per_source_index: dict[str, int] = defaultdict(int)
+    by_split: dict[Split, list[Example]] = {split: [] for split in Split}
+    rows_seen_per_source: dict[str, int] = defaultdict(int)
     for example in examples:
-        index = per_source_index[example.source]
-        per_source_index[example.source] += 1
+        index = rows_seen_per_source[example.source]
+        rows_seen_per_source[example.source] += 1
         key = row_key(example.source, index, str(example.state))
-        out[assign(key, fractions, salt)].append(example)
-    return out
+        by_split[assign(key, fractions, salt)].append(example)
+    return by_split
 
 
 def check_coverage(splits: dict[Split, list[Example]], strict: bool = True) -> SplitReport:
@@ -135,16 +139,16 @@ def check_coverage(splits: dict[Split, list[Example]], strict: bool = True) -> S
             if split is Split.TRAIN:
                 in_train[example.source].add(example.target)
 
-    missing = {
-        source: sorted(labels - in_train[source])
-        for source, labels in seen.items()
-        if labels - in_train[source]
-    }
-    unseen = {
-        source: sorted(set(range(n)) - seen[source])
-        for source, n in offered.items()
-        if set(range(n)) - seen[source]
-    }
+    missing: dict[str, list[int]] = {}
+    for source, labels in seen.items():
+        if absent := labels - in_train[source]:
+            missing[source] = sorted(absent)
+
+    unseen: dict[str, list[int]] = {}
+    for source, n_offered in offered.items():
+        if never_seen := set(range(n_offered)) - seen[source]:
+            unseen[source] = sorted(never_seen)
+
     report = SplitReport(
         counts={s: len(items) for s, items in splits.items()},
         missing_from_train=missing,

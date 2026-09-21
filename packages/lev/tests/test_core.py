@@ -10,7 +10,7 @@ from lev.types import Choice, Noul, Score
 
 
 class TestLabelCodes:
-    def test_sequence_and_widths(self):
+    def test_codes_widen_from_letters_to_pairs(self):
         assert label_codes(3) == ["A", "B", "C"]
         assert label_codes(26)[-1] == "Z"
         assert label_codes(27)[26] == "AA"
@@ -20,7 +20,7 @@ class TestLabelCodes:
         codes = label_codes(700)
         assert len(set(codes)) == len(codes)
 
-    def test_rejects_nonsense(self):
+    def test_rejects_zero_and_oversized_option_counts(self):
         with pytest.raises(ValueError):
             label_codes(0)
         with pytest.raises(ValueError):

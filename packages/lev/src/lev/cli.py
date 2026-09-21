@@ -45,8 +45,7 @@ def cmd_plan(args: argparse.Namespace) -> None:
     """Print the training budget for a preset without spending it."""
     from .train.config import PRESETS
 
-    if args.preset not in PRESETS:
-        sys.exit(f"unknown preset {args.preset!r}; have {', '.join(sorted(PRESETS))}")
+    # argparse `choices` rejects an unknown preset before we get here.
     config = PRESETS[args.preset]
     if args.data:
         measured = _measure_tokens(config, args.data)
@@ -99,7 +98,7 @@ def _preset_names() -> list[str]:
     return sorted(PRESETS)
 
 
-def cmd_data_build(args: argparse.Namespace) -> None:
+def cmd_build_parser(args: argparse.Namespace) -> None:
     """Download every source, split it, and write the mixture to disk."""
     from .data.build import build_dataset
 
@@ -124,7 +123,7 @@ def cmd_data_build(args: argparse.Namespace) -> None:
     print(f"  sources      {len(manifest['sources'])} ({', '.join(sorted(manifest['sources']))})")
 
 
-def cmd_data_eval(args: argparse.Namespace) -> None:
+def cmd_eval_parser(args: argparse.Namespace) -> None:
     """Export the held-out split as levbench task files."""
     from .data.export_eval import export
     from .data.splits import Split
@@ -169,27 +168,27 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="lev", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("plan", help="print a preset's training budget")
-    p.add_argument(
+    plan_parser = sub.add_parser("plan", help="print a preset's training budget")
+    plan_parser.add_argument(
         "--data",
         default=None,
         help="measure token lengths from a built mixture instead of trusting the default",
     )
-    p.add_argument("--preset", default="4b")
-    p.set_defaults(func=cmd_plan)
+    plan_parser.add_argument("--preset", default="4b", choices=_preset_names())
+    plan_parser.set_defaults(func=cmd_plan)
 
-    p = sub.add_parser("route", help="show the readout mode per question")
-    p.add_argument("request", help="path to a /v1/systemone request JSON")
-    p.add_argument("--model", default="Qwen/Qwen3.5-4B-Base")
-    p.add_argument("--max-label-options", type=int, default=None)
-    p.set_defaults(func=cmd_route)
+    route_parser = sub.add_parser("route", help="show the readout mode per question")
+    route_parser.add_argument("request", help="path to a /v1/systemone request JSON")
+    route_parser.add_argument("--model", default="Qwen/Qwen3.5-4B-Base")
+    route_parser.add_argument("--max-label-options", type=int, default=None)
+    route_parser.set_defaults(func=cmd_route)
 
-    p = sub.add_parser("check-data", help="contamination guard over a source list")
-    p.add_argument("sources", help="file with one dataset name per line")
-    p.set_defaults(func=cmd_check_data)
+    check_data_parser = sub.add_parser("check-data", help="contamination guard over a source list")
+    check_data_parser.add_argument("sources", help="file with one dataset name per line")
+    check_data_parser.set_defaults(func=cmd_check_data)
 
-    p = sub.add_parser("serve", help="serve /v1/systemone")
-    p.add_argument(
+    serve_parser = sub.add_parser("serve", help="serve /v1/systemone")
+    serve_parser.add_argument(
         "--checkpoint",
         default=None,
         help=(
@@ -198,45 +197,47 @@ def main(argv: list[str] | None = None) -> None:
             "all picked up. Omit to serve the untrained base model."
         ),
     )
-    p.add_argument("--model", default="Qwen/Qwen3.5-4B-Base")
-    p.add_argument("--model-cache", default=None)
-    p.add_argument("--calibration", default=None)
-    p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--port", type=int, default=8000)
-    p.set_defaults(func=cmd_serve)
+    serve_parser.add_argument("--model", default="Qwen/Qwen3.5-4B-Base")
+    serve_parser.add_argument("--model-cache", default=None)
+    serve_parser.add_argument("--calibration", default=None)
+    serve_parser.add_argument("--host", default="127.0.0.1")
+    serve_parser.add_argument("--port", type=int, default=8000)
+    serve_parser.set_defaults(func=cmd_serve)
 
-    p = sub.add_parser("data", help="build the training mixture and the eval set")
-    data_sub = p.add_subparsers(dest="data_command", required=True)
+    data_parser = sub.add_parser("data", help="build the training mixture and the eval set")
+    data_sub = data_parser.add_subparsers(dest="data_command", required=True)
 
-    d = data_sub.add_parser("build", help="download, split and write the mixture")
-    d.add_argument("--out", default="data/mixture")
-    d.add_argument(
+    build_parser = data_sub.add_parser("build", help="download, split and write the mixture")
+    build_parser.add_argument("--out", default="data/mixture")
+    build_parser.add_argument(
         "--limit-per-source",
         type=int,
         default=20_000,
         help="rows sampled per source (shuffled first, never a head slice)",
     )
-    d.add_argument("--n-examples", type=int, default=200_000)
-    d.add_argument("--schema-first-fraction", type=float, default=0.5)
-    d.add_argument("--abstain-fraction", type=float, default=0.1)
-    d.add_argument("--seed", type=int, default=17)
-    d.add_argument("--cache-dir", default=None)
-    d.set_defaults(func=cmd_data_build)
+    build_parser.add_argument("--n-examples", type=int, default=200_000)
+    build_parser.add_argument("--schema-first-fraction", type=float, default=0.5)
+    build_parser.add_argument("--abstain-fraction", type=float, default=0.1)
+    build_parser.add_argument("--seed", type=int, default=17)
+    build_parser.add_argument("--cache-dir", default=None)
+    build_parser.set_defaults(func=cmd_build_parser)
 
-    d = data_sub.add_parser("eval", help="export a held-out split as levbench task files")
-    d.add_argument("--data", default="data/mixture")
-    d.add_argument("--out", default="data/eval")
-    d.add_argument("--split", default="test", choices=["test", "calibration"])
-    d.add_argument("--limit-per-source", type=int, default=None)
-    d.set_defaults(func=cmd_data_eval)
+    eval_parser = data_sub.add_parser("eval", help="export a held-out split as levbench task files")
+    eval_parser.add_argument("--data", default="data/mixture")
+    eval_parser.add_argument("--out", default="data/eval")
+    eval_parser.add_argument("--split", default="test", choices=["test", "calibration"])
+    eval_parser.add_argument("--limit-per-source", type=int, default=None)
+    eval_parser.set_defaults(func=cmd_eval_parser)
 
-    p = sub.add_parser("train", help="run the LoRA fine-tune")
-    p.add_argument("--preset", default="4b", choices=_preset_names())
-    p.add_argument("--data", default="data/mixture")
-    p.add_argument("--output-dir", default=None)
-    p.add_argument("--model-cache", default=None)
-    p.add_argument("--max-steps", type=int, default=None, help="stop early; for smoke runs")
-    p.set_defaults(func=cmd_train)
+    train_parser = sub.add_parser("train", help="run the LoRA fine-tune")
+    train_parser.add_argument("--preset", default="4b", choices=_preset_names())
+    train_parser.add_argument("--data", default="data/mixture")
+    train_parser.add_argument("--output-dir", default=None)
+    train_parser.add_argument("--model-cache", default=None)
+    train_parser.add_argument(
+        "--max-steps", type=int, default=None, help="stop early; for smoke runs"
+    )
+    train_parser.set_defaults(func=cmd_train)
 
     args = parser.parse_args(argv)
     args.func(args)

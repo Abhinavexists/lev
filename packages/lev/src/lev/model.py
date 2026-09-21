@@ -16,9 +16,10 @@ Why the fork is cheap here specifically: Qwen3.5 is a hybrid, so only 8 of its 3
 layers hold a K/V cache. The other 24 carry small conv/recurrent state. Forking a
 full-attention model's cache N ways is what makes naive implementations slow.
 
-Verified end-to-end on `Qwen/Qwen3.5-4B-Base` (CPU, transformers 5.17): Mode A
-answers Choice, Score and Noul in one prefill with `output_tokens == 0`. Mode B is
-written but untrained, so a question routed to it still raises.
+Verified end-to-end on `Qwen/Qwen3.5-4B-Base` and `-0.8B-Base`: both modes answer
+Choice, Score and Noul in one prefill with `output_tokens == 0`. A Mode B question
+needs a trained candidate-path head; without one, `system_one` refuses up front
+rather than answering badly.
 
 The cache fork was the one part that could not be reasoned about -- see `_fork`.
 """
@@ -31,8 +32,8 @@ from typing import Any
 
 from .calibrate import CalibrationProfile
 from .labels import noul_probability
-from .prompt import Layout, build, schema_block
-from .router import Mode, Route, candidate_texts, route_all
+from .prompt import Layout, build, candidate_texts, schema_block
+from .router import Mode, Route, route_all
 from .types import (
     Choice,
     ChoiceAnswer,
@@ -112,13 +113,13 @@ class DecisionEngine:
     # -- internals ----------------------------------------------------------
 
     def _render(self, state, questions: dict[str, Question], routes: dict[str, Route]):
-        codes = {n: r.codes for n, r in routes.items()}
-        block = (
+        codes = {name: route.codes for name, route in routes.items()}
+        cached_schema = (
             schema_block(questions, codes) if self.config.layout is Layout.SCHEMA_FIRST else None
         )
         rendered = [
-            build(state, n, q, routes[n].codes, self.config.layout, block)
-            for n, q in questions.items()
+            build(state, name, question, routes[name].codes, self.config.layout, cached_schema)
+            for name, question in questions.items()
         ]
         # Every question shares one prefix by construction; assert it, because a
         # silent mismatch would make the cache wrong rather than merely slow.
@@ -168,14 +169,29 @@ class DecisionEngine:
         hidden = out.hidden_states[-1] if want_hidden else None
         return prefix_ids, out.logits, last_positions, hidden
 
-    def _scores(self, logits, last_positions, row: int, route: Route, question=None, hidden=None):
+    def _scores(
+        self,
+        logits,
+        last_positions,
+        row: int,
+        route: Route,
+        question: Question,
+        hidden,
+    ) -> list[float]:
+        """Raw candidate scores for one question, by whichever mode it routed to."""
         if route.mode is Mode.LABEL_TOKEN:
-            from .readout.mode_a import LabelTokenReadout
+            return self._label_token_scores(logits, last_positions, row, route)
+        return self._candidate_path_scores(hidden, last_positions, row, question)
 
-            readout = LabelTokenReadout(self.tokenizer)
-            ids = readout.candidate_ids(route.codes)
-            return logits[row, int(last_positions[row]), ids].float().tolist()
+    def _label_token_scores(self, logits, last_positions, row: int, route: Route) -> list[float]:
+        from .readout.mode_a import LabelTokenReadout
 
+        candidate_ids = LabelTokenReadout(self.tokenizer).candidate_ids(route.codes)
+        return logits[row, int(last_positions[row]), candidate_ids].float().tolist()
+
+    def _candidate_path_scores(
+        self, hidden, last_positions, row: int, question: Question
+    ) -> list[float]:
         if self.mode_b_head is None:
             raise RuntimeError("Mode B question reached the readout with no head loaded")
         if hidden is None:
@@ -183,12 +199,13 @@ class DecisionEngine:
 
         import torch
 
-        texts = candidate_texts(question)
         question_repr = hidden[row, int(last_positions[row])].unsqueeze(0)  # (1, H)
-        candidate_repr = self._candidate_reprs(texts).unsqueeze(0)  # (1, K, H)
-        dtype = next(self.mode_b_head.parameters()).dtype
+        candidate_repr = self._candidate_reprs(candidate_texts(question)).unsqueeze(0)  # (1, K, H)
+        head_dtype = next(self.mode_b_head.parameters()).dtype
         with torch.no_grad():
-            scores = self.mode_b_head(question_repr.to(dtype), candidate_repr.to(dtype), None)
+            scores = self.mode_b_head(
+                question_repr.to(head_dtype), candidate_repr.to(head_dtype), None
+            )
         return scores[0].float().tolist()
 
     def _candidate_reprs(self, texts: list[str]):
@@ -224,40 +241,42 @@ class DecisionEngine:
             states = self.model(
                 input_ids=ids, attention_mask=mask, output_hidden_states=True, use_cache=False
             ).hidden_states[-1]
-        last = mask.sum(dim=1).long() - 1
-        reprs = states[torch.arange(states.size(0), device=device), last]
+        last_positions = mask.sum(dim=1).long() - 1
+        reprs = states[torch.arange(states.size(0), device=device), last_positions]
         self._candidate_cache[key] = reprs
         return reprs
 
     def _to_answer(self, question: Question, route: Route, scores: list[float]):
-        mode = route.mode.value
-        kind = question.type
-        probs = self.calibration.apply(scores, kind, mode)
+        """Calibrate the raw scores, then shape them as the question's answer type."""
+        probs = self.calibration.apply(scores, question.type, route.mode.value)
         confidence = _gini(probs)
 
         if isinstance(question, Choice):
-            keys = list(question.criteria)
-            dist = dict(zip(keys, probs, strict=True))
+            distribution = dict(zip(question.criteria, probs, strict=True))
             return ChoiceAnswer(
-                choice=max(dist, key=dist.get), probabilities=dist, confidence=confidence
+                choice=max(distribution, key=distribution.get),
+                probabilities=distribution,
+                confidence=confidence,
             )
 
         if isinstance(question, Score):
-            dist = {i: p for i, p in enumerate(probs)}
+            by_level = dict(enumerate(probs))
             return ScoreAnswer(
-                score=sum(i * p for i, p in dist.items()),
-                probabilities=dist,
+                score=sum(level * p for level, p in by_level.items()),
+                probabilities=by_level,
                 legend=dict(enumerate(question.criteria)),
                 confidence=confidence,
             )
 
         if isinstance(question, Noul):
-            dist = {i: p for i, p in enumerate(probs)}
+            by_rating = dict(enumerate(probs))
             return NoulAnswer(
-                noul=noul_probability(dist), probabilities=dist, confidence=confidence
+                noul=noul_probability(by_rating),
+                probabilities=by_rating,
+                confidence=confidence,
             )
 
-        raise TypeError(f"unknown question type {kind!r}")
+        raise TypeError(f"unknown question type {question.type!r}")
 
 
 def _fork(cache, n: int, device=None):

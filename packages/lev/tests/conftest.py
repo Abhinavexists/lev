@@ -1,8 +1,16 @@
-"""A fake tokenizer, so the router and label logic are testable without torch."""
+"""Shared test fixtures: fake tokenizers, and builders for Examples/questions.
+
+Nothing here imports torch, so the torch-free half of the suite still collects
+on a bare `uv sync`.
+"""
 
 from __future__ import annotations
 
 import pytest
+from lev.data.mixture import Example
+from lev.prompt import Layout
+from lev.train.config import PRESETS
+from lev.types import Choice
 
 
 class FakeTokenizer:
@@ -84,3 +92,38 @@ def batching_tokenizer() -> BatchingTokenizer:
     from string import ascii_uppercase
 
     return BatchingTokenizer({f" {c}" for c in ascii_uppercase} | {f" {i}" for i in range(9)})
+
+
+# -- builders shared by the training-side tests -------------------------------
+
+
+@pytest.fixture
+def train_config():
+    """A throwaway copy of the smoke preset, safe for a test to mutate."""
+    from dataclasses import replace
+
+    return replace(PRESETS["smoke"])
+
+
+def a_choice(n_options: int = 4) -> Choice:
+    return Choice(instructions="pick", criteria={f"option {i}": None for i in range(n_options)})
+
+
+def an_example(
+    question,
+    target: int = 0,
+    source: str = "s",
+    state: str = "a state",
+    abstain: bool = False,
+    soft_target: list[float] | None = None,
+) -> Example:
+    return Example(
+        state=state,
+        name=source,
+        question=question,
+        target=target,
+        layout=Layout.STATE_FIRST,
+        source=source,
+        abstain=abstain,
+        soft_target=soft_target,
+    )

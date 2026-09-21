@@ -1,9 +1,9 @@
 """The contamination guard. This is a build requirement, not hygiene.
 
-Our one differentiating claim is calibration measured on S1Bench's six evaluation
+Our one differentiating claim is calibration measured on S1Bench's evaluation
 subsets. Three models on that leaderboard self-declare training contamination, and
-their numbers cannot be trusted because of it. If any of those six subsets reaches
-our training mixture, the number we are competing on becomes worthless -- and the
+their numbers cannot be trusted because of it. If any blocked subset reaches our
+training mixture, the number we are competing on becomes worthless -- and the
 failure is silent, because a contaminated model looks *better*.
 
 So the guard raises rather than warns, and it runs before training, not after.
@@ -85,30 +85,33 @@ class ContaminationError(RuntimeError):
 
 
 def normalise(name: str) -> str:
-    """Lowercase, strip a HF org prefix and split suffix, collapse separators."""
-    n = name.strip().lower()
-    n = re.sub(r"[\s_]+", "-", n)
-    n = re.sub(r":(train|validation|dev|test)$", "", n)
-    return n
+    """Lowercase, strip a split suffix, collapse separators to hyphens."""
+    cleaned = name.strip().lower()
+    cleaned = re.sub(r"[\s_]+", "-", cleaned)
+    return re.sub(r":(train|validation|dev|test)$", "", cleaned)
+
+
+# Derived from the constants above, so build it once rather than per lookup.
+_BLOCKED_BY_NORMALISED: dict[str, str] = {normalise(s): s for s in BLOCKED_SUBSETS}
+_ALIASES_BY_NORMALISED: dict[str, str] = {normalise(a): t for a, t in _ALIASES.items()}
 
 
 def resolve(name: str) -> str | None:
     """Map a dataset name to the blocked subset it belongs to, if any."""
-    n = normalise(name)
-    blocked = {normalise(b): b for b in BLOCKED_SUBSETS}
+    normalised = normalise(name)
 
-    if n in blocked:
-        return blocked[n]
-    for alias, target in _ALIASES.items():
-        if n == normalise(alias):
-            return target
+    if normalised in _BLOCKED_BY_NORMALISED:
+        return _BLOCKED_BY_NORMALISED[normalised]
+    if normalised in _ALIASES_BY_NORMALISED:
+        return _ALIASES_BY_NORMALISED[normalised]
     # Bare name after an org prefix: `tals/vitaminc` -> `vitaminc`.
-    if "/" in n:
-        return resolve(n.split("/", 1)[1])
-    # A blocked name appearing as a whole path segment, e.g. `mix/boolq/v2`.
-    for norm_b, original in blocked.items():
-        if norm_b in n.split("-") or norm_b == n:
-            return original
+    if "/" in normalised:
+        return resolve(normalised.split("/", 1)[1])
+    # A blocked name appearing as one hyphen-separated segment, e.g. `mix-boolq-v2`.
+    segments = set(normalised.split("-"))
+    for normalised_subset, subset in _BLOCKED_BY_NORMALISED.items():
+        if normalised_subset in segments:
+            return subset
     return None
 
 

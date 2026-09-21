@@ -25,10 +25,35 @@ from dataclasses import dataclass
 
 from ..data.mixture import Example
 from ..prompt import build as build_prompt
+from ..prompt import candidate_texts
 from ..router import Mode, candidate_count, route
-from ..router import candidate_texts as question_candidates
 
 IGNORE_INDEX = -100
+
+
+class RouteCache:
+    """Resolves a question's readout mode once per distinct question.
+
+    Re-tokenising an option set for each of 200k rows is the slowest thing in
+    the pipeline and returns the same answer every time. Both the batcher and
+    the collator need the route, so they share one of these.
+    """
+
+    def __init__(self, tokenizer, max_label_options: int | None = None):
+        self.tokenizer = tokenizer
+        self.max_label_options = max_label_options
+        self._routes: dict[tuple[str, str, int], object] = {}
+
+    def route_for(self, example: Example):
+        # The option count is part of the key. Source and name alone suffice for
+        # the real mixture, where one source carries exactly one question -- but
+        # if that ever stops being true the cache would hand a 77-option question
+        # the route computed for a 4-option one, and the batch would be collated
+        # for the wrong readout entirely.
+        key = (example.source, example.name, candidate_count(example.question))
+        if key not in self._routes:
+            self._routes[key] = route(example.question, self.tokenizer, self.max_label_options)
+        return self._routes[key]
 
 
 @dataclass
@@ -43,7 +68,7 @@ class Batch:
     candidate_mask: object  # (B, Kmax) True where padded
     targets: object  # (B,) gold index, IGNORE_INDEX on abstain rows
     soft_targets: object | None  # (B, Kmax) or None if no abstain rows
-    ordinal: object  # (B,) True for Score questions
+    ordinal: object  # (B,) True for the ordered types: Score and Noul
     # Mode A only: the label token id per candidate slot.
     candidate_token_ids: object | None = None  # (B, Kmax)
     # Mode B only: a shared pool of encoded candidate strings, and per-row
@@ -56,11 +81,6 @@ class Batch:
     @property
     def size(self) -> int:
         return int(self.input_ids.shape[0])
-
-
-def candidate_texts(example: Example) -> list[str]:
-    """The strings Mode B scores, for one example. See `router.candidate_texts`."""
-    return question_candidates(example.question)
 
 
 def render(example: Example, codes: list[str] | None) -> str:
@@ -105,28 +125,16 @@ class ModeBatcher:
         max_label_options: int | None = None,
         bucket_window: int = 64,
         seed: int = 17,
+        routes: RouteCache | None = None,
     ):
         self.tokenizer = tokenizer
         self.batch_size = batch_size
-        self.max_label_options = max_label_options
         self.bucket_window = bucket_window
         self.seed = seed
-        self._routes: dict[tuple[str, str, int], object] = {}
+        self.routes = routes or RouteCache(tokenizer, max_label_options)
 
     def route_for(self, example: Example):
-        # Routes are cached per question, not per row: re-tokenising an option
-        # set for each of 200k rows is the slowest thing in the pipeline and it
-        # returns the same answer every time.
-        #
-        # The option count is part of the key. Source and name alone would be
-        # enough for the real mixture, where one source carries exactly one
-        # question -- but if that ever stops being true the cache would hand a
-        # 77-option question the route computed for a 4-option one, and the
-        # batch would be collated for the wrong readout entirely.
-        key = (example.source, example.name, candidate_count(example.question))
-        if key not in self._routes:
-            self._routes[key] = route(example.question, self.tokenizer, self.max_label_options)
-        return self._routes[key]
+        return self.routes.route_for(example)
 
     @staticmethod
     def length_of(example: Example) -> int:
@@ -175,18 +183,19 @@ class DecisionCollator:
         max_seq_len: int = 4096,
         max_label_options: int | None = None,
         label_prefix: str = " ",
+        routes: RouteCache | None = None,
     ):
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
         self.label_prefix = label_prefix
-        self.batcher = ModeBatcher(tokenizer, batch_size=0, max_label_options=max_label_options)
+        self.routes = routes or RouteCache(tokenizer, max_label_options)
 
     def __call__(self, examples: list[Example]) -> Batch:
         import torch
 
         if not examples:
             raise ValueError("empty batch")
-        routes = [self.batcher.route_for(e) for e in examples]
+        routes = [self.routes.route_for(example) for example in examples]
         modes = {r.mode for r in routes}
         if len(modes) != 1:
             raise ValueError(f"batch mixes readout modes: {sorted(m.value for m in modes)}")
@@ -195,7 +204,7 @@ class DecisionCollator:
         prompts = [render(e, r.codes) for e, r in zip(examples, routes, strict=True)]
         encoded = self._encode(prompts)
 
-        n_candidates = [len(candidate_texts(e)) for e in examples]
+        n_candidates = [len(candidate_texts(e.question)) for e in examples]
         k_max = max(n_candidates)
         candidate_mask = torch.ones(len(examples), k_max, dtype=torch.bool)
         for i, n in enumerate(n_candidates):
@@ -281,7 +290,7 @@ class DecisionCollator:
         pool: dict[str, int] = {}
         index = torch.zeros(len(examples), k_max, dtype=torch.long)
         for i, example in enumerate(examples):
-            for j, text in enumerate(candidate_texts(example)):
+            for j, text in enumerate(candidate_texts(example.question)):
                 index[i, j] = pool.setdefault(text, len(pool))
 
         encoded = self.tokenizer(

@@ -8,8 +8,11 @@ the same code path and one changed flag:
 Error codes mirror the real API (422 validation, 429 rate limit, 529 overloaded)
 so client retry logic behaves identically against either.
 
-Runs: serves Mode A requests against a local `Qwen/Qwen3.5-4B-Base`. Start it with
-`lev serve` and check `/health` first.
+Serves the base backbone, or a trained checkpoint when `--checkpoint` names one:
+the LoRA adapter, the Mode B head and any `calibration.json` beside them are all
+picked up. Start it with `lev serve` and read `/health` before trusting a number
+off it -- that is where you see which checkpoint resolved and whether a
+calibration profile is actually in effect.
 """
 
 from __future__ import annotations
@@ -60,20 +63,18 @@ def create_app(
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        # A checkpoint directory holds a LoRA *adapter*, not a full model, so
-        # the base has to be loaded first and the adapter applied on top.
-        # `AutoModelForCausalLM.from_pretrained(checkpoint_dir)` -- which this
-        # did before anything had been trained -- cannot work: there is no
-        # model config there, only `adapter_config.json`.
+        # A checkpoint directory holds a LoRA *adapter*, not a full model: it
+        # has `adapter_config.json` and no model config. So the base is loaded
+        # from `model_id` and the adapter applied on top.
         checkpoint = None
         if checkpoint_dir:
-            from .train.loop import resolve_checkpoint
+            from .train.checkpoints import resolve_checkpoint
 
             checkpoint = resolve_checkpoint(checkpoint_dir)
 
         # Tokenizer from the checkpoint when it saved one: the label-token
-        # readout depends on which ids a code encodes to, so a mismatch here
-        # produces plausible-looking wrong answers rather than an error.
+        # readout depends on which ids a code encodes to, so a mismatch produces
+        # plausible wrong answers rather than an error.
         tok_source = (
             checkpoint if checkpoint and (checkpoint / "tokenizer.json").is_file() else model_id
         )

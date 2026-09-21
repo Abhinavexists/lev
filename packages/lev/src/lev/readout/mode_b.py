@@ -19,9 +19,8 @@ explicit monotonicity term and `lev.metrics` tracks `ordinal_mae` separately --
 accuracy hides this failure mode entirely. decider reports the same metric for the
 same reason.
 
-MEASURED: 3.67M parameters at hidden=2560, proj=512 (2.10M at 1024, 5.25M at
-4096). An earlier version of this docstring said "~30M", which was an estimate
-and was an order of magnitude high.
+Measured size: 3.67M parameters at hidden=2560, proj=512 (2.10M at 1024,
+5.25M at 4096).
 """
 
 from __future__ import annotations

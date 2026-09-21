@@ -7,11 +7,14 @@ before you rent the GPU, rather than after.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 # Effective bf16 throughput on one H100 with gradient checkpointing. Peak is
 # ~990 TFLOP/s; 400 is a realistic sustained figure and the number §5.8 quotes.
 H100_EFFECTIVE_FLOPS = 4.0e14
+
+# One H100 80GB. The memory estimates below are all against this.
+H100_VRAM_GB = 80.0
 
 # Forward+backward is ~6*N FLOPs/token; checkpointing recomputes activations for
 # roughly a third more. True under LoRA too: the backward pass still traverses
@@ -103,7 +106,6 @@ class TrainConfig:
     # hung one, and on Modal the only thing you can see is stdout.
     log_every: int = 25
     output_dir: str = "checkpoints/lev-4b"
-    blocked_subsets: tuple[str, ...] = field(default_factory=tuple)
 
     # --- derived ------------------------------------------------------------
     @property
@@ -156,7 +158,7 @@ class TrainConfig:
 
     @property
     def headroom_gb(self) -> float:
-        return 80.0 - self.optimizer_gb
+        return H100_VRAM_GB - self.optimizer_gb
 
     def summary(self) -> str:
         adaptation = f"LoRA r{self.lora_rank}" if self.use_lora else "full fine-tune"
@@ -173,12 +175,12 @@ class TrainConfig:
                 f"H100 estimate    {self.estimated_hours:.1f} hours "
                 f"({self.estimated_hours / 24:.1f} days)",
                 f"memory           {self.optimizer_gb:.1f} GB state, "
-                f"{self.headroom_gb:.1f} GB headroom of 80 GB",
+                f"{self.headroom_gb:.1f} GB headroom of {H100_VRAM_GB:.0f} GB",
             ]
         )
 
     def validate(self) -> None:
-        if self.optimizer_gb >= 80:
+        if self.optimizer_gb >= H100_VRAM_GB:
             raise ValueError(
                 f"{self.optimizer_gb:.0f} GB of optimiser state does not fit one H100. "
                 "Enable LoRA or choose a smaller backbone."

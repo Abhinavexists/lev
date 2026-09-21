@@ -256,9 +256,10 @@ def dataset(path: str | Path | None = None) -> tuple[list[Any], dict[str, Any]]:
 def detectable_difference(n: int, baseline: float = 0.8, z: float = 1.96) -> float:
     """Roughly the smallest accuracy change `n` items can distinguish.
 
-    Printed next to every accuracy so the number is read with its resolution
-    attached. This is the half-width of the normal-approximation interval for one
-    proportion; comparing two runs needs a wider margin still.
+    The half-width of the normal-approximation interval for one proportion, so
+    comparing two runs needs a wider margin still. Use it to decide whether a
+    task set is large enough to be worth reading: the built-in 24-item fixture
+    lands around +/-16 points, which cannot resolve any plausible training gain.
     """
     if n <= 0:
         return 1.0

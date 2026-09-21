@@ -35,7 +35,9 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from typing import Literal
 
+from ..labels import NOUL_RATING_TOKENS
 from ..prompt import Layout
 from ..types import Choice, Noul, Question, Score
 from .contamination import assert_clean
@@ -44,6 +46,19 @@ from .mixture import Example
 # Options beyond this many cannot get a single-token label code in any tokenizer
 # we target (A..Z is 26). Sources above it are the Mode B training signal.
 SINGLE_TOKEN_CODE_CEILING = 26
+
+# Sources known to exceed the ceiling but whose label names are read from the
+# dataset at load time, so `label_names` is None and the count is not visible
+# in the registry.
+_LARGE_OPTION_SETS = frozenset({"banking77", "clinc_oos"})
+
+Primitive = Literal["choice", "score", "noul"]
+
+# Mode B's share of the mixture. Deliberately not proportional to corpus size:
+# only two of the nine sources exercise the candidate-path head, so a
+# size-weighted mixture would give it a few percent and it would not train.
+# See ADR-013.
+MODE_B_SHARE = 0.25
 
 
 @dataclass(frozen=True)
@@ -54,7 +69,7 @@ class SourceSpec:
     hf_id: str
     text_field: str
     label_field: str
-    primitive: str  # "choice" | "score" | "noul"
+    primitive: Primitive
     instructions: str
     hf_config: str | None = None
     split: str = "train"
@@ -64,13 +79,10 @@ class SourceSpec:
 
     @property
     def is_mode_b(self) -> bool:
-        n = len(self.label_names) if self.label_names else 0
-        return n > SINGLE_TOKEN_CODE_CEILING or self.name in _KNOWN_LARGE
-
-
-# Sources whose option count we know exceeds the ceiling but whose names are read
-# from the dataset at load time, so `label_names` is None here.
-_KNOWN_LARGE = frozenset({"banking77", "clinc_oos"})
+        """True when the option set cannot fit single-token label codes."""
+        if self.name in _LARGE_OPTION_SETS:
+            return True
+        return bool(self.label_names) and len(self.label_names) > SINGLE_TOKEN_CODE_CEILING
 
 
 REGISTRY: dict[str, SourceSpec] = {
@@ -162,23 +174,17 @@ REGISTRY: dict[str, SourceSpec] = {
 }
 
 # Checked once, at import. A contaminated id must never reach a loader.
+assert_clean(REGISTRY.keys())
 assert_clean([spec.hf_id for spec in REGISTRY.values()])
-assert_clean(REGISTRY)
 
 MODE_B_SOURCES: frozenset[str] = frozenset(
     name for name, spec in REGISTRY.items() if spec.is_mode_b
 )
 
-# Sources close enough that one's state can answer another's question.
-#
-# This matters only for abstain augmentation (ADR-012), which builds an
-# unanswerable example by pairing a question with a *foreign* state. Pair
-# imdb's "Did this reviewer like the film?" with a rotten_tomatoes state and
-# the question is fully answerable -- and it gets supervised as uniform, which
-# is exactly the mislabelling the augmentation exists to avoid. All four
-# sentiment corpora are mutually adjacent (SST-5 and Rotten Tomatoes are both
-# movie-review sentiment, Yelp is the same task on another domain), and
-# clinc_oos contains banking intents.
+# Sources close enough that one's state can answer another's question, and so
+# cannot donate a state for abstain augmentation (ADR-012). The sentiment
+# corpora are mutually adjacent -- SST-5 and Rotten Tomatoes are both
+# movie-review sentiment -- and clinc_oos contains banking intents.
 ADJACENT: tuple[frozenset[str], ...] = (
     frozenset({"imdb", "rotten_tomatoes", "sst5", "yelp_review_full", "emotion"}),
     frozenset({"banking77", "clinc_oos"}),
@@ -188,15 +194,10 @@ ADJACENT: tuple[frozenset[str], ...] = (
 
 def adjacency_map() -> dict[str, frozenset[str]]:
     """source -> the sources whose states must not be used to make it unanswerable."""
-    out: dict[str, frozenset[str]] = {}
-    for name in REGISTRY:
-        related = (
-            frozenset().union(*(g for g in ADJACENT if name in g))
-            if any(name in g for g in ADJACENT)
-            else frozenset()
-        )
-        out[name] = related - {name}
-    return out
+    return {
+        name: frozenset().union(*(group for group in ADJACENT if name in group)) - {name}
+        for name in REGISTRY
+    }
 
 
 def _noul_rating(label: int) -> int:
@@ -208,8 +209,6 @@ def _noul_rating(label: int) -> int:
     `noul_probability` reads back as P(yes) = 0.125. The model would be learning
     to answer no on every positive example while the loss looked healthy.
     """
-    from ..labels import NOUL_RATING_TOKENS
-
     return 0 if int(label) == 0 else len(NOUL_RATING_TOKENS) - 1
 
 
@@ -279,7 +278,7 @@ def load_source(
         dataset = dataset.shuffle(seed=seed).select(range(limit))
     question = build_question(spec, names)
     n_labels = len(names)
-    to_target = _noul_rating if spec.primitive == "noul" else int
+    is_noul = spec.primitive == "noul"
 
     for i, row in enumerate(dataset):
         text = row[spec.text_field]
@@ -295,31 +294,32 @@ def load_source(
             state=text.strip(),
             name=spec.name,
             question=question,
-            target=to_target(target),
+            target=_noul_rating(target) if is_noul else target,
             layout=Layout.STATE_FIRST,  # reassigned by build_mixture
             source=spec.name,
         )
 
 
 def default_weights() -> dict[str, float]:
-    """Mode B gets a quarter of the mixture, split between its two sources.
+    """Sampling weight per source: `MODE_B_SHARE` to Mode B, the rest by primitive.
 
-    Not proportional to corpus size: proportional to what we need learned. Mode B
-    is two sources out of eleven, so a size-weighted mixture would give it a few
-    percent and it would not train. The remaining 0.75 is split evenly across the
-    three primitives so none of the three readouts is starved.
+    The remainder is split evenly across the three primitives, then evenly within
+    each, so no readout is starved regardless of how many sources happen to
+    supply it.
     """
-    mode_b = sorted(MODE_B_SOURCES)
-    rest = [n for n in REGISTRY if n not in MODE_B_SOURCES]
-    by_primitive: dict[str, list[str]] = {}
-    for name in rest:
-        by_primitive.setdefault(REGISTRY[name].primitive, []).append(name)
+    mode_b_sources = sorted(MODE_B_SOURCES)
+    sources_by_primitive: dict[str, list[str]] = {}
+    for name, spec in REGISTRY.items():
+        if name not in MODE_B_SOURCES:
+            sources_by_primitive.setdefault(spec.primitive, []).append(name)
 
-    weights = {name: 0.25 / len(mode_b) for name in mode_b}
-    share = 0.75 / len(by_primitive)
-    for group in by_primitive.values():
+    weights = {name: MODE_B_SHARE / len(mode_b_sources) for name in mode_b_sources}
+    per_primitive = (1.0 - MODE_B_SHARE) / len(sources_by_primitive)
+    for group in sources_by_primitive.values():
         for name in group:
-            weights[name] = share / len(group)
+            weights[name] = per_primitive / len(group)
 
+    # Normalise against float drift so the mixture's sum-to-one check cannot
+    # fail on rounding alone.
     total = sum(weights.values())
-    return {name: w / total for name, w in sorted(weights.items())}
+    return {name: weight / total for name, weight in sorted(weights.items())}

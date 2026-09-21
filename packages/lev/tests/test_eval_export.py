@@ -5,22 +5,19 @@ from __future__ import annotations
 import json
 
 import pytest
+from conftest import an_example
 from lev.data.build import SPLIT_FILES, from_json, to_json, write_jsonl
 from lev.data.export_eval import MIN_USEFUL_ITEMS, export, truth_for
-from lev.data.mixture import Example
 from lev.data.splits import Split
-from lev.prompt import Layout
 from lev.types import Choice, Noul, Score
 
 
 def example(question, target, index, source="src", abstain=False):
-    return Example(
-        state=f"state {index}",
-        name=source,
-        question=question,
+    return an_example(
+        question,
         target=target,
-        layout=Layout.STATE_FIRST,
         source=source,
+        state=f"state {index}",
         abstain=abstain,
         soft_target=[0.5, 0.5] if abstain else None,
     )

@@ -62,15 +62,10 @@ def collect_logits(
 
     from ..data.build import load_split
     from ..data.splits import Split
+    from ..train.checkpoints import load_checkpoint
     from ..train.collate import DecisionCollator, ModeBatcher
     from ..train.config import PRESETS
-    from ..train.loop import (
-        _to_device,
-        build_head,
-        build_model,
-        candidate_logits,
-        load_checkpoint,
-    )
+    from ..train.loop import build_head, build_model, candidate_logits, device_of, to_device
 
     config = config or PRESETS["4b"]
     model, tokenizer = build_model(config, None)
@@ -86,12 +81,12 @@ def collect_logits(
 
     collator = DecisionCollator(tokenizer, max_seq_len=config.max_seq_len)
     batcher = ModeBatcher(tokenizer, batch_size=batch_size)
-    device = next(model.parameters()).device
+    device = device_of(model)
 
     buckets: dict[str, list[tuple[list[float], int]]] = {}
     with torch.no_grad():
         for group in batcher(rows):
-            batch = _to_device(collator(group), device)
+            batch = to_device(collator(group), device)
             logits = candidate_logits(model, batch, head)
             for i, example in enumerate(group):
                 width = int((~batch.candidate_mask[i]).sum())

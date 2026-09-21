@@ -42,14 +42,8 @@ APP_NAME = "lev"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Pinned rather than floating: an unpinned torch or transformers turns a
-# reproducible run into a lottery, and this is the file people will copy.
-#
-# These are the exact versions the pipeline was verified against locally, and
-# they are not interchangeable with older ones. `transformers` in particular
-# has to be recent: the prefix-cache fork calls `reorder_cache` on a *hybrid*
-# cache, because 24 of Qwen3.5-4B's 32 layers are linear-attention layers that
-# hold conv/recurrent state instead of K/V. Pinning 4.x here -- which this file
-# did -- installs a stack that cannot load the backbone at all.
+# reproducible run into a lottery. `transformers` must be 5.x -- the prefix-cache
+# fork calls `reorder_cache` on a hybrid cache, which 4.x cannot do.
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install(
@@ -63,36 +57,20 @@ image = (
         "fastapi==0.141.1",
         "huggingface-hub==1.32.0",
     )
-    # Speed only, never correctness -- but not optional in practice. 24 of
-    # Qwen3.5-4B's 32 layers are linear-attention, and without this transformers
-    # logs "`chunk_gated_delta_rule` is falling back to its reference PyTorch
-    # implementation" and runs three quarters of the model on a reference path.
-    # The first real run measured 826 tok/s and a 23-hour ETA against a 24-hour
-    # timeout.
+    # Speed, not correctness -- but 24 of the 32 layers are linear-attention, so
+    # without this three quarters of the model runs on a reference PyTorch path
+    # (ADR-017). Pure Python and Triton, so no compiler needed.
     #
-    # `causal-conv1d` is deliberately NOT here. It is a CUDA source build and
-    # needs `nvcc`, which `debian_slim` does not ship, so it fails at
-    # `Getting requirements to build wheel` with
-    # `NameError: name 'bare_metal_version' is not defined` -- a confusing way
-    # to say "no compiler". Adding it would mean a `nvidia/cuda:*-devel` base
-    # and a much heavier image, to accelerate only the short depthwise conv;
-    # `flash-linear-attention` is the one that carries the linear-attention
-    # core, and it is pure Python and Triton, so it needs no compiler.
-    #
-    # Unpinned deliberately: it tracks the transformers/torch pair closely and a
-    # stale pin breaks the build. If the build does break, delete this layer --
-    # the run gets slow again, not wrong.
+    # `causal-conv1d` is deliberately absent: it is a CUDA source build needing
+    # `nvcc`, which `debian_slim` has no compiler for, and it accelerates only
+    # the short depthwise conv. Unpinned because it tracks torch closely; if the
+    # build breaks, delete this layer -- the run gets slow, not wrong.
     .pip_install("flash-linear-attention")
-    # The package itself last, so editing our code does not invalidate the
-    # expensive dependency layer above.
-    #
-    # `add_local_dir`, not `add_local_python_source("lev")`. The latter resolves
-    # the package through the *local* interpreter's import system, so it needs
-    # `lev` installed in whichever Python runs the `modal` CLI -- and a globally
-    # installed modal fails with `ModuleNotMountable: lev has no spec`. Copying
-    # the source directory works from any interpreter and from any cwd, which
-    # is what a repo anyone can clone and run needs. `/root` is on `sys.path`
-    # in a Modal container, so `import lev` resolves.
+    # The package last, so editing our code does not invalidate the expensive
+    # dependency layer above. `add_local_dir`, not `add_local_python_source`:
+    # the latter resolves through the local interpreter's import system and so
+    # fails unless `lev` is installed in whichever Python runs the `modal` CLI.
+    # `/root` is on `sys.path` in a Modal container, so `import lev` resolves.
     .add_local_dir(
         REPO_ROOT / "packages" / "lev" / "src" / "lev",
         remote_path="/root/lev",

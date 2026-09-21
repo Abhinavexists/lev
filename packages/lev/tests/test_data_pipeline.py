@@ -8,6 +8,7 @@ the only thing a network would add is a slower test that fails when HF is down.
 from __future__ import annotations
 
 import pytest
+from conftest import a_choice, an_example
 from lev.data.mixture import Example, MixtureSpec, build_mixture
 from lev.data.sources import (
     MODE_B_SOURCES,
@@ -170,16 +171,9 @@ class TestSampling:
 
 
 def make(source, target, index, n_options=4):
-    from lev.types import Choice
-
-    question = Choice(instructions="q", criteria={f"o{i}": None for i in range(n_options)})
-    return Example(
-        state=f"{source} text {index}",
-        name=source,
-        question=question,
-        target=target,
-        layout=Layout.STATE_FIRST,
-        source=source,
+    """One row whose state names its own source, so donor tests can trace it."""
+    return an_example(
+        a_choice(n_options), target=target, source=source, state=f"{source} text {index}"
     )
 
 

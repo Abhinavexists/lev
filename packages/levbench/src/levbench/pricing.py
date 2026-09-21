@@ -28,8 +28,8 @@ PRICES: dict[str, Price] = {
 }
 
 
-# Sentinel for a model you host yourself: the cost is GPU time, not tokens, so
-# quoting a per-token figure would be actively misleading.
+# A model you host yourself: the cost is GPU time, not tokens, so quoting any
+# per-token figure would be actively misleading. Callers label it instead.
 SELF_HOSTED = Price(0.0, 0.0)
 
 
@@ -44,12 +44,10 @@ def lookup(model: str) -> Price:
         return PRICES[model]
     if model.startswith("jev"):
         return PRICES["jev-latest"]
-    # Self-hosted checkpoints (`Qwen/...`, a local adapter, ...) are not metered:
-    # their cost is GPU time, not tokens. Quoting a vendor per-token rate for one
-    # would be actively misleading, so return zero and let callers label it.
+    # Self-hosted checkpoints (`Qwen/...`, a local adapter, ...) are not metered.
     return SELF_HOSTED
 
 
 def cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
-    p = lookup(model)
-    return (input_tokens * p.input_per_mtok + output_tokens * p.output_per_mtok) / 1_000_000
+    price = lookup(model)
+    return (input_tokens * price.input_per_mtok + output_tokens * price.output_per_mtok) / 1_000_000

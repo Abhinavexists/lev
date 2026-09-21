@@ -143,15 +143,26 @@ def cmd_confidence(args: argparse.Namespace) -> None:
     print(confidence_id.format_fits(confidence_id.identify(samples)))
 
 
+BACKENDS = ["jev", "lev", "anthropic"]
+
+
+def _add_base_url(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--base-url",
+        default=None,
+        help="override the endpoint (defaults to localhost:8000 for --backend lev)",
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="levbench", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_eval = sub.add_parser("eval", help="accuracy and calibration on the labelled set")
-    p_eval.add_argument("--backend", choices=["jev", "lev", "anthropic"], default="jev")
-    p_eval.add_argument("--model", default=None)
-    p_eval.add_argument("--limit", type=int, default=None)
-    p_eval.add_argument(
+    eval_parser = sub.add_parser("eval", help="accuracy and calibration on the labelled set")
+    eval_parser.add_argument("--backend", choices=BACKENDS, default="jev")
+    eval_parser.add_argument("--model", default=None)
+    eval_parser.add_argument("--limit", type=int, default=None)
+    eval_parser.add_argument(
         "--tasks",
         default=None,
         help=(
@@ -160,40 +171,30 @@ def main(argv: list[str] | None = None) -> None:
             "+/-16 accuracy points. Generate a real one with `lev data eval`."
         ),
     )
-    p_eval.add_argument(
-        "--base-url",
-        default=None,
-        help="override the endpoint (defaults to localhost:8000 for --backend lev)",
-    )
-    p_eval.set_defaults(func=cmd_eval)
+    _add_base_url(eval_parser)
+    eval_parser.set_defaults(func=cmd_eval)
 
-    p_sweep = sub.add_parser("sweep", help="batched vs split cost and latency")
-    p_sweep.add_argument("--backend", choices=["jev", "lev", "anthropic"], default="jev")
-    p_sweep.add_argument("--model", default=None)
-    p_sweep.add_argument("--state", default=str(DEFAULT_STATE))
-    p_sweep.add_argument("--counts", default="1,2,4,8,13")
-    p_sweep.add_argument(
-        "--base-url",
-        default=None,
-        help="override the endpoint (defaults to localhost:8000 for --backend lev)",
-    )
-    p_sweep.set_defaults(func=cmd_sweep)
+    sweep_parser = sub.add_parser("sweep", help="batched vs split cost and latency")
+    sweep_parser.add_argument("--backend", choices=BACKENDS, default="jev")
+    sweep_parser.add_argument("--model", default=None)
+    sweep_parser.add_argument("--state", default=str(DEFAULT_STATE))
+    sweep_parser.add_argument("--counts", default="1,2,4,8,13")
+    _add_base_url(sweep_parser)
+    sweep_parser.set_defaults(func=cmd_sweep)
 
-    p_cmp = sub.add_parser("compare", help="run both backends and diff them")
-    p_cmp.add_argument("--jev-model", default=None)
-    p_cmp.add_argument("--anthropic-model", default="claude-opus-5")
-    p_cmp.add_argument("--limit", type=int, default=None)
-    p_cmp.set_defaults(func=cmd_compare)
+    compare_parser = sub.add_parser("compare", help="run both backends and diff them")
+    compare_parser.add_argument("--jev-model", default=None)
+    compare_parser.add_argument("--anthropic-model", default="claude-opus-5")
+    compare_parser.add_argument("--limit", type=int, default=None)
+    compare_parser.set_defaults(func=cmd_compare)
 
-    p_conf = sub.add_parser("confidence", help="identify the server's confidence formula")
-    p_conf.add_argument("--model", default=None)
-    p_conf.add_argument("--limit", type=int, default=None)
-    p_conf.add_argument(
-        "--base-url",
-        default=None,
-        help="override the endpoint (defaults to localhost:8000 for --backend lev)",
+    confidence_parser = sub.add_parser(
+        "confidence", help="identify the server's confidence formula"
     )
-    p_conf.set_defaults(func=cmd_confidence)
+    confidence_parser.add_argument("--model", default=None)
+    confidence_parser.add_argument("--limit", type=int, default=None)
+    _add_base_url(confidence_parser)
+    confidence_parser.set_defaults(func=cmd_confidence)
 
     args = parser.parse_args(argv)
     args.func(args)

@@ -24,7 +24,7 @@ from ..prompt import Layout
 from ..types import Question
 from .mixture import Example, MixtureSpec, build_mixture
 from .sources import REGISTRY, adjacency_map, default_weights, load_source
-from .splits import Split, check_coverage, split_examples
+from .splits import SPLIT_SALT, Split, check_coverage, split_examples
 
 _QUESTION = TypeAdapter(Question)
 
@@ -114,53 +114,53 @@ def build_dataset(
 
     pools: dict[str, list[Example]] = {}
     for name in weights:
-        spec = REGISTRY[name]
         pools[name] = list(
-            load_source(spec, limit=limit_per_source, cache_dir=cache_dir, load_dataset=loader)
+            load_source(
+                REGISTRY[name], limit=limit_per_source, cache_dir=cache_dir, load_dataset=loader
+            )
         )
         if not pools[name]:
             raise ValueError(f"source {name!r} loaded zero rows")
 
-    flat = [e for pool in pools.values() for e in pool]
-    splits = split_examples(flat)
+    all_examples = [example for pool in pools.values() for example in pool]
+    splits = split_examples(all_examples)
     report = check_coverage(splits)
-
-    by_source: dict[Split, dict[str, list[Example]]] = {}
-    for split, items in splits.items():
-        grouped: dict[str, list[Example]] = {}
-        for example in items:
-            grouped.setdefault(example.source, []).append(example)
-        by_source[split] = grouped
+    by_source = {split: _group_by_source(rows) for split, rows in splits.items()}
 
     counts: dict[str, int] = {}
     for split in Split:
-        present = {n: w for n, w in weights.items() if by_source[split].get(n)}
-        if not present:
+        available = {name: weight for name, weight in weights.items() if by_source[split].get(name)}
+        if not available:
             raise ValueError(f"split {split.value} has no examples from any source")
-        total = sum(present.values())
-        spec = MixtureSpec(
-            sources={n: w / total for n, w in present.items()},
+        total_weight = sum(available.values())
+        is_train = split is Split.TRAIN
+
+        mixture = MixtureSpec(
+            sources={name: weight / total_weight for name, weight in available.items()},
             # Held-out splits are drawn at their natural size; only train is
             # oversampled to the configured budget.
             n_examples=(
-                n_examples
-                if split is Split.TRAIN
-                else sum(len(v) for v in by_source[split].values())
+                n_examples if is_train else sum(len(rows) for rows in by_source[split].values())
             ),
             schema_first_fraction=schema_first_fraction,
-            # Abstain augmentation is a training device. Putting unanswerable rows
-            # in the test split would measure our abstention, not our accuracy,
-            # and the two are not the same number.
-            abstain_fraction=abstain_fraction if split is Split.TRAIN else 0.0,
+            # Abstain augmentation is a training device. Unanswerable rows in the
+            # test split would measure our abstention, not our accuracy.
+            abstain_fraction=abstain_fraction if is_train else 0.0,
+            # A different stream per split, so the three do not replay the same
+            # layout and abstain decisions in lockstep.
             seed=seed + list(Split).index(split),
             adjacent=adjacency_map(),
         )
-        loaders = {n: (lambda n=n, s=split: by_source[s][n]) for n in present}
-        counts[split.value] = write_jsonl(out / SPLIT_FILES[split], build_mixture(spec, loaders))
+        # `name=name` binds the loop variable at definition time; without it every
+        # loader would close over the last source in the dict.
+        loaders = {
+            name: (lambda name=name, split=split: by_source[split][name]) for name in available
+        }
+        counts[split.value] = write_jsonl(out / SPLIT_FILES[split], build_mixture(mixture, loaders))
 
-    unique_train = sum(len(v) for v in by_source[Split.TRAIN].values())
+    unique_train = sum(len(rows) for rows in by_source[Split.TRAIN].values())
     manifest = {
-        "sources": {n: REGISTRY[n].hf_id for n in weights},
+        "sources": {name: REGISTRY[name].hf_id for name in weights},
         # `build_mixture` draws with replacement, so asking for more examples
         # than the train split holds oversamples it. That is legitimate -- each
         # draw gets its own layout and abstain roll, so the examples differ even
@@ -171,16 +171,23 @@ def build_dataset(
         "oversample_ratio": round(n_examples / max(1, unique_train), 2),
         "weights": weights,
         "limit_per_source": limit_per_source,
-        "rows_loaded": {n: len(p) for n, p in pools.items()},
+        "rows_loaded": {name: len(pool) for name, pool in pools.items()},
         "split_counts": counts,
-        "raw_split_counts": {s.value: c for s, c in report.counts.items()},
+        "raw_split_counts": {split.value: n for split, n in report.counts.items()},
         "schema_first_fraction": schema_first_fraction,
         "abstain_fraction": abstain_fraction,
         "seed": seed,
-        "split_salt": "lev-split-v1",
+        "split_salt": SPLIT_SALT,
     }
     (out / MANIFEST).write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest
+
+
+def _group_by_source(examples: Iterable[Example]) -> dict[str, list[Example]]:
+    grouped: dict[str, list[Example]] = {}
+    for example in examples:
+        grouped.setdefault(example.source, []).append(example)
+    return grouped
 
 
 def load_split(data_dir: str | Path, split: Split) -> list[Example]:

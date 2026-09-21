@@ -18,8 +18,10 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from .collate import DecisionCollator, ModeBatcher
+from .checkpoints import load_checkpoint, save_checkpoint
+from .collate import DecisionCollator, ModeBatcher, RouteCache
 from .config import TrainConfig
+from .progress import ProgressLog, hms
 
 
 def build_model(config: TrainConfig, model_cache: str | None = None):
@@ -118,11 +120,10 @@ def decision_loss(logits, targets, config: TrainConfig, ordinal=False, soft_targ
     # exactly F.cross_entropy, so the hard rows are unaffected by supporting
     # the soft ones.
     #
-    # `torch.where`, not a plain product: padded candidate slots carry a logit of
-    # -inf so they win no softmax mass, and their target probability is 0, so the
-    # product is `0 * -inf` = NaN. One padded slot anywhere in the batch poisons
-    # the mean, and because the backward pass still runs, the symptom is a loss
-    # of nan rather than a crash -- observed on the first smoke run.
+    # `torch.where`, not a plain product: a padded slot carries a logit of -inf
+    # and a target of 0, so the product is `0 * -inf` = NaN. One padded slot
+    # poisons the batch mean, and backward still runs, so the symptom is a nan
+    # loss rather than a crash.
     weighted = torch.where(target_dist > 0, target_dist * log_probs, torch.zeros_like(log_probs))
     ce = -weighted.sum(dim=-1).mean()
     brier = ((probs - target_dist) ** 2).sum(dim=-1).mean()
@@ -204,15 +205,15 @@ def build_head(config: TrainConfig, model=None):
         hidden = getattr(model.config, "hidden_size", hidden)
     head = CandidatePathReadout(hidden_size=hidden, proj_dim=config.mode_b_proj_dim)
     if model is not None:
-        head = head.to(device=_device_of(model), dtype=torch.float32)
+        head = head.to(device=device_of(model), dtype=torch.float32)
     return head
 
 
-def _device_of(model):
+def device_of(model):
     return next(model.parameters()).device
 
 
-def _to_device(batch, device):
+def to_device(batch, device):
     from dataclasses import fields as _fields
 
     import torch
@@ -295,14 +296,18 @@ def run_training(
     head = build_head(config, model) if config.train_mode_b_head else None
     if resume_from:
         load_checkpoint(model, head, resume_from)
-    device = _device_of(model)
+    device = device_of(model)
 
-    collator = DecisionCollator(tokenizer, max_seq_len=config.max_seq_len)
+    # One cache, so a question is routed once for the whole run rather than
+    # once for the batcher and again for the collator.
+    routes = RouteCache(tokenizer)
+    collator = DecisionCollator(tokenizer, max_seq_len=config.max_seq_len, routes=routes)
     batcher = ModeBatcher(
         tokenizer,
         batch_size=config.per_device_batch,
         bucket_window=config.bucket_window,
         seed=config.seed,
+        routes=routes,
     )
 
     params = [p for p in model.parameters() if p.requires_grad]
@@ -344,7 +349,7 @@ def run_training(
         # batcher then sorts within each window and shuffles the batch order.
         rng.shuffle(order)
         for group in batcher(order, epoch=epoch):
-            batch = _to_device(collator(group), device)
+            batch = to_device(collator(group), device)
             logits = candidate_logits(model, batch, head)
             loss = decision_loss(
                 logits,
@@ -397,7 +402,7 @@ def run_training(
         save_checkpoint(model, head, tokenizer, output, step, on_checkpoint)
     summary = _write_history(output, history, step, str(output))
     print(
-        f"done: {step:,} steps in {_hms(time.monotonic() - progress.start)} -> {output}",
+        f"done: {step:,} steps in {hms(time.monotonic() - progress.start)} -> {output}",
         flush=True,
     )
     return summary
@@ -413,166 +418,3 @@ def _write_history(output: Path, history: list[dict], step: int, output_dir: str
     }
     (output / "history.json").write_text(json.dumps(summary, indent=2) + "\n")
     return summary
-
-
-class ProgressLog:
-    """Periodic one-line progress, because a silent run looks like a hung one.
-
-    On Modal the only window into a running job is stdout, and Python
-    block-buffers stdout when it is not a tty -- so an unflushed `print` shows
-    nothing for hours and then everything at once. Every write here is flushed.
-
-    Losses are reported per mode over the window rather than cumulatively: the
-    two readouts sit at different scales (Mode B starts near `ln(K)`), so a
-    single blended average hides which one is actually moving.
-
-    Rate, throughput and ETA are all measured over the window since the last
-    report, not cumulatively from process start -- see `record`.
-
-    Throughput counts the tokens actually fed to the model, taken from the
-    attention mask. Deriving it from `config.avg_tokens_per_example` instead
-    would report the plan rather than the run -- and that constant was wrong by
-    10x once already (ADR-016), which is exactly the error a throughput readout
-    should be able to expose.
-    """
-
-    def __init__(self, total_steps: int, log_every: int):
-        self.total = total_steps
-        self.every = max(1, log_every)
-        self.start = time.monotonic()
-        self.window: dict[str, list[float]] = {}
-        self.tokens = 0
-        self.window_tokens = 0
-        self.mark = self.start
-        self.mark_step = 0
-
-    def record(self, step: int, loss: float, mode: str, lr: float, tokens: int = 0) -> None:
-        self.window.setdefault(mode, []).append(loss)
-        self.tokens += tokens
-        self.window_tokens += tokens
-        if (step + 1) % self.every and step + 1 != self.total:
-            return
-
-        done = step + 1
-        now = time.monotonic()
-        # A coarse clock can report zero on a fast window; never divide by it.
-        elapsed = max(now - self.start, 1e-9)
-        # Rate over the *window*, not since process start. Startup cost is a
-        # one-off -- loading weights, allocator warmup, and with
-        # flash-linear-attention a minutes-long Triton JIT compile -- and a
-        # cumulative average never stops paying for it. Measured on the 0.8B
-        # smoke: 4.68 s/step over the first 25 steps, 0.40 s/step thereafter,
-        # reported cumulatively as 0.33 it/s against a true 2.50. An ETA built
-        # on that is wrong by the same factor, which is how a run gets
-        # abandoned for being slow when it is not.
-        span = max(now - self.mark, 1e-9)
-        rate = (done - self.mark_step) / span
-        remaining = (self.total - done) / rate if rate else 0.0
-        losses = "  ".join(f"{m}={sum(v) / len(v):.4f}" for m, v in sorted(self.window.items()))
-        print(
-            f"step {done:>6}/{self.total}  {100 * done / self.total:5.1f}%  "
-            f"{losses}  lr={lr:.2e}  {rate:.2f} it/s  "
-            f"{self.window_tokens / span:,.0f} tok/s  "
-            f"elapsed {_hms(elapsed)}  eta {_hms(remaining)}{_gpu_mem()}",
-            flush=True,
-        )
-        self.window.clear()
-        self.window_tokens = 0
-        self.mark = now
-        self.mark_step = done
-
-
-def _hms(seconds: float) -> str:
-    seconds = int(seconds)
-    return f"{seconds // 3600:d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
-
-
-def _gpu_mem() -> str:
-    import torch
-
-    if not torch.cuda.is_available():
-        return ""
-    return f"  mem {torch.cuda.max_memory_allocated() / 2**30:.1f}G"
-
-
-def resolve_checkpoint(path: str | Path) -> Path:
-    """Accept either a `step-N` directory or the parent holding several.
-
-    `save_checkpoint` writes `<output_dir>/step-<n>`, but every caller naturally
-    names `<output_dir>` -- the preset's output directory is what appears in the
-    config, in the Modal volume layout and in the docs. Resolving the newest
-    step here means one spelling works everywhere, and "newest" is by step
-    number rather than mtime because a resumed run rewrites older directories.
-    """
-    source = Path(path)
-    if (source / "adapter_model.safetensors").is_file():
-        return source
-    steps = sorted(
-        (d for d in source.glob("step-*") if (d / "adapter_model.safetensors").is_file()),
-        key=lambda d: int(d.name.split("-")[1]),
-    )
-    if not steps:
-        raise FileNotFoundError(
-            f"no checkpoint under {source}: expected adapter weights there or in "
-            f"a step-N subdirectory"
-        )
-    return steps[-1]
-
-
-def load_checkpoint(model, head, path: str | Path) -> None:
-    """Restore adapter and head weights into an already-built model.
-
-    Not `model.load_adapter(path, adapter_name="default")`: `get_peft_model`
-    has already created an adapter under that name, so loading another one
-    there either errors or leaves two. Writing the state dict into the existing
-    adapter is the operation actually wanted, and it keeps the optimiser's
-    parameter list valid -- it was built from these exact tensors.
-
-    A missing head file is fatal rather than ignored. Resuming a run with a
-    freshly initialised Mode B head would look like training and would silently
-    discard every Mode B step taken before the preemption.
-    """
-    import torch
-    from peft import set_peft_model_state_dict
-    from safetensors.torch import load_file
-
-    source = resolve_checkpoint(path)
-    set_peft_model_state_dict(model, load_file(str(source / "adapter_model.safetensors")))
-
-    head_file = source / "mode_b_head.pt"
-    if head is not None:
-        if not head_file.is_file():
-            raise FileNotFoundError(
-                f"{source} has adapter weights but no {head_file.name}. Resuming "
-                f"would reinitialise the Mode B head and quietly throw away every "
-                f"Mode B step taken before the interruption. Pass "
-                f"`train_mode_b_head=False` if that is genuinely what you want."
-            )
-        head.load_state_dict(torch.load(head_file, map_location=_device_of(model)))
-    elif head_file.is_file():
-        raise ValueError(
-            f"{source} carries a Mode B head but this run has "
-            f"`train_mode_b_head=False`; it would be dropped."
-        )
-
-
-def save_checkpoint(model, head, tokenizer, output: Path, step: int, on_checkpoint=None) -> Path:
-    """Write adapters, head and tokenizer together.
-
-    All three, because a LoRA adapter without the head it was trained beside
-    cannot serve Mode B, and a tokenizer mismatch silently changes which label
-    token ids the readout reads -- a failure that produces plausible numbers.
-    """
-    import torch
-
-    path = output / f"step-{step}"
-    path.mkdir(parents=True, exist_ok=True)
-    model.save_pretrained(path)
-    tokenizer.save_pretrained(path)
-    if head is not None:
-        torch.save(head.state_dict(), path / "mode_b_head.pt")
-    if on_checkpoint is not None:
-        on_checkpoint()
-    size = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
-    print(f"  checkpoint -> {path}  ({size / 2**20:.0f} MB)", flush=True)
-    return path

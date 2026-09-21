@@ -221,6 +221,11 @@ def run_eval(
 
 
 def format_report(report: EvalReport) -> str:
+    return "\n".join([*_format_summary(report), *_format_per_question(report)])
+
+
+def _format_summary(report: EvalReport) -> list[str]:
+    """Cost, latency and retry totals across the whole run."""
     lines: list[str] = []
     n = len(report.calls)
     lines.append(f"=== {report.backend} / {report.model} ===")
@@ -237,8 +242,8 @@ def format_report(report: EvalReport) -> str:
             lines.append(
                 f"latency slowest    {report.latencies[-1]:.3f}s  (n={n}; too few for a p95)"
             )
-    lines.append(f"input tokens       {sum(c.input_tokens for c in report.calls):,}")
-    lines.append(f"output tokens      {sum(c.output_tokens for c in report.calls):,}")
+    lines.append(f"input tokens       {sum(call.input_tokens for call in report.calls):,}")
+    lines.append(f"output tokens      {sum(call.output_tokens for call in report.calls):,}")
     if pricing.is_self_hosted(report.model):
         lines.append("total cost         self-hosted (GPU time, not per-token)")
     else:
@@ -252,18 +257,26 @@ def format_report(report: EvalReport) -> str:
             f"{sorted(served)} -- cost figures use the requested model's price"
         )
     lines.append("")
+    return lines
 
-    for name, cal in report.per_question.items():
+
+def _format_per_question(report: EvalReport) -> list[str]:
+    """Accuracy, calibration and the reliability bins, one block per question."""
+    lines: list[str] = []
+    for name, calibration in report.per_question.items():
         lines.append(f"-- {name}")
         lines.append(
-            f"   accuracy {cal.accuracy:.3f}   log-loss {cal.mean_log_loss:.4f}   "
-            f"brier {cal.mean_brier:.4f}   ECE {cal.ece:.4f}"
+            f"   accuracy {calibration.accuracy:.3f}   "
+            f"log-loss {calibration.mean_log_loss:.4f}   "
+            f"brier {calibration.mean_brier:.4f}   ECE {calibration.ece:.4f}"
         )
-        recs = report.records[name]
-        for thr in (0.5, 0.7, 0.9):
-            acc, kept = metrics.selective_accuracy(recs, thr)
-            lines.append(f"   conf>={thr:.1f}: accuracy {acc:.3f} on {kept:.0%} of items")
-        occupied = [b for b in cal.bins if b.n]
+        records = report.records[name]
+        for threshold in (0.5, 0.7, 0.9):
+            accuracy, kept = metrics.selective_accuracy(records, threshold)
+            lines.append(
+                f"   conf>={threshold:.1f}: accuracy {accuracy:.3f} on {kept:.0%} of items"
+            )
+        occupied = [b for b in calibration.bins if b.n]
         if occupied:
             lines.append("   reliability (confidence bin -> accuracy, n):")
             for b in occupied:
@@ -272,4 +285,4 @@ def format_report(report: EvalReport) -> str:
                     f"acc {b.accuracy:.3f}  n={b.n}  gap {b.gap:+.3f}"
                 )
         lines.append("")
-    return "\n".join(lines)
+    return lines

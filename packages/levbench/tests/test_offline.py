@@ -47,7 +47,7 @@ def test_metrics_are_arithmetically_right() -> None:
     print("metrics maths OK")
 
 
-def test_answer_flattening() -> None:
+def test_every_primitive_flattens_to_a_distribution() -> None:
     """Every primitive must flatten, including the fieldless Noul."""
     items, questions = dataset()
     result = runner.call_once(fake_client(), items[0].state, questions)
@@ -63,13 +63,13 @@ def test_answer_flattening() -> None:
     assert abs(sum(metrics.to_distribution(choice).values()) - 1.0) < 1e-3
 
     score = result.answers["frustration"]
-    sdist = metrics.to_distribution(score)
-    expected = sum(k * v for k, v in sdist.items())
+    by_level = metrics.to_distribution(score)
+    expected = sum(level * p for level, p in by_level.items())
     assert abs(score.score - expected) < 1e-2, "score must equal the probability-weighted mean"
     print("answer flattening OK (all three primitives)")
 
 
-def test_full_eval_runs() -> None:
+def test_eval_runs_end_to_end_over_the_built_in_fixture() -> None:
     items, questions = dataset()
     report = runner.run_eval(fake_client(), "jev", "jev-latest", items, questions)
     assert len(report.calls) == len(items)
@@ -243,15 +243,10 @@ def test_empty_local_key_env_var_falls_back() -> None:
 
 
 if __name__ == "__main__":
-    test_metrics_are_arithmetically_right()
-    test_answer_flattening()
-    test_full_eval_runs()
-    test_sweep_arithmetic_over_a_fixed_billing_shape()
-    test_confidence_identifier_recovers_a_planted_formula()
-    test_base_url_routes_to_a_local_clone()
-    test_local_base_url_never_forwards_the_real_key()
-    test_empty_local_key_env_var_falls_back()
-    print("\nAll offline checks passed.")
+    # Delegate rather than list the tests by hand: the hand-written list had
+    # already drifted to 8 of the 15 in this file, so running the module
+    # directly quietly checked less than running pytest did.
+    raise SystemExit(pytest.main([__file__, "-v"]))
 
 
 def _write_task_file(path, question_type="choice", n=5):

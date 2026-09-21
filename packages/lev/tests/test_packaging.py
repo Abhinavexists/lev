@@ -65,26 +65,67 @@ def test_known_extras_are_present(expected):
     assert expected in _extras(ROOT / "pyproject.toml")
 
 
+def _inspect_cli(tool: str) -> tuple[set[str], dict[str, set[str]]]:
+    """Build the real parser and read back its subcommands and option choices.
+
+    Introspection rather than a regex over the source: a regex breaks as soon
+    as a choice list moves into a constant, and it never checked that the
+    parser accepts the value -- only that the text appeared in a file.
+    """
+    import argparse
+    import importlib
+
+    cli = importlib.import_module(f"{tool}.cli")
+    subcommands: set[str] = set()
+    choices: dict[str, set[str]] = {}
+
+    def collect(parser) -> None:
+        for action in parser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                subcommands.update(action.choices)
+                for child in action.choices.values():
+                    collect(child)
+            elif action.choices:
+                for option in action.option_strings:
+                    choices.setdefault(option, set()).update(action.choices)
+
+    real_parse = argparse.ArgumentParser.parse_args
+
+    def capture(self, args=None, namespace=None):
+        collect(self)
+        raise SystemExit(0)
+
+    argparse.ArgumentParser.parse_args = capture
+    try:
+        with pytest.raises(SystemExit):
+            cli.main([])
+    finally:
+        argparse.ArgumentParser.parse_args = real_parse
+    return subcommands, choices
+
+
+def _documented_flag_values(flag: str) -> dict[str, set[str]]:
+    """Every `--flag value` the docs name, and which file named it."""
+    found: dict[str, set[str]] = {}
+    sources = [ROOT / "README.md", ROOT / "Makefile"] + sorted((ROOT / "docs").glob("*.md"))
+    for src in sources:
+        if src.is_file():
+            for value in re.findall(rf"{flag}[= ]([a-z][a-z0-9-]*)", src.read_text()):
+                found.setdefault(value, set()).add(src.name)
+    return found
+
+
 def test_every_documented_backend_exists():
     """A `--backend x` in the docs must be a choice the CLI actually accepts.
 
     Same failure shape as the missing `serve` extra: the docs tell you to run
     something the tool rejects.
     """
-    cli = (ROOT / "packages" / "levbench" / "src" / "levbench" / "cli.py").read_text()
-    valid = set(re.findall(r"choices=\[([^\]]+)\]", cli))
-    accepted = {v.strip().strip("\"'") for group in valid for v in group.split(",")}
-
-    documented: dict[str, set[str]] = {}
-    sources = [ROOT / "README.md", ROOT / "Makefile"] + sorted((ROOT / "docs").glob("*.md"))
-    for src in sources:
-        if src.is_file():
-            for name in re.findall(r"--backend[= ]([a-z][a-z0-9-]*)", src.read_text()):
-                documented.setdefault(name, set()).add(src.name)
-
-    for name, where in sorted(documented.items()):
-        assert name in accepted, (
-            f"{sorted(where)} document `--backend {name}`, but the CLI accepts "
+    _, choices = _inspect_cli("levbench")
+    accepted = choices["--backend"]
+    for value, where in sorted(_documented_flag_values("--backend").items()):
+        assert value in accepted, (
+            f"{sorted(where)} document `--backend {value}`, but the CLI accepts "
             f"only {sorted(accepted)}."
         )
 
@@ -128,31 +169,12 @@ def test_every_documented_subcommand_is_registered(tool):
     CLI grows: the docs get the new command and the parser does not, or the
     command gets renamed and the docs keep the old spelling.
     """
-    import argparse
-    import importlib
-
-    cli = importlib.import_module(f"{tool}.cli")
-    parser_actions: set[str] = set()
-
-    real_parse = argparse.ArgumentParser.parse_args
-
-    def capture(self, args=None, namespace=None):
-        for action in self._actions:
-            if isinstance(action, argparse._SubParsersAction):
-                parser_actions.update(action.choices)
-        raise SystemExit(0)
-
-    argparse.ArgumentParser.parse_args = capture
-    try:
-        with pytest.raises(SystemExit):
-            cli.main([])
-    finally:
-        argparse.ArgumentParser.parse_args = real_parse
+    registered, _ = _inspect_cli(tool)
 
     for name, where in sorted(_documented_commands(tool).items()):
         if name.startswith("-"):
             continue
-        assert name in parser_actions, (
+        assert name in registered, (
             f"{sorted(where)} document `{tool} {name}`, but the CLI registers "
-            f"only {sorted(parser_actions)}."
+            f"only {sorted(registered)}."
         )

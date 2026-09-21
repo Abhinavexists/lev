@@ -71,23 +71,32 @@ def fit_temperature(
 def expected_calibration_error(
     probs: Sequence[Sequence[float]], truths: Sequence[int], n_bins: int = 10
 ) -> float:
-    """Sample-weighted mean gap between top-probability and accuracy."""
+    """Sample-weighted mean gap between top-probability and accuracy.
+
+    A perfectly calibrated model that says "80% confident" is right 80% of the
+    time, so within each confidence bin the mean confidence should equal the
+    accuracy. ECE is the average of those gaps, weighted by bin population.
+    """
     if not probs:
         return 0.0
+
     bins: list[list[tuple[float, bool]]] = [[] for _ in range(n_bins)]
-    for p, truth in zip(probs, truths, strict=True):
-        conf = max(p)
-        correct = max(range(len(p)), key=lambda i: p[i]) == truth
-        bins[min(int(conf * n_bins), n_bins - 1)].append((conf, correct))
-    total = sum(len(b) for b in bins)
-    return (
-        sum(
-            len(b) * abs(sum(c for c, _ in b) / len(b) - sum(ok for _, ok in b) / len(b))
-            for b in bins
-            if b
-        )
-        / total
-    )
+    for distribution, truth in zip(probs, truths, strict=True):
+        confidence = max(distribution)
+        predicted = max(range(len(distribution)), key=distribution.__getitem__)
+        # The top bin is closed: a confidence of exactly 1.0 would otherwise
+        # index one past the end.
+        bin_index = min(int(confidence * n_bins), n_bins - 1)
+        bins[bin_index].append((confidence, predicted == truth))
+
+    total_weighted_gap = 0.0
+    for members in bins:
+        if not members:
+            continue
+        mean_confidence = sum(c for c, _ in members) / len(members)
+        accuracy = sum(hit for _, hit in members) / len(members)
+        total_weighted_gap += len(members) * abs(mean_confidence - accuracy)
+    return total_weighted_gap / len(probs)
 
 
 @dataclass
@@ -124,11 +133,11 @@ class CalibrationProfile:
 
     @classmethod
     def load(cls, path: str | Path) -> CalibrationProfile:
-        d = json.loads(Path(path).read_text())
+        payload = json.loads(Path(path).read_text())
         return cls(
-            temperatures=d["temperatures"],
-            fitted_on=d.get("fitted_on", ""),
-            n_samples=d.get("n_samples", {}),
+            temperatures=payload["temperatures"],
+            fitted_on=payload.get("fitted_on", ""),
+            n_samples=payload.get("n_samples", {}),
         )
 
 

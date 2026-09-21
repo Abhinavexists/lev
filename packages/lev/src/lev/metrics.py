@@ -38,8 +38,10 @@ def selective_accuracy(
     The practical test of whether confidence is usable for routing: if accuracy
     does not rise as the threshold rises, gating on confidence buys nothing.
     """
-    kept = [(p, t) for p, t in records if max(p) >= threshold]
+    kept = [(probs, truth) for probs, truth in records if max(probs) >= threshold]
     if not kept:
         return 0.0, 0.0
-    correct = sum(1 for p, t in kept if max(range(len(p)), key=lambda i: p[i]) == t)
+    correct = sum(
+        1 for probs, truth in kept if max(range(len(probs)), key=probs.__getitem__) == truth
+    )
     return correct / len(kept), len(kept) / len(records)

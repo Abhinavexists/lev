@@ -21,7 +21,7 @@ from pathlib import Path
 
 from ..labels import noul_probability
 from ..types import Choice, Noul, Score
-from .build import load_split
+from .build import _group_by_source, load_split
 from .splits import Split
 
 # Below this, an accuracy number is not a measurement. At n=24 the 95% interval
@@ -59,10 +59,10 @@ def export(
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    examples = [e for e in load_split(data_dir, split) if not e.abstain]
-    by_source: dict[str, list] = {}
-    for example in examples:
-        by_source.setdefault(example.source, []).append(example)
+    # Abstain rows are a training device: scoring them would measure our
+    # abstention rather than our accuracy, and the two are different numbers.
+    answerable = [row for row in load_split(data_dir, split) if not row.abstain]
+    by_source = _group_by_source(answerable)
 
     index: dict[str, dict] = {}
     for source, rows in sorted(by_source.items()):
@@ -72,14 +72,14 @@ def export(
         payload = {
             "questions": {source: question_payload(question)},
             "items": [
-                {"state": r.state, "labels": {source: truth_for(r.question, r.target)}}
-                for r in rows
+                {"state": row.state, "labels": {source: truth_for(row.question, row.target)}}
+                for row in rows
             ],
         }
         (out / f"{source}.json").write_text(json.dumps(payload, indent=2) + "\n")
         index[source] = {"items": len(rows), "type": question.type}
 
-    total = sum(v["items"] for v in index.values())
+    total = sum(entry["items"] for entry in index.values())
     if total < MIN_USEFUL_ITEMS:
         raise ValueError(
             f"only {total} eval items across {len(index)} sources. Below "
@@ -89,7 +89,6 @@ def export(
             f"`--limit-per-source`."
         )
 
-    (out / "index.json").write_text(
-        json.dumps({"split": split.value, "total_items": total, "sources": index}, indent=2) + "\n"
-    )
-    return {"split": split.value, "total_items": total, "sources": index}
+    summary = {"split": split.value, "total_items": total, "sources": index}
+    (out / "index.json").write_text(json.dumps(summary, indent=2) + "\n")
+    return summary
