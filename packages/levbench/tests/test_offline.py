@@ -10,10 +10,13 @@ ROOT = next(p for p in PKG.parents if (p / "data").is_dir())
 sys.path.insert(0, str(PKG / "src"))
 sys.path.insert(0, str(PKG / "tests"))
 
+from dotenv import load_dotenv  # noqa: E402
 from fake_transport import transport  # noqa: E402
 from levbench import batching, confidence_id, metrics, runner  # noqa: E402
 from levbench.tasks import dataset  # noqa: E402
 from typesafe_sdk import TypeSafeClient  # noqa: E402
+
+load_dotenv()
 
 
 def fake_client() -> TypeSafeClient:
@@ -212,6 +215,32 @@ def test_local_base_url_never_forwards_the_real_key() -> None:
     print("local base_url uses a placeholder; hosted path still authenticates")
 
 
+def test_empty_local_key_env_var_falls_back() -> None:
+    """A variable that is *set but empty* must not become the credential.
+
+    Copying `.env.example` produces `LEVBENCH_LOCAL_API_KEY=`, which sets the
+    variable to "". `os.environ.get(var, "local")` returns "" in that case, and
+    the SDK then sends a malformed `Authorization: Bearer ` header, failing with
+    `LocalProtocolError: Illegal header value`. Same bug class as the token
+    accounting: "set but empty" is not "present".
+    """
+    import os
+
+    previous = os.environ.get("LEVBENCH_LOCAL_API_KEY")
+    os.environ["LEVBENCH_LOCAL_API_KEY"] = ""
+    try:
+        client, _ = runner.build_client("lev")
+        assert client._config.api_key == "local", (
+            f"empty env var leaked through as {client._config.api_key!r}"
+        )
+    finally:
+        if previous is None:
+            os.environ.pop("LEVBENCH_LOCAL_API_KEY", None)
+        else:
+            os.environ["LEVBENCH_LOCAL_API_KEY"] = previous
+    print("empty LEVBENCH_LOCAL_API_KEY falls back to the placeholder")
+
+
 if __name__ == "__main__":
     test_metrics_are_arithmetically_right()
     test_answer_flattening()
@@ -220,4 +249,5 @@ if __name__ == "__main__":
     test_confidence_identifier_recovers_a_planted_formula()
     test_base_url_routes_to_a_local_clone()
     test_local_base_url_never_forwards_the_real_key()
+    test_empty_local_key_env_var_falls_back()
     print("\nAll offline checks passed.")

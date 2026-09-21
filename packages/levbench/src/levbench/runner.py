@@ -13,8 +13,12 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from dotenv import load_dotenv
+
 from . import metrics, pricing
 from .tasks import Item
+
+load_dotenv()
 
 
 @dataclass
@@ -110,7 +114,10 @@ def build_client(backend: str, model: str | None = None, base_url: str | None = 
             # TYPESAFE_API_KEY here would hand it to whatever server the user
             # pointed at. Open reproductions need no credential at all; anyone
             # fronting one with auth sets LEVBENCH_LOCAL_API_KEY explicitly.
-            kwargs["api_key"] = os.environ.get("LEVBENCH_LOCAL_API_KEY", "local")
+            # `or`, not a get() default: a variable that is *set but empty* --
+            # which is what copying .env.example gives you -- must fall back too,
+            # or the SDK sends a malformed `Authorization: Bearer ` header.
+            kwargs["api_key"] = os.environ.get("LEVBENCH_LOCAL_API_KEY") or "local"
         return TypeSafeClient(**kwargs), resolved
 
     if backend == "anthropic":

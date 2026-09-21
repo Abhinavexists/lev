@@ -8,6 +8,7 @@ license = { text = "Apache-2.0" }
 dependencies = [
     "levbench",
     "lev",
+    "python-dotenv>=1.2.3",
 ]
 
 [project.optional-dependencies]

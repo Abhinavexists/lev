@@ -174,6 +174,42 @@ the winnable fight, and it is why `lev.calibrate` fits **per (question type, rea
 mode)** — one global scalar under-serves at least one bucket — and why
 `calibrate.fit()` **raises** on a split named test/eval/holdout.
 
+### First measured head-to-head
+
+Jev `jev-1.13.0` against lev on `Qwen3.5-4B-Base` (untuned, Mode A, no calibration),
+same 24 items, same questions, `levbench eval`:
+
+| question | type | Jev acc | lev acc | Jev ECE | lev ECE |
+|---|---|---|---|---|---|
+| department | Choice | 0.958 | **0.958** | **0.0250** | 0.2320 |
+| frustration | Score | 0.750 | 0.500 | 0.1350 | 0.4635 |
+| is_urgent | Noul | 0.917 | 0.292 | 0.0804 | 0.5261 |
+
+**Choice is a dead tie on accuracy and a 9× gap on calibration.** That is ADR-006's
+whole argument, reproduced on our own data at the first attempt: an untuned 4B
+already matches a frontier decision model at picking the right option, and loses
+entirely on knowing how sure it is.
+
+Three further readings:
+
+- **lev's Choice is *under*confident, not over.** Every reliability bin scores
+  accuracy 1.000 while reporting 0.15–0.93 confidence — all gaps negative. Fitting a
+  temperature gives **T = 0.409** (sharpening, not flattening). That is the easy
+  direction to fix and further evidence for ADR-006.
+- **Score is Jev's weak primitive too.** Its `frustration` log loss is **1.9484**
+  against `ln(3) = 1.099` for a uniform guess — worse than chance despite 75%
+  accuracy, meaning it is confidently wrong on the quarter it misses. Consistent
+  with S1Bench, where the Score-shaped `helpsteer2` subset sat at 0.348 for everyone
+  including Jev.
+- **Measured ECE depends on which statistic the server calls `confidence`.** lev
+  reports normalised Gini (LitJev's choice); scoring the *same* distributions by
+  max-probability instead gives department ECE 0.0878 rather than 0.2320. So part of
+  the gap above is a statistic mismatch rather than a worse distribution — which is
+  exactly why open question Q1 has to be settled before this table is read too hard.
+
+Jev also reported **1,920 output tokens** across the 24 calls (~80 per call), billed
+at $0. lev reported 0: it genuinely generates nothing.
+
 ---
 
 ## ADR-007 — Noul from nine rating tokens

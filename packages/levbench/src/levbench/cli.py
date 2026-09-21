@@ -7,8 +7,12 @@ import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from . import batching, confidence_id, runner
 from .tasks import dataset
+
+load_dotenv()
 
 
 def repo_data_dir() -> Path:
