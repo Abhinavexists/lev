@@ -1,0 +1,37 @@
+[project]
+name = "lev"
+version = "0.1.0"
+description = "A typed, calibrated decision model: prefill once, read logits, never generate"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+# The core package is dependency-light on purpose: the schema, prompt layouts,
+# router and calibration are pure Python and testable without a GPU or torch.
+dependencies = [
+    "pydantic>=2.12",
+]
+
+[project.optional-dependencies]
+# Everything that needs a model. Split out so CI and the Mac path stay light.
+train = [
+    "torch>=2.6",
+    "transformers>=4.57",
+    "peft>=0.14",
+    "accelerate>=1.2",
+    "datasets>=3.2",
+]
+serve = [
+    "lev[train]",
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+]
+modal = ["modal>=0.67"]
+
+[project.scripts]
+lev = "lev.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lev"]
