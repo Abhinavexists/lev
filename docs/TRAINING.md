@@ -31,11 +31,18 @@ uv sync --extra serve
 uv run lev serve --model Qwen/Qwen3.5-4B-Base --port 8000
 ```
 
+> **Use an instruct checkpoint for the *zero-shot* baseline.** Measured on
+> `Qwen3.5-4B-Base`: Choice reaches 0.958 accuracy, but Noul collapses to 0.292 —
+> exactly the positive base rate, because a base model answers "yes" to every
+> 9-point rating prompt. `-Base` is the right choice for the fine-tune; it is the
+> wrong one for an untrained server.
+> [ADR-007.](DECISIONS.md#adr-007--noul-from-nine-rating-tokens)
+
 Measure it with the same harness that measures Jev:
 
 ```bash
-uv run levbench eval  --backend jev --base-url http://localhost:8000
-uv run levbench sweep --backend jev --base-url http://localhost:8000
+uv run levbench eval  --backend lev
+uv run levbench sweep --backend lev
 ```
 
 `sweep` is the one to watch: it verifies the state cache actually amortises across

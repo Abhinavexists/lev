@@ -27,8 +27,10 @@ DEFAULT_STATE = repo_data_dir() / "sample_policy.md"
 
 
 def _require_key(backend: str, base_url: str | None = None) -> None:
+    if backend == "lev":
+        return  # A local /v1/systemone server needs no credential.
     if backend == "jev" and base_url:
-        return  # A local /v1/systemone reproduction needs no credential.
+        return  # An explicitly overridden endpoint is assumed local too.
     needed = "TYPESAFE_API_KEY" if backend == "jev" else "ANTHROPIC_API_KEY"
     if not os.environ.get(needed):
         sys.exit(
@@ -121,18 +123,26 @@ def main(argv: list[str] | None = None) -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_eval = sub.add_parser("eval", help="accuracy and calibration on the labelled set")
-    p_eval.add_argument("--backend", choices=["jev", "anthropic"], default="jev")
+    p_eval.add_argument("--backend", choices=["jev", "lev", "anthropic"], default="jev")
     p_eval.add_argument("--model", default=None)
     p_eval.add_argument("--limit", type=int, default=None)
-    p_eval.add_argument("--base-url", default=None, help="point at a local /v1/systemone clone")
+    p_eval.add_argument(
+        "--base-url",
+        default=None,
+        help="override the endpoint (defaults to localhost:8000 for --backend lev)",
+    )
     p_eval.set_defaults(func=cmd_eval)
 
     p_sweep = sub.add_parser("sweep", help="batched vs split cost and latency")
-    p_sweep.add_argument("--backend", choices=["jev", "anthropic"], default="jev")
+    p_sweep.add_argument("--backend", choices=["jev", "lev", "anthropic"], default="jev")
     p_sweep.add_argument("--model", default=None)
     p_sweep.add_argument("--state", default=str(DEFAULT_STATE))
     p_sweep.add_argument("--counts", default="1,2,4,8,13")
-    p_sweep.add_argument("--base-url", default=None, help="point at a local /v1/systemone clone")
+    p_sweep.add_argument(
+        "--base-url",
+        default=None,
+        help="override the endpoint (defaults to localhost:8000 for --backend lev)",
+    )
     p_sweep.set_defaults(func=cmd_sweep)
 
     p_cmp = sub.add_parser("compare", help="run both backends and diff them")
@@ -144,7 +154,11 @@ def main(argv: list[str] | None = None) -> None:
     p_conf = sub.add_parser("confidence", help="identify the server's confidence formula")
     p_conf.add_argument("--model", default=None)
     p_conf.add_argument("--limit", type=int, default=None)
-    p_conf.add_argument("--base-url", default=None, help="point at a local /v1/systemone clone")
+    p_conf.add_argument(
+        "--base-url",
+        default=None,
+        help="override the endpoint (defaults to localhost:8000 for --backend lev)",
+    )
     p_conf.set_defaults(func=cmd_confidence)
 
     args = parser.parse_args(argv)

@@ -42,7 +42,7 @@ bench: ## Benchmark against Jev (needs TYPESAFE_API_KEY)
 	uv run levbench eval --backend jev
 
 bench-local: ## Benchmark a local /v1/systemone server (no API key)
-	uv run levbench eval --backend jev --base-url $(or $(URL),http://localhost:8000)
+	uv run levbench eval --backend lev --base-url $(or $(URL),http://localhost:8000)
 
 sweep: ## Measure shared-state batching economics
 	uv run levbench sweep --backend jev

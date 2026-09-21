@@ -28,15 +28,26 @@ PRICES: dict[str, Price] = {
 }
 
 
+# Sentinel for a model you host yourself: the cost is GPU time, not tokens, so
+# quoting a per-token figure would be actively misleading.
+SELF_HOSTED = Price(0.0, 0.0)
+
+
+def is_self_hosted(model: str) -> bool:
+    """True for anything served locally rather than metered by a vendor."""
+    return model not in PRICES and not model.startswith("jev")
+
+
 def lookup(model: str) -> Price:
-    """Resolve a price, tolerating the `jev-*` family and unknown models."""
+    """Resolve a price. Unknown models are treated as self-hosted, not an error."""
     if model in PRICES:
         return PRICES[model]
     if model.startswith("jev"):
         return PRICES["jev-latest"]
-    raise KeyError(
-        f"No price for {model!r}. Add it to levbench.pricing.PRICES (known: {sorted(PRICES)})."
-    )
+    # Self-hosted checkpoints (`Qwen/...`, a local adapter, ...) are not metered:
+    # their cost is GPU time, not tokens. Quoting a vendor per-token rate for one
+    # would be actively misleading, so return zero and let callers label it.
+    return SELF_HOSTED
 
 
 def cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:

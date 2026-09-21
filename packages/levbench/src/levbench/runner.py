@@ -72,18 +72,33 @@ class EvalReport:
         return {c.served_by for c in self.calls}
 
 
-def build_client(backend: str, model: str | None = None, base_url: str | None = None):
-    """Return `(client, model_name)` for `jev` or `anthropic`.
+#: A locally served `/v1/systemone` implementation, if you do not override it.
+DEFAULT_LOCAL_BASE_URL = "http://localhost:8000"
 
-    `base_url` points the jev backend at any server speaking the same
-    `/v1/systemone` wire schema -- the open reproductions (LitJev, OpenJev)
-    implement it deliberately, so the same benchmark runs against them with no
-    other change. Ignored for the anthropic backend, which is not an endpoint.
+
+def build_client(backend: str, model: str | None = None, base_url: str | None = None):
+    """Return `(client, model_name)` for `jev`, `lev` or `anthropic`.
+
+    All three speak one of two client APIs, so the benchmark body is written once:
+
+      jev        the hosted TypeSafe API. Needs TYPESAFE_API_KEY.
+      lev        a local /v1/systemone server -- ours, or any compatible
+                 reproduction. Defaults to localhost:8000, needs no credential,
+                 and is priced as self-hosted rather than at Jev's rate.
+      anthropic  an LLM baseline through the vendor's adapter.
+
+    `jev` and `lev` are the *same* wire protocol; they differ only in where the
+    request goes, whether a credential is required, and how cost is reported.
     """
-    if backend == "jev":
+    if backend in ("jev", "lev"):
+        if backend == "lev":
+            base_url = base_url or DEFAULT_LOCAL_BASE_URL
         from typesafe_sdk import TypeSafeClient
 
-        resolved = model or "jev-latest"
+        # A local server runs whatever checkpoint it loaded; asking for
+        # `jev-latest` there is meaningless, so leave the label to the server
+        # and correct it from the response below.
+        resolved = model or ("jev-latest" if backend == "jev" else "local")
         # Must be passed at construction -- `system_one` defaults `model=None`,
         # which makes the server pick, so omitting it here would silently
         # benchmark whatever the default is while labelling it `resolved`.
@@ -188,6 +203,11 @@ def run_eval(
                 )
             )
 
+    served = {c.served_by for c in report.calls}
+    if backend == "lev" and len(served) == 1:
+        # The label was a placeholder; the server knows what it loaded.
+        report.model = served.pop()
+
     report.records = records
     report.per_question = {n: metrics.calibration(r) for n, r in records.items()}
     return report
@@ -212,11 +232,14 @@ def format_report(report: EvalReport) -> str:
             )
     lines.append(f"input tokens       {sum(c.input_tokens for c in report.calls):,}")
     lines.append(f"output tokens      {sum(c.output_tokens for c in report.calls):,}")
-    lines.append(f"total cost         ${report.total_cost:.6f}")
+    if pricing.is_self_hosted(report.model):
+        lines.append("total cost         self-hosted (GPU time, not per-token)")
+    else:
+        lines.append(f"total cost         ${report.total_cost:.6f}")
     lines.append(f"schema retries     {report.total_schema_retries}")
     lines.append(f"transient retries  {report.total_transient_retries}")
     served = report.served_by
-    if served and served != {report.model}:
+    if served and served != {report.model} and not pricing.is_self_hosted(report.model):
         lines.append(
             f"WARNING            requested {report.model!r} but server served "
             f"{sorted(served)} -- cost figures use the requested model's price"

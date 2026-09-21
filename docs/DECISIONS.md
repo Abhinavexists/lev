@@ -188,6 +188,36 @@ Following simple-jev, we read Noul from a **9-level rating scale** and report
 `p(yes) = Σ (i/8)·p_i` alongside the full distribution. Finer resolution, and Noul
 becomes calibratable like Choice and Score. The `noul` field itself is unchanged.
 
+### Measured caveat: the 9-point scale does not survive an untuned base model
+
+First real run, `Qwen3.5-4B-Base`, Mode A, no fine-tune, no calibration, on the
+24-item triage set:
+
+| question | type | accuracy | ECE |
+|---|---|---|---|
+| department | Choice | **0.958** | 0.232 |
+| frustration | Score | 0.500 | 0.464 |
+| is_urgent | Noul | **0.292** | 0.526 |
+
+0.292 is exactly 7/24 — the positive base rate. The model answered *yes to every
+item*. Probing it directly shows why: the rating distribution is pinned at the
+endpoints with P(8) ≈ 0.8 regardless of content (0.839 on a clearly non-urgent
+question, 0.797 on a clearly urgent one — flat, and slightly inverted).
+
+**Choice works zero-shot on a base checkpoint; a 9-point rating scale does not.**
+A base model has no instruction-following prior for "Rate 0-8", so the digits
+after `Answer:` reflect token priors rather than judgment. This does not
+invalidate ADR-007 — the scale is still the right *trained* target, and it is the
+only way to make Noul calibratable — but it means the untrained baseline in the
+build order cannot use it. Options, in preference order:
+
+1. Run the zero-shot baseline on an **instruct** checkpoint (`Qwen3.5-4B`, not
+   `-Base`), keeping `-Base` for the fine-tune where it belongs.
+2. Fall back to a 2-token yes/no Noul until the scale is trained.
+
+This is the clearest empirical support so far for ADR-011's "shipping untuned is
+not an option" — and it identifies *which* primitive fails first.
+
 ---
 
 ## ADR-008 — Both prompt layouts, trained 50/50
@@ -267,3 +297,4 @@ the `[train]` extra.
 | **Q3** | Can a *state* cache persist across requests? | decider persists a **schema** cache; persisting state is unclaimed and is the genuinely novel direction |
 | **Q4** | Does Mode B cost accuracy under the ceiling? | Ablation: Mode B forced on small option sets vs Mode A |
 | **Q5** | Is the 16 h estimate right? | `modal run modal/app.py::smoke`, then extrapolate from measured tokens/s |
+| **Q6** | Does an instruct checkpoint fix zero-shot Noul, or does the scale need training either way? | Re-run the eval on `Qwen3.5-4B` (instruct) and compare `is_urgent` against the 0.292 base-rate collapse |

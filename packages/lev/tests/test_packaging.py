@@ -63,3 +63,27 @@ def test_every_documented_extra_exists():
 @pytest.mark.parametrize("expected", ["train", "serve", "modal"])
 def test_known_extras_are_present(expected):
     assert expected in _extras(ROOT / "pyproject.toml")
+
+
+def test_every_documented_backend_exists():
+    """A `--backend x` in the docs must be a choice the CLI actually accepts.
+
+    Same failure shape as the missing `serve` extra: the docs tell you to run
+    something the tool rejects.
+    """
+    cli = (ROOT / "packages" / "levbench" / "src" / "levbench" / "cli.py").read_text()
+    valid = set(re.findall(r"choices=\[([^\]]+)\]", cli))
+    accepted = {v.strip().strip("\"'") for group in valid for v in group.split(",")}
+
+    documented: dict[str, set[str]] = {}
+    sources = [ROOT / "README.md", ROOT / "Makefile"] + sorted((ROOT / "docs").glob("*.md"))
+    for src in sources:
+        if src.is_file():
+            for name in re.findall(r"--backend[= ]([a-z][a-z0-9-]*)", src.read_text()):
+                documented.setdefault(name, set()).add(src.name)
+
+    for name, where in sorted(documented.items()):
+        assert name in accepted, (
+            f"{sorted(where)} document `--backend {name}`, but the CLI accepts "
+            f"only {sorted(accepted)}."
+        )

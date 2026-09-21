@@ -241,7 +241,7 @@ schema, and `TypeSafeClient` already accepts `base_url`. So `levbench` benchmark
 with no code change:
 
 ```bash
-levbench eval --backend jev --base-url http://127.0.0.1:8000
+levbench eval --backend lev --base-url http://127.0.0.1:8000  # any local clone
 ```
 
 `jevmlx` does **not** serve the endpoint — it exposes a Pydantic schema API — so it

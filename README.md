@@ -144,7 +144,7 @@ same code path — one changed flag.
 
 ```bash
 levbench eval  --backend jev                                    # the hosted API
-levbench eval  --backend jev --base-url http://localhost:8000   # us, or any clone
+levbench eval  --backend lev                                    # us, on localhost:8000
 levbench compare                                                # vs an LLM baseline
 levbench sweep                                                  # batching economics
 levbench confidence                                             # which statistic is `confidence`?
