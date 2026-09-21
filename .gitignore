@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.egg-info/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+
+# Training artefacts — never commit weights or fitted profiles
+checkpoints/
+runs/
+wandb/
+*.safetensors
+*.bin
+
+# Secrets
+.env
+.env.*
+!.env.example

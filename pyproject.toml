@@ -1,0 +1,39 @@
+[project]
+name = "lev-workspace"
+version = "0.1.0"
+description = "lev — umbrella workspace: the `lev` decision model and the `levbench` harness"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "levbench",
+    "lev",
+]
+
+[project.optional-dependencies]
+# Training and serving the model. Not needed to run the benchmark.
+train = ["lev[train]"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.14",
+]
+
+[tool.uv.sources]
+levbench = { workspace = true }
+lev = { workspace = true }
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["packages/levbench/tests", "packages/lev/tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
