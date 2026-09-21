@@ -47,14 +47,35 @@ def _require_key(backend: str, base_url: str | None = None) -> None:
         )
 
 
+def _task_files(path: str | None) -> list[Path | None]:
+    """`None` for the built-in fixture, one entry per file for a directory.
+
+    A directory is the normal case for a generated eval: each source has its own
+    question, so asking every question of every item would mean asking "how
+    positive is this review" of a banking ticket. One file per question set.
+    """
+    if path is None:
+        return [None]
+    target = Path(path)
+    if target.is_dir():
+        files = sorted(f for f in target.glob("*.json") if f.name != "index.json")
+        if not files:
+            sys.exit(f"no task files in {path}")
+        return files
+    return [target]
+
+
 def cmd_eval(args: argparse.Namespace) -> None:
     _require_key(args.backend, args.base_url)
-    items, questions = dataset()
-    if args.limit:
-        items = items[: args.limit]
     client, model = runner.build_client(args.backend, args.model, args.base_url)
-    report = runner.run_eval(client, args.backend, model, items, questions)
-    print(runner.format_report(report))
+    for task_file in _task_files(args.tasks):
+        items, questions = dataset(task_file)
+        if args.limit:
+            items = items[: args.limit]
+        if task_file is not None:
+            print(f"\n=== {task_file.stem}  ({len(items)} items) ===")
+        report = runner.run_eval(client, args.backend, model, items, questions)
+        print(runner.format_report(report))
 
 
 def cmd_sweep(args: argparse.Namespace) -> None:
@@ -130,6 +151,15 @@ def main(argv: list[str] | None = None) -> None:
     p_eval.add_argument("--backend", choices=["jev", "lev", "anthropic"], default="jev")
     p_eval.add_argument("--model", default=None)
     p_eval.add_argument("--limit", type=int, default=None)
+    p_eval.add_argument(
+        "--tasks",
+        default=None,
+        help=(
+            "a task file, or a directory of them. Omit for the 24-item built-in "
+            "fixture, which is a smoke test and cannot resolve better than "
+            "+/-16 accuracy points. Generate a real one with `lev data eval`."
+        ),
+    )
     p_eval.add_argument(
         "--base-url",
         default=None,

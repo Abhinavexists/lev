@@ -87,3 +87,72 @@ def test_every_documented_backend_exists():
             f"{sorted(where)} document `--backend {name}`, but the CLI accepts "
             f"only {sorted(accepted)}."
         )
+
+
+CODE_SPANS = re.compile(r"```[a-z]*\n(.*?)```|`([^`\n]+)`", re.S)
+
+
+def _documented_commands(tool: str) -> dict[str, set[str]]:
+    """Every `uv run <tool> <sub>` the docs tell you to run.
+
+    Only inside code -- fenced blocks and inline backticks. Scanning prose too
+    matches things like "levbench must not import lev" and turns a useful guard
+    into a nuisance.
+    """
+    found: dict[str, set[str]] = {}
+    sources = [ROOT / "README.md", ROOT / "Makefile", ROOT / "CONTRIBUTING.md"]
+    sources += sorted((ROOT / "docs").glob("*.md"))
+    pattern = re.compile(rf"(?:^|\s)(?:uv run )?{tool} ([a-z][a-z0-9-]*)", re.M)
+    for src in sources:
+        if not src.is_file():
+            continue
+        text = src.read_text()
+        # A Makefile is all code apart from its `## help text`, which is prose
+        # and mentions commands the way a sentence does.
+        code = (
+            [re.sub(r"##.*", "", text)]
+            if src.suffix != ".md"
+            else [block or span for block, span in CODE_SPANS.findall(text)]
+        )
+        for chunk in code:
+            for name in pattern.findall(chunk):
+                found.setdefault(name, set()).add(src.name)
+    return found
+
+
+@pytest.mark.parametrize("tool", ["lev", "levbench"])
+def test_every_documented_subcommand_is_registered(tool):
+    """The docs are the interface. A command they name has to parse.
+
+    Same failure shape as the missing `serve` extra, and it recurs every time a
+    CLI grows: the docs get the new command and the parser does not, or the
+    command gets renamed and the docs keep the old spelling.
+    """
+    import argparse
+    import importlib
+
+    cli = importlib.import_module(f"{tool}.cli")
+    parser_actions: set[str] = set()
+
+    real_parse = argparse.ArgumentParser.parse_args
+
+    def capture(self, args=None, namespace=None):
+        for action in self._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                parser_actions.update(action.choices)
+        raise SystemExit(0)
+
+    argparse.ArgumentParser.parse_args = capture
+    try:
+        with pytest.raises(SystemExit):
+            cli.main([])
+    finally:
+        argparse.ArgumentParser.parse_args = real_parse
+
+    for name, where in sorted(_documented_commands(tool).items()):
+        if name.startswith("-"):
+            continue
+        assert name in parser_actions, (
+            f"{sorted(where)} document `{tool} {name}`, but the CLI registers "
+            f"only {sorted(parser_actions)}."
+        )

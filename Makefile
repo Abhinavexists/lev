@@ -1,7 +1,8 @@
 # lev — common tasks. `make help` lists everything.
 .DEFAULT_GOAL := help
 .PHONY: help setup setup-train setup-serve setup-modal test lint fmt check \
-        bench bench-local sweep plan check-data smoke train calibrate serve clean
+        bench bench-local sweep plan check-data data eval-set smoke smoke-local \
+        train calibrate serve clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -47,10 +48,22 @@ bench-local: ## Benchmark a local /v1/systemone server (no API key)
 sweep: ## Measure shared-state batching economics
 	uv run levbench sweep --backend jev
 
+data: ## Build the training mixture locally (LIMIT=rows per source)
+	uv run lev data build --out $(or $(OUT),data/mixture) \
+		--limit-per-source $(or $(LIMIT),20000)
+
+eval-set: ## Export the held-out split as levbench task files
+	uv run lev data eval --data $(or $(OUT),data/mixture) --out $(or $(EVAL),data/eval)
+
+smoke-local: ## Train 0.8B on CPU for a few steps — proves the path without Modal
+	uv run lev data build --out /tmp/lev-mix --limit-per-source 2000 --n-examples 4000
+	uv run lev train --preset smoke --data /tmp/lev-mix \
+		--output-dir /tmp/lev-smoke --max-steps $(or $(STEPS),20)
+
 smoke: ## Modal: exercise the whole training path on 0.8B (~5 min of H100)
 	modal run modal/app.py::smoke
 
-train: ## Modal: the real run (PRESET=4b, ~16h on one H100)
+train: ## Modal: the real run (PRESET=4b, ~2h on one H100)
 	modal run modal/app.py::train --preset $(or $(PRESET),4b)
 
 calibrate: ## Modal: fit per-bucket temperatures after training

@@ -27,11 +27,12 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
+from typing import Any
 
 from .calibrate import CalibrationProfile
 from .labels import noul_probability
 from .prompt import Layout, build, schema_block
-from .router import Mode, Route, route_all
+from .router import Mode, Route, candidate_texts, route_all
 from .types import (
     Choice,
     ChoiceAnswer,
@@ -70,6 +71,7 @@ class DecisionEngine:
         self.config = config or EngineConfig()
         self.calibration = calibration or CalibrationProfile()
         self.mode_b_head = mode_b_head
+        self._candidate_cache: dict[tuple[str, ...], Any] = {}
 
     # -- public API ---------------------------------------------------------
 
@@ -89,11 +91,12 @@ class DecisionEngine:
             )
 
         prefix, suffixes = self._render(state, questions, routes)
-        prefix_ids, logits, last_positions = self._forward(prefix, suffixes)
+        want_hidden = any(r.mode is Mode.CANDIDATE_PATH for r in routes.values())
+        prefix_ids, logits, last_positions, hidden = self._forward(prefix, suffixes, want_hidden)
 
         answers = {}
         for i, (name, question) in enumerate(questions.items()):
-            scores = self._scores(logits, last_positions, i, routes[name])
+            scores = self._scores(logits, last_positions, i, routes[name], question, hidden)
             answers[name] = self._to_answer(question, routes[name], scores)
 
         return SystemOneResponse(
@@ -126,7 +129,7 @@ class DecisionEngine:
             self.tokenizer.encode(r.suffix, add_special_tokens=False) for r in rendered
         ]
 
-    def _forward(self, prefix: str, suffixes: list[list[int]]):
+    def _forward(self, prefix: str, suffixes: list[list[int]], want_hidden: bool = False):
         """Prefill the prefix once, then run all suffixes against forked caches."""
         import torch
 
@@ -156,22 +159,75 @@ class DecisionEngine:
                 attention_mask=full_attention,
                 past_key_values=_fork(cache, len(suffixes), device),
                 use_cache=False,
+                # Only when a Mode B question is present: hidden states for a
+                # full batch are large, and Mode A never looks at them.
+                output_hidden_states=want_hidden,
             )
 
         last_positions = torch.tensor([len(s) - 1 for s in suffixes], device=device)
-        return prefix_ids, out.logits, last_positions
+        hidden = out.hidden_states[-1] if want_hidden else None
+        return prefix_ids, out.logits, last_positions, hidden
 
-    def _scores(self, logits, last_positions, row: int, route: Route):
+    def _scores(self, logits, last_positions, row: int, route: Route, question=None, hidden=None):
         if route.mode is Mode.LABEL_TOKEN:
             from .readout.mode_a import LabelTokenReadout
 
             readout = LabelTokenReadout(self.tokenizer)
             ids = readout.candidate_ids(route.codes)
             return logits[row, int(last_positions[row]), ids].float().tolist()
-        raise NotImplementedError(
-            "Mode B scoring runs through the trained head; see readout/mode_b.py. "
-            "Wire it here once the head is trained."
+
+        if self.mode_b_head is None:
+            raise RuntimeError("Mode B question reached the readout with no head loaded")
+        if hidden is None:
+            raise RuntimeError("Mode B needs hidden states; _forward was not asked for them")
+
+        import torch
+
+        texts = candidate_texts(question)
+        question_repr = hidden[row, int(last_positions[row])].unsqueeze(0)  # (1, H)
+        candidate_repr = self._candidate_reprs(texts).unsqueeze(0)  # (1, K, H)
+        dtype = next(self.mode_b_head.parameters()).dtype
+        with torch.no_grad():
+            scores = self.mode_b_head(question_repr.to(dtype), candidate_repr.to(dtype), None)
+        return scores[0].float().tolist()
+
+    def _candidate_reprs(self, texts: list[str]):
+        """One hidden vector per candidate string, from a single batched forward.
+
+        Cached per candidate set: the option list belongs to the question, not
+        to the request, so a served schema re-encodes its candidates once rather
+        than on every call.
+
+        The cache is unbounded. That is fine for a server with a fixed set of
+        schemas -- 151 candidates at hidden 2560 is ~1.5 MB -- and wrong for one
+        accepting arbitrary caller-supplied option sets. Bound it before doing
+        the latter.
+        """
+        import torch
+
+        key = tuple(texts)
+        if key in self._candidate_cache:
+            return self._candidate_cache[key]
+
+        encoded = self.tokenizer(
+            texts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=64,
+            add_special_tokens=False,
         )
+        device = self.model.device
+        ids = encoded["input_ids"].to(device)
+        mask = encoded["attention_mask"].to(device)
+        with torch.no_grad():
+            states = self.model(
+                input_ids=ids, attention_mask=mask, output_hidden_states=True, use_cache=False
+            ).hidden_states[-1]
+        last = mask.sum(dim=1).long() - 1
+        reprs = states[torch.arange(states.size(0), device=device), last]
+        self._candidate_cache[key] = reprs
+        return reprs
 
     def _to_answer(self, question: Question, route: Route, scores: list[float]):
         mode = route.mode.value

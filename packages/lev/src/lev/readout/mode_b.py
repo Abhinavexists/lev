@@ -19,7 +19,9 @@ explicit monotonicity term and `lev.metrics` tracks `ordinal_mae` separately --
 accuracy hides this failure mode entirely. decider reports the same metric for the
 same reason.
 
-NOT YET RUN ON HARDWARE. Parameter counts and shapes are designed, not measured.
+MEASURED: 3.67M parameters at hidden=2560, proj=512 (2.10M at 1024, 5.25M at
+4096). An earlier version of this docstring said "~30M", which was an estimate
+and was an order of magnitude high.
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ from torch import nn
 
 
 class CandidatePathReadout(nn.Module):
-    """Shared matching head over a candidate set. ~30M params at hidden=2560.
+    """Shared matching head over a candidate set. 3.67M params at hidden=2560.
 
     One head serves Choice, Score and Noul: the question type changes how the
     resulting distribution is *interpreted*, not how it is produced.

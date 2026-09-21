@@ -53,8 +53,17 @@ class TrainConfig:
 
     # --- data ---------------------------------------------------------------
     n_examples: int = 200_000
-    avg_tokens_per_example: int = 1_200
-    max_seq_len: int = 4_096
+    # MEASURED, not assumed: 121 tokens mean over 1,500 rendered prompts from
+    # the real mixture, tokenised with the Qwen3.5 tokenizer. Per source the
+    # mean runs 38 (clinc_oos) to 305 (imdb); p95 over all of them is 390 and
+    # the longest seen is 1,104. The value here was 1,200 -- a guess, and 10x
+    # too high, which made the 4B budget read as 16 hours instead of ~2.
+    # Re-measure with `lev plan --data <dir>` after changing the mixture.
+    avg_tokens_per_example: int = 128
+    # A truncation cap, not the training length. The collator pads to the
+    # longest row in the batch, so a generous cap costs nothing except on the
+    # rare long row it saves.
+    max_seq_len: int = 2_048
     # Trained 50/50 so both cache layouts work at inference. §5.5.
     schema_first_fraction: float = 0.5
     # Examples whose answer is not determinable from the state, teaching the model
@@ -63,7 +72,11 @@ class TrainConfig:
 
     # --- optimisation -------------------------------------------------------
     epochs: int = 3
-    per_device_batch: int = 8
+    # Sized for the data, not for a 4k-token guess. At a ~128-token mean, a
+    # batch of 8 makes 75,000 optimiser steps for 600k examples and the run
+    # becomes step-overhead bound long before it becomes FLOP bound. 32 keeps
+    # the H100 fed and still fits comfortably under the memory headroom below.
+    per_device_batch: int = 32
     grad_accum: int = 1
     learning_rate: float = 1e-4
     warmup_ratio: float = 0.03
@@ -72,10 +85,18 @@ class TrainConfig:
     # Proper scoring rule: cross-entropy plus a Brier term. Calibration is the
     # objective, not an afterthought.
     brier_weight: float = 0.5
-    ordinal_weight: float = 0.25  # Mode B Score only; see readout/mode_b.py
+    # Applies to every ordered readout -- Score and Noul, under both modes.
+    # See readout/mode_b.py for why ordinality stops being free under Mode B.
+    ordinal_weight: float = 0.25
 
     # --- bookkeeping --------------------------------------------------------
     seed: int = 17
+    # A long run on a preemptible H100 will be interrupted. Checkpointing
+    # every ~2000 steps costs a few seconds and bounds the loss to that much.
+    checkpoint_every: int = 2_000
+    # How often to print progress. A silent run is indistinguishable from a
+    # hung one, and on Modal the only thing you can see is stdout.
+    log_every: int = 25
     output_dir: str = "checkpoints/lev-4b"
     blocked_subsets: tuple[str, ...] = field(default_factory=tuple)
 
@@ -90,11 +111,20 @@ class TrainConfig:
 
     @property
     def tokens_per_step(self) -> int:
-        return self.max_seq_len * self.per_device_batch * self.grad_accum
+        # The *work* per step, which is the padded batch, not `max_seq_len`.
+        # Billing the cap would inflate every downstream estimate by the ratio
+        # between the cap and the data -- here about 16x.
+        return self.avg_tokens_per_example * self.per_device_batch * self.grad_accum
+
+    @property
+    def examples_per_step(self) -> int:
+        return self.per_device_batch * self.grad_accum
 
     @property
     def steps_per_epoch(self) -> int:
-        return max(1, self.tokens_per_epoch // self.tokens_per_step)
+        # Counted in examples. An epoch is one pass over the data, and how many
+        # optimiser steps that takes depends on the batch, not on token budgets.
+        return max(1, self.n_examples // self.examples_per_step)
 
     @property
     def total_steps(self) -> int:
@@ -132,7 +162,8 @@ class TrainConfig:
                 f"data             {self.n_examples:,} examples x "
                 f"{self.avg_tokens_per_example} tok x {self.epochs} epochs"
                 f"  = {self.total_tokens / 1e9:.2f}B tokens",
-                f"steps            {self.total_steps:,} ({self.tokens_per_step:,} tok/step)",
+                f"steps            {self.total_steps:,} "
+                f"({self.examples_per_step} ex/step, ~{self.tokens_per_step:,} tok/step)",
                 f"compute          {self.total_flops:.2e} FLOPs",
                 f"H100 estimate    {self.estimated_hours:.1f} hours "
                 f"({self.estimated_hours / 24:.1f} days)",
@@ -170,7 +201,7 @@ PRESETS: dict[str, TrainConfig] = {
         model_id="Qwen/Qwen3.5-9B-Base",
         params_b=9.0,
         hidden_size=4096,
-        per_device_batch=4,
+        per_device_batch=16,
         output_dir="checkpoints/lev-9b",
     ),
     "smoke": TrainConfig(
@@ -180,6 +211,8 @@ PRESETS: dict[str, TrainConfig] = {
         n_examples=2_000,
         epochs=1,
         max_seq_len=1_024,
+        per_device_batch=2,  # CPU-runnable; `make smoke-local` uses this
+        checkpoint_every=0,  # one checkpoint at the end is the whole point
         output_dir="checkpoints/lev-smoke",
     ),
 }

@@ -3,7 +3,7 @@
 ## Before you push
 
 ```bash
-make check     # ruff + 68 tests
+make check     # ruff + the full test suite
 ```
 
 Both must be clean. The test suite needs no GPU, no network and no API keys — if a
@@ -33,7 +33,7 @@ test that doesn't exercise the change. If you cannot run it, say so in the docst
 several modules here do exactly that.
 
 **The contamination guard is not negotiable.** Six subsets are banned from training
-([ADR-009](docs/DECISIONS.md#adr-009--the-six-evaluation-subsets-are-banned-from-training)).
+([ADR-009](docs/DECISIONS.md#adr-009--all-thirteen-evaluation-subsets-are-banned-from-training)).
 Contamination makes the headline number *better* while invalidating it, which is why
 the guard raises instead of warning. Do not add a bypass flag.
 
@@ -46,6 +46,12 @@ Write the test that would have caught the bug. Two examples already in the tree:
 
 - the fake tokenizer returns *more* than one token for unknown strings, because an
   earlier version returned one for single characters and made the router test vacuous;
+- `test_padded_slots_do_not_produce_nan` exists because every loss in the first
+  smoke run was `nan`: padded candidates carry `-inf` and a zero target, and
+  `0 * -inf` poisons the batch mean while backward still runs;
+- `test_limit_samples_rather_than_truncates` exists because `imdb[:400]` is 400
+  negative reviews — a head slice of a label-sorted corpus, invisible
+  downstream because every split drawn from it is skewed identically;
 - the calibration profile test asserts an unfitted bucket falls back to `T=1.0` rather
   than borrowing another bucket's scalar.
 

@@ -25,6 +25,11 @@ class TestResolution:
             ("amazonscience/massive", "massive-en-US"),
             ("boolq:train", "boolq"),
             ("  BoolQ  ", "boolq"),
+            ("rajpurkar/squad_v2", "squad2"),
+            ("nyu-mll/multi_nli", "multinli"),
+            ("google/civil_comments", "civil_comments"),
+            ("qiaojin/PubMedQA", "pubmedqa"),
+            ("mteb/summeval", "summeval-relevance"),
         ],
     )
     def test_aliases_and_variants_resolve(self, alias, expected):
@@ -32,26 +37,56 @@ class TestResolution:
 
     @pytest.mark.parametrize(
         "innocent",
-        ["squad2", "multinli", "civil_comments", "pubmedqa", "my-org/internal-tickets"],
+        ["PolyAI/banking77", "fancyzhx/ag_news", "SetFit/sst5", "my-org/internal-tickets"],
     )
     def test_innocent_datasets_pass(self, innocent):
         assert resolve(innocent) is None
 
+    def test_subsets_that_did_not_run_are_blocked_too(self):
+        """The 7 subsets `s1-fast` skipped are still evaluation data.
+
+        They are the easy ones to forget, because nothing in the completed-run
+        leaderboard mentions them. Training on them contaminates the first full
+        suite we run, which is exactly when we would most want to trust it.
+        """
+        unrun = [
+            "massive-de-DE",
+            "squad2",
+            "multinli",
+            "civil_comments",
+            "summeval-relevance",
+            "summeval-consistency",
+            "pubmedqa",
+        ]
+        assert set(unrun) <= BLOCKED_SUBSETS
+        for name in unrun:
+            with pytest.raises(ContaminationError):
+                assert_clean([name])
+
+    def test_the_block_list_covers_every_published_subset(self):
+        """Tripwire against the snapshot: if a subset appears there, block it."""
+        import json
+        from pathlib import Path as _P
+
+        snapshot = _P(__file__).resolve().parents[3] / "data" / "s1bench-snapshot.json"
+        published = set(json.loads(snapshot.read_text())["published_jev"])
+        assert published <= BLOCKED_SUBSETS, sorted(published - BLOCKED_SUBSETS)
+
 
 class TestGuard:
     def test_clean_mixture_passes(self):
-        assert_clean(["squad2", "multinli", "nanojev-events"])
+        assert_clean(["PolyAI/banking77", "fancyzhx/ag_news", "nanojev-events"])
 
     def test_contaminated_mixture_raises(self):
         with pytest.raises(ContaminationError) as exc:
-            assert_clean(["squad2", "tals/vitaminc"])
+            assert_clean(["fancyzhx/ag_news", "tals/vitaminc"])
         assert "vitaminc-dev" in str(exc.value)
         assert "ARCHITECTURE.md" in str(exc.value), "the error must say where to read why"
 
     def test_reports_every_collision_not_just_the_first(self):
-        hits = check_mixture(["boolq", "paws-x", "squad2", "nvidia/HelpSteer2"])
+        hits = check_mixture(["boolq", "paws-x", "dair-ai/emotion", "nvidia/HelpSteer2"])
         assert set(hits.values()) == {"boolq", "paws", "helpsteer2"}
-        assert "squad2" not in hits
+        assert "dair-ai/emotion" not in hits
 
     def test_empty_mixture_is_clean(self):
         assert_clean([])

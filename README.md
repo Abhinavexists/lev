@@ -60,21 +60,34 @@ as a first-class objective rather than a post-processing step.
 
 ```bash
 make setup     # uv sync — no torch, no GPU
-make test      # 68 tests: no GPU, no network, no API keys
+make test      # the full suite: no GPU, no network, no API keys
 make plan      # the H100 training budget, before you spend it
 ```
 
 ```
 model            Qwen/Qwen3.5-4B-Base  (4.0B, bfloat16)
 adaptation       LoRA r32
-data             200,000 examples x 1200 tok x 3 epochs  = 0.72B tokens
-steps            21,972 (32,768 tok/step)
-compute          2.30e+19 FLOPs
-H100 estimate    16.0 hours (0.7 days)
+data             200,000 examples x 128 tok x 3 epochs  = 0.08B tokens
+steps            18,750 (32 ex/step, ~4,096 tok/step)
+compute          2.46e+18 FLOPs
+H100 estimate    1.7 hours (0.1 days)
 memory           8.3 GB state, 71.7 GB headroom of 80 GB
 ```
 
-Then [SETUP.md](docs/SETUP.md) for Modal, or [TRAINING.md](docs/TRAINING.md) to train.
+The 128-token figure is **measured** over 1,500 real rendered prompts, not assumed.
+`lev plan --data data/mixture` re-measures it against your actual mixture.
+
+Then, to train:
+
+```bash
+make setup-train           # torch, transformers, peft
+make data                  # 9 public corpora -> train / calibration / test
+make eval-set              # export the held-out split for levbench
+make smoke-local STEPS=20  # prove the path on 0.8B, on CPU, before spending a GPU
+make train PRESET=4b       # Modal, one H100, ~2 h
+```
+
+[SETUP.md](docs/SETUP.md) for Modal, [TRAINING.md](docs/TRAINING.md) for the pipeline.
 
 ---
 
@@ -143,12 +156,17 @@ hard failure is our second mode.
 same code path — one changed flag.
 
 ```bash
-levbench eval  --backend jev                                    # the hosted API
-levbench eval  --backend lev                                    # us, on localhost:8000
-levbench compare                                                # vs an LLM baseline
-levbench sweep                                                  # batching economics
-levbench confidence                                             # which statistic is `confidence`?
+levbench eval  --backend jev                       # the hosted API
+levbench eval  --backend lev  --tasks data/eval    # us, on localhost:8000
+levbench compare                                   # vs an LLM baseline
+levbench sweep                                     # batching economics
+levbench confidence                                # which statistic is `confidence`?
 ```
+
+Omit `--tasks` and you get a built-in 24-item fixture. It is a smoke test: at n=24 the
+95% interval is **±16 accuracy points**, so it cannot tell a 5-point improvement from
+none. `make eval-set` writes the real one.
+[ADR-015.](docs/DECISIONS.md#adr-015--the-24-item-task-set-is-a-fixture-not-a-benchmark)
 
 Reports accuracy, log loss, Brier, **ECE with reliability bins**, selective accuracy,
 p50 latency, tokens, cost, and schema-retry counts. Runs offline against a fake
@@ -162,17 +180,22 @@ transport with no key at all.
 |---|---|
 | Schema, prompt layouts, router, label codes | **done, tested** |
 | Calibration fitting, ECE, profile I/O | **done, tested** |
-| Contamination guard | **done, tested** |
+| Contamination guard (all 13 eval subsets) | **done, tested** |
 | Training config + budget arithmetic | **done, verified** |
-| Benchmark harness | **done, tested** (offline) |
-| Modal app, volumes, smoke path | written, **not yet run** |
+| Benchmark harness | **done, tested** (offline) + run against live Jev |
+| Data pipeline — 9 sources, 3 splits, mixture | **done**, loads and splits verified |
+| Held-out eval export (2,760 items, ±4 pts) | **done**, round-trips into levbench |
+| Collator, both readouts, objective | **done, tested** |
+| Training loop + checkpointing | **done** — 30 steps on Qwen3.5-0.8B-Base, both modes, losses finite |
+| Modal app, image, volumes | **image builds; `download` run green on Modal** |
+| Modal `build_data` / `smoke` / `train` / `serve` | written, **not yet run remotely** |
 | Decision engine (prefill, fork, readout) | **runs on Qwen3.5-4B-Base**, Mode A verified |
-| Mode B head | written, **untrained** |
-| Data loaders | **the next task** |
+| Mode B head | **trains and serves**; untrained at scale |
 
-Every module that has not been executed says so in its own docstring. Nothing in this
-repository has been trained, and the harness has not yet been pointed at the live Jev
-API — so the design is evidenced, and its outcome is a hypothesis.
+Every module that has not been executed says so in its own docstring. **Nothing here
+has been trained at scale yet** — the pipeline runs end to end and produces a
+checkpoint, but the 4B run has not happened, so the design is evidenced and its
+outcome is still a hypothesis.
 
 ---
 

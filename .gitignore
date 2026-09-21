@@ -22,3 +22,9 @@ wandb/
 .env
 .env.*
 !.env.example
+
+# Generated data — rebuild with `make data` / `make eval-set`, never commit.
+# The manifest records exactly what went in, so the corpus is reproducible
+# without carrying hundreds of MB in git.
+data/mixture/
+data/eval/

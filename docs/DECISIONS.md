@@ -115,7 +115,7 @@ and trains at full precision regardless of LoRA freezing the backbone. Freezing 
 backbone does not prevent training a new head, which is what initially made this look
 like a trade-off and turns out not to be one.
 
-**Consequence:** a full run is ~16 h, so you can afford roughly a dozen. Budget the H100
+**Consequence:** a full run is ~2 h once measured (see ADR-016), so a dozen is cheap. Budget the H100
 for **ablations, not one heroic run**.
 
 ---
@@ -276,12 +276,14 @@ So: schema-first only for high-volume fixed-schema batch work; state-first by de
 
 ---
 
-## ADR-009 — The six evaluation subsets are banned from training
+## ADR-009 — All thirteen evaluation subsets are banned from training
 
 **Accepted.** Enforced in code, not documentation.
 
 ```
-vitaminc-dev   massive-en-US   boolq   helpsteer2   aegis2   paws
+ran in s1-fast (6)     vitaminc-dev  massive-en-US  boolq  helpsteer2  aegis2  paws
+intended, unrun (7)    massive-de-DE  squad2  multinli  civil_comments
+                       summeval-relevance  summeval-consistency  pubmedqa
 ```
 
 Three S1Bench entries self-declare contamination and their numbers are compromised.
@@ -289,9 +291,18 @@ Our single differentiating claim is calibration measured on exactly these subset
 contamination would not merely weaken the result — **it would silently improve it**,
 which is worse.
 
-`lev.data.contamination` resolves aliases (`tals/vitaminc`, `paws-x`,
-`google/boolq`, `nvidia/HelpSteer2`, …) and **raises**. It runs before any data loads.
-decider's ~95-dataset registry contains several of the six and must be filtered.
+The block list covers all **13** subsets in the snapshot's `published_jev`, not the 6
+that happened to execute in the `s1-fast` suite. The other 7 are evaluation data that
+simply did not run; training on them would contaminate any later full-suite comparison
+and we would not find out until the number was already published. Blocking only what
+ran is how you get a result that looks good and means nothing. The cost of the wider
+list is four otherwise-usable sources (squad2, multinli, civil_comments, pubmedqa) —
+cheap next to an uninterpretable headline.
+
+`lev.data.contamination` resolves aliases (`tals/vitaminc`, `paws-x`, `google/boolq`,
+`nvidia/HelpSteer2`, `rajpurkar/squad_v2`, `nyu-mll/multi_nli`, …) and **raises**. It
+runs before any data loads. decider's ~95-dataset registry contains several of the
+thirteen and must be filtered.
 
 ---
 
@@ -324,13 +335,158 @@ the `[train]` extra.
 
 ---
 
+## ADR-012 — Abstain means taking the state away
+
+**Accepted.**
+
+10% of training examples are unanswerable. The first implementation set a flag on
+an otherwise ordinary example and changed nothing else, which is worse than no
+augmentation at all: the state still determines the answer, so the only thing the
+model learns is to be unsure when it should not be. That is a calibration
+*regression* dressed as a calibration aid.
+
+An abstain example now pairs a question with a state drawn from a **different
+source**, and supervises a **uniform** distribution over the candidate set. With
+no evidence, every candidate is equally supported, so the uniform vector is the
+calibrated answer rather than a hedge — and teaching it is the point.
+
+This is why `decision_loss` takes soft targets. The hard rows are unaffected:
+with a one-hot target the soft cross-entropy is exactly `F.cross_entropy`, which
+is asserted in `test_loss.py`.
+
+Abstain rows are training-only. They are excluded from the exported eval set,
+because scoring them would measure our abstention rather than our accuracy, and
+the two are different numbers.
+
+---
+
+## ADR-013 — Mode B is weighted by what must be learned, not by corpus size
+
+**Accepted.**
+
+Only two of the nine sources — `banking77` (77 intents) and `clinc_oos` (151) —
+have option sets that overflow single-token label codes, so they are the *only*
+Mode B training signal. Every other source trains Mode A and nothing else.
+
+Weighting the mixture by corpus size would give the pair a few percent of the
+examples, and the head that is supposed to be this project's differentiator
+([ADR-005](#adr-005--dual-mode-readout-the-differentiator)) would ship untrained. `default_weights()` gives them **25%**. The
+remaining 75% splits evenly across the three primitives, so no readout starves.
+
+The cost is accepted knowingly: those two sources are over-represented relative
+to any natural distribution, which will bias Mode A's option-set prior toward
+short intent phrases. `test_data_pipeline.py` asserts the 25% floor so a later
+"tidy-up" of the weights cannot quietly undo it.
+
+---
+
+## ADR-014 — Split before mixing, into three splits
+
+**Accepted.**
+
+Three splits, not two: a temperature fitted on the test set is not a measurement.
+`calibrate.fit()` already refuses a split named test/eval/holdout; the
+`calibration` split is the other half of that guarantee — the thing it can
+legitimately accept.
+
+Assignment is a **blake2b hash of a stable per-row key**, not an RNG draw. The
+same row lands in the same split on any machine, in any dataset order, on any
+re-run, which is what makes a resumed or repeated experiment comparable to the
+original. Python's `hash()` is salted per process and would not reproduce
+tomorrow.
+
+Splitting happens **before** the mixture is drawn. Mixing first would let one
+underlying row appear in train and in test wearing two different layouts — a
+contamination leak with our own data rather than S1Bench's. Subtler than
+ADR-009's, and flattering in exactly the same way.
+
+Two coverage checks, because one is not enough. Every label *observed* must
+appear in train, or its error rate measures nothing. And every label the
+*question offers* must be observed at all — the check that catches an
+undersampled banking77, where 3 intents out of 77 satisfy the first check and
+the mixture is still junk. Both raise.
+
+---
+
+## ADR-015 — The 24-item task set is a fixture, not a benchmark
+
+**Accepted.**
+
+At n=24 the 95% interval on an accuracy estimate is about ±16 points. A training
+run that moved accuracy by 5 points is indistinguishable from one that moved it
+by nothing, so the hand-labelled support set cannot answer the only question
+training raises.
+
+It stays, as a smoke fixture: does the server answer, are the types right, does a
+distribution come back. The real eval is exported from the mixture's held-out
+test split — 2,760 items across nine sources, ±4 points per source — and
+`levbench eval --tasks` reads it.
+
+One file per source, because each source carries exactly one question. A single
+combined file would make the harness ask every question of every item, i.e. ask
+"how positive is this review?" of a banking ticket, and score the answer.
+
+The exporter lives in `lev`, not in `levbench`. levbench must not import the
+thing it measures (ADR-010), so the handoff is a JSON file and the writer sits on
+the model side of the fence.
+
+---
+
+## ADR-016 — Sequence length is measured, and the budget was wrong by 10x
+
+**Accepted.**
+
+`avg_tokens_per_example` was `1200`. It was a guess, made before any data
+existed. The measured mean over 1,500 rendered prompts from the real mixture is
+**121 tokens** — median 73, p95 390, longest 1,104.
+
+| Source | Mean tokens |
+|---|---|
+| clinc_oos | 38 |
+| banking77 | 39 |
+| rotten_tomatoes | 65 |
+| emotion | 71 |
+| sst5 | 77 |
+| ag_news | 98 |
+| dbpedia_14 | 164 |
+| yelp_review_full | 223 |
+| imdb | 305 |
+
+The 4B budget therefore read **16.0 hours** when it is closer to **1.7**. That
+error is not academic: it is the number the H100 is booked against, and it was
+wrong in the direction that makes you plan for one run when you can afford ten.
+
+Three things changed as a result:
+
+- The default is `128`, with the measurement and its provenance in the
+  docstring, and `lev plan --data <dir>` re-measures against a real mixture
+  rather than trusting it.
+- `tokens_per_step` was `max_seq_len × batch`, which bills the truncation cap
+  rather than the work. The collator pads to the longest row in the batch, so
+  at a 4,096 cap over 121-token data that over-counted by ~16x. It is now
+  `avg_tokens_per_example × batch`, and `steps_per_epoch` counts **examples**,
+  because an epoch is a pass over the data and how many optimiser steps that
+  takes is a function of the batch, not of a token budget.
+- `per_device_batch` went 8 → 32. At a 121-token mean, a batch of 8 makes
+  75,000 optimiser steps and the run is bound by step overhead long before it
+  is bound by FLOPs. `max_seq_len` dropped 4,096 → 2,048, which still clears
+  the longest prompt seen with room to spare.
+
+The general lesson, and the reason this is an ADR rather than a commit message:
+**every number in the budget that was not measured was wrong.** The FLOPs
+constant and the H100 throughput figure are still assumptions, so Q5 stays open.
+
+---
+
 ## Open questions
 
 | # | Question | How it gets settled |
 |---|---|---|
 | **Q1** | Is Jev's `confidence` normalised Gini? | `levbench confidence` against the live API. Identifier is validated by a known-answer test |
-| **Q2** | Do Mode A and Mode B agree where both are valid? | Explicit eval (ADR-005). A correctness gate, not a nice-to-have |
+| **Q2** | Do Mode A and Mode B agree where both are valid? | Explicit eval ([ADR-005](#adr-005--dual-mode-readout-the-differentiator)). A correctness gate, not a nice-to-have |
 | **Q3** | Can a *state* cache persist across requests? | decider persists a **schema** cache; persisting state is unclaimed and is the genuinely novel direction |
 | **Q4** | Does Mode B cost accuracy under the ceiling? | Ablation: Mode B forced on small option sets vs Mode A |
-| **Q5** | Is the 16 h estimate right? | `modal run modal/app.py::smoke`, then extrapolate from measured tokens/s |
+| **Q5** | Is the ~2 h estimate right? | Sequence length is now measured (ADR-016); throughput is not. `modal run modal/app.py::smoke`, then extrapolate from measured steps/s. Note that 24 of the 32 layers run on a reference PyTorch path unless `flash-linear-attention` is installed, so the first measurement may not be the ceiling |
 | **Q6** | Does an instruct checkpoint fix zero-shot Noul, or does the scale need training either way? | Re-run the eval on `Qwen3.5-4B` (instruct) and compare `is_urgent` against the 0.292 base-rate collapse |
+| **Q7** | Do nine public classification corpora transfer to support-triage states? | Train, then eval on both the generated set *and* the 24-item fixture. Agreement between them is the signal; the fixture alone cannot resolve it |
+| **Q8** | Is 25% the right Mode B share? | Ablation at 10% / 25% / 40%, read on banking77 and clinc_oos accuracy against Mode A sources' regression |

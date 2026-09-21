@@ -4,11 +4,12 @@ An example is one (state, question, answer) triple. The mixture controls three
 things the architecture depends on, so they live here rather than in the loop:
 
   layout          50/50 state-first / schema-first, so both caches work at inference
-  abstain         a fraction whose answer is not determinable from the state
+  abstain         a fraction whose answer is genuinely not determinable from the
+                  state, carrying a uniform target rather than a gold label
   option scaling  some questions with large option sets, to exercise Mode B
 
-NOT YET RUN against real datasets. `build_mixture` is the contract; the loaders it
-calls are the part to fill in during the hacking phase.
+The loaders live in `lev.data.sources`; `build_mixture` takes them injected so the
+tests never touch the network.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 from ..prompt import Layout
+from ..router import candidate_count
 from ..types import Question
 from .contamination import assert_clean
 
@@ -31,6 +33,10 @@ class Example:
     layout: Layout
     source: str
     abstain: bool = False
+    # Present only on abstain examples, where there is no gold index to supervise
+    # and the correct behaviour is spread mass, not pick one. The loss reads this
+    # in preference to `target` when it is set.
+    soft_target: list[float] | None = None
 
 
 @dataclass
@@ -42,6 +48,9 @@ class MixtureSpec:
     schema_first_fraction: float = 0.5
     abstain_fraction: float = 0.1
     seed: int = 17
+    # source -> sources whose states must not be used as abstain donors,
+    # because they would in fact answer the question. See `sources.ADJACENT`.
+    adjacent: dict[str, frozenset[str]] = field(default_factory=dict)
 
     def validate(self) -> None:
         # Raises on any source colliding with an S1Bench evaluation subset. This
@@ -77,16 +86,54 @@ def build_mixture(spec: MixtureSpec, loaders: dict[str, callable]) -> Iterator[E
     for _ in range(spec.n_examples):
         source = rng.choices(names, weights=weights, k=1)[0]
         example = rng.choice(pools[source])
-        yield Example(
-            state=example.state,
-            name=example.name,
-            question=example.question,
-            target=example.target,
-            layout=(
-                Layout.SCHEMA_FIRST
-                if rng.random() < spec.schema_first_fraction
-                else Layout.STATE_FIRST
-            ),
-            source=source,
-            abstain=rng.random() < spec.abstain_fraction,
+        layout = (
+            Layout.SCHEMA_FIRST if rng.random() < spec.schema_first_fraction else Layout.STATE_FIRST
         )
+        if rng.random() < spec.abstain_fraction:
+            yield _abstain_from(example, pools, names, source, layout, rng, spec.adjacent)
+        else:
+            yield Example(
+                state=example.state,
+                name=example.name,
+                question=example.question,
+                target=example.target,
+                layout=layout,
+                source=source,
+            )
+
+
+def _abstain_from(example, pools, names, source, layout, rng, adjacent=None) -> Example:
+    """Build an unanswerable example by pairing a question with a foreign state.
+
+    Flagging an otherwise normal example `abstain=True` -- which is what an
+    earlier version of this function did -- is worse than not augmenting at all:
+    the state still determines the answer, so the only thing the model learns is
+    to be unsure when it should not be. The question has to become genuinely
+    unanswerable, and the way to do that is to take the state away.
+
+    The substituted state is drawn from a *different and non-adjacent* source
+    so it cannot accidentally answer the question, and the target is uniform
+    because with no evidence every candidate is equally supported. That uniform
+    vector is the calibrated answer, and teaching it is the point.
+
+    "Different" alone is not enough. imdb and rotten_tomatoes are both movie
+    reviews, so pairing one's question with the other's state produces a fully
+    answerable example labelled uniform -- the precise mislabelling this is
+    meant to avoid, on roughly 1% of rows. `spec.adjacent` carries the
+    exclusions; an empty map means callers who have not declared any.
+    """
+    excluded = {source} | set((adjacent or {}).get(source, ()))
+    others = [n for n in names if n not in excluded] or [n for n in names if n != source] or names
+    donor_source = rng.choice(others)
+    donor = rng.choice(pools[donor_source])
+    n_candidates = candidate_count(example.question)
+    return Example(
+        state=donor.state,
+        name=example.name,
+        question=example.question,
+        target=example.target,  # retained for bookkeeping; the loss uses soft_target
+        layout=layout,
+        source=source,
+        abstain=True,
+        soft_target=[1.0 / n_candidates] * n_candidates,
+    )

@@ -248,7 +248,7 @@ choice non-obvious.
               A: LABEL-TOKEN READOUT   B: CANDIDATE-PATH SCORING
               logits at "Answer:"      shared matching head
               over A,B,…,AA,…          + set attention over candidates
-              0 added params           ~30 M params, no option ceiling
+              0 added params           3.67M params, no option ceiling
                              │       │
                              └───┬───┘
                                  ▼
@@ -343,7 +343,7 @@ vitaminc-dev   massive-en-US   boolq   helpsteer2   aegis2   paws
 
 Candidate sources — each must be checked against that list before use:
 
-- decider's task registry (~95 public datasets) — **contains several of the six**
+- decider's task registry (~95 public datasets) — **contains several of the thirteen**
 - Nimble's 2,676 train / 324 test examples — synthetic contrastive pairs
 - NanoJev's public dataset — observed-event data, good for the calibration objective
 - Teacher-generated states from a local 27B, as decider does
@@ -356,7 +356,7 @@ Assumptions stated so you can change them:
 trainable model      4e9 params (backward cost is full-model even under LoRA)
 cost per token       ~8 × N FLOPs   (6 × N fwd+bwd, +33% for grad checkpointing)
                      = 8 × 4e9      = 3.2e10 FLOP/token
-dataset              200,000 question-instances × ~1,200 tokens = 2.4e8 tokens/epoch
+dataset              200,000 question-instances × ~128 tokens (measured) = 2.6e7 tokens/epoch
 epochs               3                                          = 7.2e8 tokens
 total compute        3.2e10 × 7.2e8                             = 2.3e19 FLOPs
 H100 effective       ~400 TFLOP/s bf16 (realistic with checkpointing, not peak 990)

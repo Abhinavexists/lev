@@ -64,13 +64,25 @@ def render_question(name: str, question: Question, codes: list[str] | None) -> s
     lines = [f"Question: {question.instructions or name}"]
 
     if isinstance(question, Choice):
-        lines.append("Options:")
-        for code, (key, desc) in zip(codes or [], question.criteria.items(), strict=False):
-            lines.append(f"  {code}: {key}" + (f" - {_text(desc)}" if desc else ""))
+        # Under Mode B `codes` is None and the options are *not* listed: the
+        # head embeds each candidate's own text, so listing 151 intents would
+        # buy nothing and cost ~700 tokens per prompt. Emitting the bare
+        # "Options:" header with nothing under it -- which an earlier version
+        # did -- is the worst of both: the cost of a header and the information
+        # of none.
+        if codes:
+            lines.append("Options:")
+            for code, (key, desc) in zip(codes, question.criteria.items(), strict=False):
+                lines.append(f"  {code}: {key}" + (f" - {_text(desc)}" if desc else ""))
+        else:
+            lines.append(f"Choose the best of the {len(question.criteria)} candidates given.")
     elif isinstance(question, Score):
-        lines.append("Levels:")
-        for code, desc in zip(codes or [], question.criteria, strict=False):
-            lines.append(f"  {code}: {_text(desc)}")
+        if codes:
+            lines.append("Levels:")
+            for code, desc in zip(codes, question.criteria, strict=False):
+                lines.append(f"  {code}: {_text(desc)}")
+        else:
+            lines.append(f"Choose the best of the {len(question.criteria)} levels given.")
     elif isinstance(question, Noul):
         lines.append("Rate 0-8 how strongly this is true (0 = certainly no, 8 = certainly yes).")
         if question.criteria:

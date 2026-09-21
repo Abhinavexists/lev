@@ -9,10 +9,10 @@ failure is silent, because a contaminated model looks *better*.
 So the guard raises rather than warns, and it runs before training, not after.
 
 Candidate data sources and their known risk:
-  decider's registry (~95 public datasets)  -- CONTAINS several of the six
+  decider's registry (~95 public datasets)  -- CONTAINS several of the thirteen
   Nimble (2,676 train / 324 test)           -- synthetic contrastive pairs
   NanoJev observed-event data               -- good for the calibration objective
-  teacher-generated states                  -- safe if the teacher is not shown the six
+  teacher-generated states                  -- safe if the teacher is not shown the thirteen
 """
 
 from __future__ import annotations
@@ -20,15 +20,28 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-# The six S1Bench subsets we are evaluated on. Never train on these.
+# Every S1Bench evaluation subset -- all 13 in `published_jev`, not just the 6
+# that executed in the `s1-fast` run. The other 7 were intended and unrun; they
+# are still evaluation data, and training on them would contaminate any future
+# full-suite comparison. Blocking only what happened to run is how you get a
+# result that looks good and means nothing.
 BLOCKED_SUBSETS: frozenset[str] = frozenset(
     {
+        # ran in s1-fast
         "vitaminc-dev",
         "massive-en-US",
         "boolq",
         "helpsteer2",
         "aegis2",
         "paws",
+        # intended, did not run
+        "massive-de-DE",
+        "squad2",
+        "multinli",
+        "civil_comments",
+        "summeval-relevance",
+        "summeval-consistency",
+        "pubmedqa",
     }
 )
 
@@ -49,6 +62,21 @@ _ALIASES: dict[str, str] = {
     "aegis": "aegis2",
     "paws-x": "paws",
     "google-research-datasets/paws": "paws",
+    # intended-but-unrun subsets
+    "massive-de": "massive-de-DE",
+    "squad-v2": "squad2",
+    "squad_v2": "squad2",
+    "rajpurkar/squad_v2": "squad2",
+    "multi-nli": "multinli",
+    "nyu-mll/multi_nli": "multinli",
+    "nyu-mll/glue": "multinli",
+    "google/civil_comments": "civil_comments",
+    "civil-comments": "civil_comments",
+    "pubmed-qa": "pubmedqa",
+    "qiaojin/pubmedqa": "pubmedqa",
+    "bigbio/pubmed_qa": "pubmedqa",
+    "summeval": "summeval-relevance",
+    "mteb/summeval": "summeval-relevance",
 }
 
 

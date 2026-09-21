@@ -1,18 +1,33 @@
-"""A small hand-labelled support-triage benchmark.
+"""Benchmark task sets: a built-in smoke fixture, and file-backed eval sets.
 
-Label provenance: these labels were authored by hand for this repository. They
-are not a vendor benchmark and not an independent public dataset. They exist so
-calibration metrics have *some* ground truth -- without labels you can only
-measure latency and cost. Items were chosen to be unambiguous; the `frustration`
-levels are the softest of the three and should be read as the weakest signal.
+The built-in set is 24 hand-labelled support tickets. Its labels were authored
+by hand for this repository -- not a vendor benchmark, not an independent public
+dataset. Items were chosen to be unambiguous; the `frustration` levels are the
+softest of the three and should be read as the weakest signal.
 
-Swap this module out for a real labelled set (the TypeSafe cookbooks list
-several) before drawing conclusions about accuracy.
+**24 items cannot detect a training improvement.** The 95% interval on a single
+accuracy estimate there is roughly +/-17 points, so a run that moved accuracy by
+5 points is indistinguishable from one that moved it by nothing. Treat the
+built-in set as a smoke fixture -- does the server answer, are the types right --
+and point `--tasks` at a real held-out file before reading anything into a
+number. `lev data eval` writes one from the mixture's test split.
+
+A task file is JSON:
+
+    {"questions": {"<name>": {"type": "choice"|"score"|"noul", ...}},
+     "items": [{"state": "...", "labels": {"<name>": <truth>}}]}
+
+levbench reads that file and nothing else. It deliberately does not import
+`lev`: a measuring instrument that imports the thing it measures is not an
+instrument (ADR-010), so the exporter lives on the model side of the fence.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+import math
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from typesafe_sdk import Choice, Noul, Score
@@ -189,5 +204,62 @@ ITEMS: list[Item] = [
 ]
 
 
-def dataset() -> tuple[list[Item], dict[str, Any]]:
+@dataclass(frozen=True)
+class FileItem:
+    """An item read from a task file. Same surface as `Item`: state + labels."""
+
+    state: str
+    _labels: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def labels(self) -> dict[str, Any]:
+        return self._labels
+
+
+_PRIMITIVES = {"choice": Choice, "score": Score, "noul": Noul}
+
+
+def load_task_file(path: str | Path) -> tuple[list[FileItem], dict[str, Any]]:
+    """Read a task file into the same shape `dataset()` returns."""
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"task file {str(path)!r} does not exist. Write one with:\n"
+            f"    uv run lev data eval --out {path}"
+        )
+    payload = json.loads(path.read_text())
+    built: dict[str, Any] = {}
+    for name, spec in payload["questions"].items():
+        spec = dict(spec)
+        kind = spec.pop("type")
+        if kind not in _PRIMITIVES:
+            raise ValueError(f"question {name!r} has unknown type {kind!r}")
+        built[name] = _PRIMITIVES[kind](**spec)
+
+    items = [FileItem(row["state"], row["labels"]) for row in payload["items"]]
+    if not items:
+        raise ValueError(f"{path} contains no items")
+
+    unknown = {k for item in items for k in item.labels} - set(built)
+    if unknown:
+        raise ValueError(f"{path} labels questions that it does not define: {sorted(unknown)}")
+    return items, built
+
+
+def dataset(path: str | Path | None = None) -> tuple[list[Any], dict[str, Any]]:
+    """The built-in smoke fixture, or a task file when one is given."""
+    if path is not None:
+        return load_task_file(path)
     return ITEMS, questions()
+
+
+def detectable_difference(n: int, baseline: float = 0.8, z: float = 1.96) -> float:
+    """Roughly the smallest accuracy change `n` items can distinguish.
+
+    Printed next to every accuracy so the number is read with its resolution
+    attached. This is the half-width of the normal-approximation interval for one
+    proportion; comparing two runs needs a wider margin still.
+    """
+    if n <= 0:
+        return 1.0
+    return min(1.0, z * math.sqrt(baseline * (1 - baseline) / n))

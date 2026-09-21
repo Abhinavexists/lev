@@ -12,6 +12,7 @@ you swap tokenizers.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -43,6 +44,21 @@ def candidate_count(question: Question) -> int:
     if isinstance(question, Noul):
         return len(NOUL_RATING_TOKENS)
     raise TypeError(f"unknown question type {type(question).__name__}")
+
+
+def candidate_texts(question: Question) -> list[str]:
+    """The strings Mode B scores: the option's own text, not a label code.
+
+    Lives here rather than in `lev.train` because the serving engine needs the
+    same list, and the engine must not import the training package.
+    """
+    if question.type == "noul":
+        return list(NOUL_RATING_TOKENS)
+    if question.type == "score":
+        return [
+            c if isinstance(c, str) else json.dumps(c, sort_keys=True) for c in question.criteria
+        ]
+    return list(question.criteria)
 
 
 def route(question: Question, tokenizer, max_label_options: int | None = None) -> Route:

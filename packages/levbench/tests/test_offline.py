@@ -10,6 +10,7 @@ ROOT = next(p for p in PKG.parents if (p / "data").is_dir())
 sys.path.insert(0, str(PKG / "src"))
 sys.path.insert(0, str(PKG / "tests"))
 
+import pytest  # noqa: E402
 from dotenv import load_dotenv  # noqa: E402
 from fake_transport import transport  # noqa: E402
 from levbench import batching, confidence_id, metrics, runner  # noqa: E402
@@ -251,3 +252,88 @@ if __name__ == "__main__":
     test_local_base_url_never_forwards_the_real_key()
     test_empty_local_key_env_var_falls_back()
     print("\nAll offline checks passed.")
+
+
+def _write_task_file(path, question_type="choice", n=5):
+    import json
+
+    question = {
+        "choice": {
+            "type": "choice",
+            "instructions": "which team",
+            "criteria": {"a": None, "b": None},
+        },
+        "score": {"type": "score", "instructions": "how much", "criteria": ["low", "high"]},
+        "noul": {"type": "noul", "instructions": "is it urgent"},
+    }[question_type]
+    truth = {"choice": "a", "score": 0, "noul": True}[question_type]
+    path.write_text(
+        json.dumps(
+            {
+                "questions": {"q": question},
+                "items": [{"state": f"state {i}", "labels": {"q": truth}} for i in range(n)],
+            }
+        )
+    )
+    return path
+
+
+def test_eval_runs_over_a_generated_task_file(tmp_path) -> None:
+    """The lev -> levbench seam, exercised rather than assumed.
+
+    `lev data eval` writes these files; this is the harness reading one back and
+    scoring it. Without this the handoff is only checked on the writing side.
+    """
+    from levbench.tasks import dataset as load
+
+    items, questions = load(_write_task_file(tmp_path / "gen.json"))
+    report = runner.run_eval(fake_client(), "jev", "jev-latest", items, questions)
+    assert len(report.calls) == 5
+    assert set(report.per_question) == {"q"}
+    assert "accuracy" in runner.format_report(report)
+
+
+@pytest.mark.parametrize("question_type", ["choice", "score", "noul"])
+def test_every_primitive_round_trips_through_a_task_file(tmp_path, question_type) -> None:
+    from levbench.tasks import load_task_file
+
+    items, questions = load_task_file(_write_task_file(tmp_path / "g.json", question_type))
+    assert questions["q"].type == question_type
+    report = runner.run_eval(fake_client(), "jev", "jev-latest", items, questions)
+    assert report.per_question["q"] is not None
+
+
+def test_a_task_file_labelling_an_undefined_question_raises(tmp_path) -> None:
+    """A truth with no question to score it against is silently dropped
+    otherwise, and the eval reports on fewer items than it was given."""
+    import json
+
+    path = tmp_path / "bad.json"
+    path.write_text(
+        json.dumps(
+            {
+                "questions": {"q": {"type": "noul", "instructions": "x"}},
+                "items": [{"state": "s", "labels": {"q": True, "ghost": False}}],
+            }
+        )
+    )
+    from levbench.tasks import load_task_file
+
+    with pytest.raises(ValueError, match="does not define"):
+        load_task_file(path)
+
+
+def test_a_missing_task_file_says_how_to_make_one(tmp_path) -> None:
+    from levbench.tasks import load_task_file
+
+    with pytest.raises(FileNotFoundError, match="lev data eval"):
+        load_task_file(tmp_path / "nope.json")
+
+
+def test_detectable_difference_shrinks_with_n() -> None:
+    """The number that says whether an accuracy delta means anything."""
+    from levbench.tasks import detectable_difference
+
+    assert detectable_difference(24) > 0.15, "24 items cannot resolve a 5-point gain"
+    assert detectable_difference(2000) < 0.02
+    assert detectable_difference(0) == 1.0
