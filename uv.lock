@@ -1002,6 +1002,12 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+modal = [
+    { name = "lev", extra = ["modal"] },
+]
+serve = [
+    { name = "lev", extra = ["serve"] },
+]
 train = [
     { name = "lev", extra = ["train"] },
 ]
@@ -1015,10 +1021,12 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "lev", editable = "packages/lev" },
+    { name = "lev", extras = ["modal"], marker = "extra == 'modal'", editable = "packages/lev" },
+    { name = "lev", extras = ["serve"], marker = "extra == 'serve'", editable = "packages/lev" },
     { name = "lev", extras = ["train"], marker = "extra == 'train'", editable = "packages/lev" },
     { name = "levbench", editable = "packages/levbench" },
 ]
-provides-extras = ["train"]
+provides-extras = ["train", "serve", "modal"]
 
 [package.metadata.requires-dev]
 dev = [

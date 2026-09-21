@@ -11,8 +11,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Training and serving the model. Not needed to run the benchmark.
+# Forwarded from the `lev` package so `uv sync --extra <x>` works from the repo
+# root, which is where every documented command is run. None of these are needed
+# to run the benchmark or the test suite.
 train = ["lev[train]"]
+serve = ["lev[serve]"]
+modal = ["lev[modal]"]
 
 [dependency-groups]
 dev = [

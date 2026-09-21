@@ -1,6 +1,7 @@
 # lev — common tasks. `make help` lists everything.
 .DEFAULT_GOAL := help
-.PHONY: help setup test lint fmt check bench plan smoke train calibrate serve clean
+.PHONY: help setup setup-train setup-serve setup-modal test lint fmt check \
+        bench bench-local sweep plan check-data smoke train calibrate serve clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -11,6 +12,12 @@ setup: ## Install the workspace (CPU only; no torch)
 
 setup-train: ## Install with the training extras (torch, transformers, peft)
 	uv sync --extra train
+
+setup-serve: ## Install with the serving extras (adds fastapi, uvicorn)
+	uv sync --extra serve
+
+setup-modal: ## Install with the Modal client
+	uv sync --extra modal
 
 test: ## Run every test (no GPU, no network, no API keys)
 	uv run pytest
