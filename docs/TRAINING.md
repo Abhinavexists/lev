@@ -299,19 +299,21 @@ that dies at step 17,000 still leaves its loss curve behind.
 
 ### Resuming
 
-```bash
-modal run modal/app.py::train --preset 4b --resume /checkpoints/4b
-```
+A run picks up where it stopped. `make train` resumes from the newest `step-N`
+in the preset's checkpoint directory; `FRESH=1` starts over, `RESUME=path`
+names a checkpoint explicitly. Each checkpoint carries the optimiser moments,
+the schedule position, the step and epoch, and the RNG state that reproduces
+the epoch's data order, so a resumed run continues at step N through the
+batches it had not yet seen, on the learning rate it had reached, and
+`history.json` extends rather than restarts. A preemption costs at most
+`checkpoint_every` steps -- 2,000, about half an hour on the 4B preset.
 
-`--resume` takes the preset's output directory and resolves the newest
-`step-N` inside it. It restores **weights only** — the LoRA adapter and the
-Mode B head — so a resumed run repeats the warmup and restarts its cosine
-schedule. The optimiser moments are not carried over. At ~2 h per run that
-trade is fine; it would not be at 16.
+A checkpoint written before this existed carries weights only; resuming one
+restores the adapter and head and starts the optimiser and schedule fresh,
+which is what every resume did before ([ADR-021](DECISIONS.md#adr-021--a-checkpoint-carries-the-training-state-and-a-run-resumes-by-default)).
 
-Resuming without the `mode_b_head.pt` beside the adapter is a hard error rather
-than a silent reinitialisation, because a freshly initialised head looks exactly
-like a trained one until you read the Mode B numbers.
+`smoke` always starts fresh: a smoke test that resumed the previous smoke would
+skip the very steps it exists to exercise.
 
 ### Presets
 
@@ -323,11 +325,11 @@ like a trained one until you read the Mode B numbers.
 | **`4b-instruct`** | **Qwen3.5-4B** (instruct) | **LoRA r32, lr 5e-5** | **8.3 GB** | **71.7 GB** | **16** |
 | `9b` | Qwen3.5-9B-Base | LoRA r32 | 18.3 GB | 61.7 GB | 36 |
 
-A 16-hour run means you can afford about a dozen. **Budget the H100 for ablations, not
-one heroic run.**
 `4b-instruct` is the recommended start after ADR-020: frozen, the instruct
 checkpoint scores 0.719 on S1Bench (reflex-4b); the `4b` fine-tune scored 0.489.
 
+A 16-hour run means you can afford about a dozen. **Budget the H100 for ablations, not
+one heroic run.**
 
 ---
 

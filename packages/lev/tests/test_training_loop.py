@@ -70,7 +70,7 @@ class TestCheckpointCadence:
         monkeypatch.setattr(
             loop,
             "save_checkpoint",
-            lambda m, h, tk, out, step, cb=None: saved.append(step),
+            lambda m, h, tk, out, step, cb=None, state=None: saved.append(step),
         )
 
         config = replace(
@@ -100,3 +100,112 @@ class TestCheckpointCadence:
     def test_checkpointing_off_still_saves_once(self, tmp_path, monkeypatch):
         saved = self.run(tmp_path, monkeypatch, max_steps=5, checkpoint_every=0)
         assert saved == [5], f"expected a single final save, got {saved}"
+
+
+class TestResume:
+    """A preempted run continues at the step it stopped, through the batches it
+    had not seen, on the schedule it had reached -- driven through the real loop
+    with only the backbone, forward and weight I/O stubbed."""
+
+    def run(
+        self, tmp_path, monkeypatch, *, max_steps, checkpoint_every=3, fresh=False, persist=True
+    ):
+        from dataclasses import replace
+
+        import lev.train.loop as loop
+        from lev.train.checkpoints import TRAINING_STATE
+        from lev.train.collate import DecisionCollator
+        from lev.train.config import PRESETS
+
+        rows = [an_example(a_choice(4), target=i % 4, state=f"row {i}") for i in range(64)]
+        saved: list[int] = []
+        seen: list[tuple[str, ...]] = []
+
+        class RecordingCollator(DecisionCollator):
+            def __call__(self, examples):
+                seen.append(tuple(e.state for e in examples))
+                return super().__call__(examples)
+
+        def fake_save(m, h, tk, out, step, cb=None, state=None):
+            saved.append(step)
+            path = out / f"step-{step}"
+            path.mkdir(parents=True, exist_ok=True)
+            (path / "adapter_model.safetensors").write_bytes(b"")
+            if state is not None and persist:
+                torch.save(state, path / TRAINING_STATE)
+
+        monkeypatch.setattr(loop, "prepare_data", lambda c, d: {"train": rows, "calibration": []})
+        monkeypatch.setattr(
+            loop, "build_model", lambda c, mc=None: (StubModel(), make_batching_tokenizer())
+        )
+        monkeypatch.setattr(loop, "build_head", lambda c, m=None: None)
+        monkeypatch.setattr(loop, "device_of", lambda m: torch.device("cpu"))
+        monkeypatch.setattr(loop, "to_device", lambda b, d: b)
+        monkeypatch.setattr(loop, "load_checkpoint", lambda m, h, p: None)
+        monkeypatch.setattr(loop, "DecisionCollator", RecordingCollator)
+        monkeypatch.setattr(
+            loop,
+            "candidate_logits",
+            lambda m, b, h=None: torch.zeros(
+                b.size, b.candidate_mask.size(1), requires_grad=True
+            ).masked_fill(b.candidate_mask, float("-inf")),
+        )
+        monkeypatch.setattr(loop, "save_checkpoint", fake_save)
+
+        config = replace(
+            PRESETS["smoke"],
+            epochs=2,
+            per_device_batch=2,
+            checkpoint_every=checkpoint_every,
+            output_dir=str(tmp_path / "out"),
+        )
+        summary = loop.run_training(config, str(tmp_path), max_steps=max_steps, fresh=fresh)
+        return saved, seen, summary
+
+    def test_resumes_at_the_saved_step_and_sees_only_the_remaining_batches(
+        self, tmp_path, monkeypatch
+    ):
+        # The uninterrupted run, for reference.
+        _, full, _ = self.run(tmp_path / "ref", monkeypatch, max_steps=10)
+        # The same run, stopped at 6 and restarted.
+        saved_a, seen_a, _ = self.run(tmp_path, monkeypatch, max_steps=6)
+        saved_b, seen_b, summary = self.run(tmp_path, monkeypatch, max_steps=10)
+
+        assert saved_a == [3, 6]
+        assert saved_b == [9, 10], f"resumed run should save at 9 and 10, got {saved_b}"
+        assert summary["steps"] == 10
+        assert seen_b == full[6:10], "the resumed run must process exactly the unseen batches"
+        assert [h["step"] for h in summary["history"]] == list(range(10)), (
+            "history must extend the saved curve, not restart it"
+        )
+
+    def test_saved_state_records_the_schedule_position(self, tmp_path, monkeypatch):
+        from lev.train.checkpoints import load_training_state
+
+        self.run(tmp_path, monkeypatch, max_steps=6)
+        state = load_training_state(tmp_path / "out" / "step-6")
+        assert state["step"] == 6 and state["epoch"] == 0 and state["step_in_epoch"] == 6
+        assert state["scheduler"]["last_epoch"] == 6
+
+    def test_fresh_ignores_the_checkpoint(self, tmp_path, monkeypatch):
+        self.run(tmp_path, monkeypatch, max_steps=6)
+        saved, _, summary = self.run(tmp_path, monkeypatch, max_steps=6, fresh=True)
+        assert saved == [3, 6]
+        assert summary["history"][0]["step"] == 0
+
+    def test_weights_only_checkpoint_restarts_the_schedule(self, tmp_path, monkeypatch):
+        """A checkpoint from before ADR-021 has no training state: resume its
+        weights, but count from zero, as every resume did then."""
+        self.run(tmp_path, monkeypatch, max_steps=6, persist=False)
+        saved, _, summary = self.run(tmp_path, monkeypatch, max_steps=6)
+        assert saved == [3, 6]
+        assert summary["history"][0]["step"] == 0
+
+    def test_resume_across_an_epoch_boundary(self, tmp_path, monkeypatch):
+        """64 rows at batch 2 is 32 steps per epoch; stopping at 33 is one step
+        into epoch 1, and the resumed run must skip exactly that one."""
+        _, full, _ = self.run(tmp_path / "ref", monkeypatch, max_steps=36)
+        self.run(tmp_path, monkeypatch, max_steps=33)
+        _, seen, summary = self.run(tmp_path, monkeypatch, max_steps=36)
+        assert summary["steps"] == 36
+        assert seen == full[33:36]

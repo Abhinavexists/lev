@@ -18,7 +18,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from .checkpoints import load_checkpoint, save_checkpoint
+from .checkpoints import latest_checkpoint, load_checkpoint, load_training_state, save_checkpoint
 from .collate import DecisionCollator, ModeBatcher, RouteCache
 from .config import TrainConfig
 from .progress import ProgressLog, hms
@@ -269,16 +269,18 @@ def run_training(
     resume_from: str | None = None,
     on_checkpoint: Callable[[], None] | None = None,
     max_steps: int | None = None,
+    fresh: bool = False,
 ) -> dict:
     """Train, checkpointing periodically so a long run survives a preemption.
 
-    `resume_from` restores **weights only** -- the LoRA adapter and the Mode B
-    head. The optimiser moments and the step counter are not restored, so a
-    resumed run repeats the warmup and starts its cosine schedule over. That is
-    a deliberate limit rather than an oversight: at the measured ~2 h for the 4B
-    preset (ADR-016) the cost of redoing a warmup is small, and a half-restored
-    optimiser is harder to reason about than a clean restart from good weights.
-    Revisit it if a preset ever runs long enough for that trade to flip.
+    A run picks up where it stopped. With no `resume_from`, the newest `step-N`
+    under `config.output_dir` is resumed automatically -- `fresh=True` starts
+    over. A checkpoint carries the optimiser moments, the schedule position,
+    the step and epoch, and the RNG state that reproduces the epoch's data
+    order, so the resumed run continues at step N through the batches it had
+    not yet seen, on the learning rate it had reached. A checkpoint written
+    without that state (an older run) restores weights only and starts the
+    optimiser and schedule fresh, which is what every resume did before ADR-021.
     """
     import torch
     from torch.optim import AdamW
@@ -291,15 +293,21 @@ def run_training(
     output = Path(config.output_dir)
     output.mkdir(parents=True, exist_ok=True)
 
+    if resume_from is None and not fresh and (found := latest_checkpoint(output)) is not None:
+        resume_from = str(found)
+        print(f"resuming from {found} (pass --fresh to start over)", flush=True)
+
     model, tokenizer = build_model(config, model_cache)
     head = build_head(config, model) if config.train_mode_b_head else None
+    state = None
     if resume_from:
         load_checkpoint(model, head, resume_from)
+        state = load_training_state(resume_from)
     device = device_of(model)
 
     # One cache, so a question is routed once for the whole run rather than
     # once for the batcher and again for the collator.
-    routes = RouteCache(tokenizer)
+    routes = RouteCache(tokenizer, config.max_label_options)
     collator = DecisionCollator(tokenizer, max_seq_len=config.max_seq_len, routes=routes)
     batcher = ModeBatcher(
         tokenizer,
@@ -337,17 +345,45 @@ def run_training(
 
     rng = random.Random(config.seed)
     history: list[dict] = []
-    progress = ProgressLog(total_steps, config.log_every)
     step = 0
+    start_epoch = 0
+    skip_groups = 0
     last_saved = -1
+    if state is not None:
+        optimiser.load_state_dict(state["optimiser"])
+        scheduler.load_state_dict(state["scheduler"])
+        step, start_epoch, skip_groups = state["step"], state["epoch"], state["step_in_epoch"]
+        rng.setstate(state["rng_before_epoch"])
+        history = [h for h in _read_history(output) if h["step"] < step]
+        last_saved = step
+        print(
+            f"resumed at step {step:,}/{total_steps:,}: epoch {start_epoch}, "
+            f"{skip_groups:,} batches in, lr {scheduler.get_last_lr()[0]:.2e}",
+            flush=True,
+        )
+    elif resume_from:
+        print("checkpoint carries weights only; optimiser and schedule start fresh", flush=True)
+    progress = ProgressLog(total_steps, config.log_every)
     model.train()
 
-    for epoch in range(config.epochs):
+    for epoch in range(start_epoch, config.epochs):
+        if step >= total_steps:
+            break
+        # Captured before the shuffle: a checkpoint inside this epoch stores it,
+        # so the resumed run reproduces the same order and skips what it saw.
+        rng_before_epoch = rng.getstate()
         order = list(train)
         # Shuffled before bucketing so window membership differs per epoch; the
         # batcher then sorts within each window and shuffles the batch order.
         rng.shuffle(order)
-        for group in batcher(order, epoch=epoch):
+        groups = batcher(order, epoch=epoch)
+        step_in_epoch = 0
+        if epoch == start_epoch and skip_groups:
+            for _ in range(skip_groups):
+                next(groups, None)
+            step_in_epoch = skip_groups
+            skip_groups = 0
+        for group in groups:
             batch = to_device(collator(group), device)
             logits = candidate_logits(model, batch, head)
             loss = decision_loss(
@@ -382,9 +418,25 @@ def run_training(
                 tokens=int(batch.attention_mask.sum()),
             )
             step += 1
+            step_in_epoch += 1
 
             if config.checkpoint_every and step % config.checkpoint_every == 0:
-                save_checkpoint(model, head, tokenizer, output, step, on_checkpoint)
+                save_checkpoint(
+                    model,
+                    head,
+                    tokenizer,
+                    output,
+                    step,
+                    on_checkpoint,
+                    state={
+                        "step": step,
+                        "epoch": epoch,
+                        "step_in_epoch": step_in_epoch,
+                        "optimiser": optimiser.state_dict(),
+                        "scheduler": scheduler.state_dict(),
+                        "rng_before_epoch": rng_before_epoch,
+                    },
+                )
                 last_saved = step
                 # Alongside the weights, not only at the end: a run that dies at
                 # step 17,000 should still leave its loss curve behind.
@@ -405,6 +457,14 @@ def run_training(
         flush=True,
     )
     return summary
+
+
+def _read_history(output: Path) -> list[dict]:
+    """The loss curve a previous run left behind, so a resumed run extends it."""
+    file = output / "history.json"
+    if not file.is_file():
+        return []
+    return json.loads(file.read_text()).get("history", [])
 
 
 def _write_history(output: Path, history: list[dict], step: int, output_dir: str) -> dict:

@@ -1,9 +1,13 @@
 """Reading and writing training checkpoints.
 
-A checkpoint is the LoRA adapter, the Mode B head and the tokenizer together.
-All three, because an adapter without the head it was trained beside cannot
-serve Mode B, and a tokenizer mismatch silently changes which label token ids
-the readout reads -- a failure that produces plausible numbers.
+A checkpoint is the LoRA adapter, the Mode B head and the tokenizer together,
+plus the training state -- optimiser moments, schedule position, step and
+epoch, and the RNG state that reproduces the epoch's data order. The first
+three are what a server needs; the rest is what lets a preempted run continue
+from where it stopped instead of replaying it from good weights (ADR-021).
+An adapter without the head it was trained beside cannot serve Mode B, and a
+tokenizer mismatch silently changes which label token ids the readout reads --
+a failure that produces plausible numbers.
 
 Separate from `loop` so that `lev.server` and `lev.train.calibration_run`, which
 only ever *read* a checkpoint, do not have to import the training loop to do it.
@@ -13,6 +17,22 @@ from __future__ import annotations
 
 from pathlib import Path
 
+TRAINING_STATE = "training_state.pt"
+
+
+def latest_checkpoint(output: str | Path) -> Path | None:
+    """The newest `step-N` under `output` that holds adapter weights, or None.
+
+    Newest by step number rather than mtime, because a resumed run rewrites
+    older directories.
+    """
+    source = Path(output)
+    steps = sorted(
+        (d for d in source.glob("step-*") if (d / "adapter_model.safetensors").is_file()),
+        key=lambda d: int(d.name.split("-")[1]),
+    )
+    return steps[-1] if steps else None
+
 
 def resolve_checkpoint(path: str | Path) -> Path:
     """Accept either a `step-N` directory or the parent holding several.
@@ -20,22 +40,35 @@ def resolve_checkpoint(path: str | Path) -> Path:
     `save_checkpoint` writes `<output_dir>/step-<n>`, but every caller naturally
     names `<output_dir>` -- the preset's output directory is what appears in the
     config, in the Modal volume layout and in the docs. Resolving the newest
-    step here means one spelling works everywhere, and "newest" is by step
-    number rather than mtime because a resumed run rewrites older directories.
+    step here means one spelling works everywhere.
     """
     source = Path(path)
     if (source / "adapter_model.safetensors").is_file():
         return source
-    steps = sorted(
-        (d for d in source.glob("step-*") if (d / "adapter_model.safetensors").is_file()),
-        key=lambda d: int(d.name.split("-")[1]),
-    )
-    if not steps:
+    latest = latest_checkpoint(source)
+    if latest is None:
         raise FileNotFoundError(
             f"no checkpoint under {source}: expected adapter weights there or in "
             f"a step-N subdirectory"
         )
-    return steps[-1]
+    return latest
+
+
+def load_training_state(path: str | Path) -> dict | None:
+    """The optimiser, schedule and position saved beside the weights, if any.
+
+    None for a checkpoint written before ADR-021 or by a run that saved weights
+    only; the caller then starts the optimiser and schedule fresh from the
+    restored weights, which is what every resume did before.
+    """
+    import torch
+
+    file = resolve_checkpoint(path) / TRAINING_STATE
+    if not file.is_file():
+        return None
+    # `weights_only=False`: the payload carries the RNG state (a tuple), not
+    # just tensors. The file is ours, written by `save_checkpoint`.
+    return torch.load(file, map_location="cpu", weights_only=False)
 
 
 def load_checkpoint(model, head, path: str | Path) -> None:
@@ -76,12 +109,23 @@ def load_checkpoint(model, head, path: str | Path) -> None:
         )
 
 
-def save_checkpoint(model, head, tokenizer, output: Path, step: int, on_checkpoint=None) -> Path:
-    """Write adapters, head and tokenizer together.
+def save_checkpoint(
+    model,
+    head,
+    tokenizer,
+    output: Path,
+    step: int,
+    on_checkpoint=None,
+    state: dict | None = None,
+) -> Path:
+    """Write adapters, head and tokenizer together, and the training state.
 
-    All three, because a LoRA adapter without the head it was trained beside
-    cannot serve Mode B, and a tokenizer mismatch silently changes which label
-    token ids the readout reads -- a failure that produces plausible numbers.
+    All three weights files, because a LoRA adapter without the head it was
+    trained beside cannot serve Mode B, and a tokenizer mismatch silently
+    changes which label token ids the readout reads -- a failure that produces
+    plausible numbers. `state` is what `run_training` needs to continue from
+    this exact step; it is written last, so a checkpoint interrupted mid-write
+    degrades to weights-only rather than to a corrupt state file.
     """
     import torch
 
@@ -91,6 +135,8 @@ def save_checkpoint(model, head, tokenizer, output: Path, step: int, on_checkpoi
     tokenizer.save_pretrained(path)
     if head is not None:
         torch.save(head.state_dict(), path / "mode_b_head.pt")
+    if state is not None:
+        torch.save(state, path / TRAINING_STATE)
     if on_checkpoint is not None:
         on_checkpoint()
     size = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())

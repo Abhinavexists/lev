@@ -732,6 +732,36 @@ its two training taxonomies.
 
 ---
 
+## ADR-021 — A checkpoint carries the training state, and a run resumes by default
+
+**Accepted.** Supersedes the weights-only resume that `run_training`'s docstring
+defended.
+
+The old position: restore the adapter and head only, let the optimiser and
+cosine schedule start over, because at ~2 h per run a repeated warmup is cheap
+and a half-restored optimiser is hard to reason about. Two things changed it.
+Runs are longer -- the 4B mixture rebuilt under ADR-020 carries long states
+(passages, prompt+response pairs), and the first-window ETA on the instruct run
+read 53 h -- and nothing ever *used* the checkpoints: `train` only resumed when
+handed a path, so a preemption followed by `make train` replayed the run from
+step 0 with 2,000-step checkpoints sitting unused on the volume. Writing state
+nobody reads is not durability.
+
+What a checkpoint now carries beside the weights: optimiser moments, scheduler
+position, step, epoch, the batch count within the epoch, and the Python RNG
+state captured before the epoch's shuffle. The resumed run reproduces that
+epoch's order, skips the batches it had already consumed, continues the
+schedule from the same position and appends to `history.json`. Tested through
+the real loop: the resumed run processes exactly the batches the uninterrupted
+one would have, across an epoch boundary too.
+
+`train` resumes from the newest checkpoint in the preset's directory unless
+told `--fresh`; `--resume <path>` still names one. `smoke` always starts fresh.
+A checkpoint without a state file -- any written before this -- restores
+weights only and behaves as before, so nothing already on the volume is
+stranded. The state file is written after the weights, so an interrupted save
+degrades to weights-only rather than to a corrupt state.
+
 ---
 
 ## Open questions

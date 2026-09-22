@@ -160,7 +160,12 @@ def cmd_train(args: argparse.Namespace) -> None:
     if args.output_dir:
         config.output_dir = args.output_dir
     summary = run_training(
-        config, args.data, model_cache=args.model_cache, max_steps=args.max_steps
+        config,
+        args.data,
+        model_cache=args.model_cache,
+        resume_from=args.resume,
+        max_steps=args.max_steps,
+        fresh=args.fresh,
     )
     print(
         f"{summary['steps']} steps  "
@@ -224,17 +229,17 @@ def main(argv: list[str] | None = None) -> None:
     serve_parser.add_argument("--model", default="Qwen/Qwen3.5-4B-Base")
     serve_parser.add_argument("--model-cache", default=None)
     serve_parser.add_argument("--calibration", default=None)
-    serve_parser.add_argument("--host", default="127.0.0.1")
-    serve_parser.add_argument("--port", type=int, default=8000)
-    serve_parser.set_defaults(func=cmd_serve)
-
-    data_parser = sub.add_parser("data", help="build the training mixture and the eval set")
     serve_parser.add_argument(
         "--noul-readout",
         choices=["rating", "binary"],
         default=None,
         help="default: rating with a checkpoint, binary without one",
     )
+    serve_parser.add_argument("--host", default="127.0.0.1")
+    serve_parser.add_argument("--port", type=int, default=8000)
+    serve_parser.set_defaults(func=cmd_serve)
+
+    data_parser = sub.add_parser("data", help="build the training mixture and the eval set")
     data_sub = data_parser.add_subparsers(dest="data_command", required=True)
 
     build_parser = data_sub.add_parser("build", help="download, split and write the mixture")
@@ -276,3 +281,25 @@ def main(argv: list[str] | None = None) -> None:
     )
     s1_export.set_defaults(func=cmd_s1bench_export)
 
+    train_parser = sub.add_parser("train", help="run the LoRA fine-tune")
+    train_parser.add_argument("--preset", default="4b", choices=_preset_names())
+    train_parser.add_argument("--data", default="data/mixture")
+    train_parser.add_argument("--output-dir", default=None)
+    train_parser.add_argument("--model-cache", default=None)
+    train_parser.add_argument(
+        "--max-steps", type=int, default=None, help="stop early; for smoke runs"
+    )
+    train_parser.add_argument(
+        "--resume", default=None, help="a step-N directory; default: newest in --output-dir"
+    )
+    train_parser.add_argument(
+        "--fresh", action="store_true", help="ignore existing checkpoints and start over"
+    )
+    train_parser.set_defaults(func=cmd_train)
+
+    args = parser.parse_args(argv)
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

@@ -163,8 +163,14 @@ def train(
     resume: str | None = None,
     dry_run: bool = False,
     max_steps: int | None = None,
+    fresh: bool = False,
 ) -> dict:
-    """Fine-tune on one H100. See `lev.train.config.PRESETS`."""
+    """Fine-tune on one H100. See `lev.train.config.PRESETS`.
+
+    Resumes from the newest checkpoint in the preset's directory unless
+    `--fresh`; `--resume <path>` names one explicitly. A preempted run costs
+    at most `checkpoint_every` steps, which is the point of writing them.
+    """
     from lev.train.config import PRESETS
     from lev.train.loop import run_training
 
@@ -185,6 +191,7 @@ def train(
         model_cache=MODELS_DIR,
         resume_from=resume,
         max_steps=max_steps,
+        fresh=fresh,
         # Commit mid-run so a preemption near the end does not cost the whole run.
         on_checkpoint=lambda: checkpoints.commit(),
     )
@@ -226,7 +233,9 @@ def smoke(steps: int = 40) -> dict:
         print("data volume is empty; building a small mixture first")
         build_data.local(limit_per_source=2_000, n_examples=4_000)
 
-    summary = train.local(preset="smoke", max_steps=steps)
+    # Always from scratch: a smoke test that resumed a previous smoke would
+    # skip the very steps it exists to exercise.
+    summary = train.local(preset="smoke", max_steps=steps, fresh=True)
     losses = [h["loss"] for h in summary["history"]]
     modes = {h["mode"] for h in summary["history"]}
     if len(modes) < 2:
@@ -331,6 +340,14 @@ def serve():
     trained = output.is_dir() and (
         any(output.glob("step-*")) or (output / "adapter_model.safetensors").is_file()
     )
+
+    # A frozen model is a different backbone; the adapter trained on -Base
+    # cannot be applied to it, so the checkpoint is deliberately not loaded.
+    frozen = os.environ.get("LEV_SERVE_MODEL")
+    if frozen:
+        print(f"serving {frozen} frozen: no adapter, binary Noul, raw softmax")
+        return create_app(checkpoint_dir=None, model_cache=MODELS_DIR, model_id=frozen)
+
     if not trained:
         print(f"WARNING: nothing trained at {output}; serving the base backbone uncalibrated")
 
@@ -339,14 +356,6 @@ def serve():
         model_cache=MODELS_DIR,
         model_id=config.model_id,
     )
-
-
-    # A frozen model is a different backbone; the adapter trained on -Base
-    # cannot be applied to it, so the checkpoint is deliberately not loaded.
-    frozen = os.environ.get("LEV_SERVE_MODEL")
-    if frozen:
-        print(f"serving {frozen} frozen: no adapter, binary Noul, raw softmax")
-        return create_app(checkpoint_dir=None, model_cache=MODELS_DIR, model_id=frozen)
 
 
 @app.local_entrypoint()

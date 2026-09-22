@@ -75,8 +75,8 @@ smoke-local: ## Train 0.8B on CPU for a few steps — proves the path without Mo
 smoke: ## Modal: exercise the whole training path on 0.8B (~5 min of H100)
 	modal run modal/app.py::smoke
 
-train: ## Modal: the real run (PRESET=4b, ~2h on one H100)
-	modal run modal/app.py::train --preset $(PRESET)
+train: ## Modal: the real run; resumes the newest checkpoint (FRESH=1 to start over, RESUME=path)
+	modal run modal/app.py::train --preset $(PRESET) $(if $(FRESH),--fresh,) $(if $(RESUME),--resume $(RESUME),)
 
 calibrate: ## Modal: fit per-bucket temperatures after training
 	modal run modal/app.py::calibrate --preset $(PRESET)
