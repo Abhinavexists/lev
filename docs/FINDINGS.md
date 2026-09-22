@@ -403,3 +403,144 @@ Pricing       input $0.042/M, output free                    [VENDOR]
 ```
 
 Official Claude Code skill: `claude plugin marketplace add typesafe-ai/skills` then `claude plugin install typesafe@typesafe-ai`. [DOCS]
+
+---
+
+## 12. First head-to-head on S1Bench: two named failure modes
+
+Run 2026-09-22. 1,999 items across the six S1Bench subsets that actually
+executed in `s1-fast`, exported by `lev s1bench export` and scored through one
+`levbench eval --tasks` against both backends, so the prompts are identical and
+a gap is attributable to the model rather than to the harness.
+
+**The harness reproduces Jev.** Jev on our task files against its own recorded
+accuracy, with the 95% band for a difference of two independent samples:
+
+| subset | n | Jev here | S1Bench | delta pp | band |
+|---|---|---|---|---|---|
+| aegis2 | 250 | 0.832 | 0.836 | -0.4 | ±6.5 |
+| boolq | 300 | 0.910 | 0.893 | +1.7 | ±4.8 |
+| helpsteer2 | 250 | 0.304 | 0.348 | -4.4 | ±8.2 |
+| vitaminc-dev | 599 | 0.846 | 0.803 | +4.3 | ±4.4 |
+| massive-en-US | 350 | 0.814 | 0.874 | -6.0 | ±5.4 |
+| paws | 250 | 0.820 | 0.896 | -7.6 | ±6.1 |
+
+Four sit inside sampling noise; `massive` and `paws` fall marginally outside, so
+our wording is slightly harder than Jev's on those two. `helpsteer2` reproducing
+at 0.304 is the load-bearing check -- a harness matching only the high numbers
+would more likely be mis-scoring than correct. This validation is what makes the
+rest of the section interpretable: our prompts are not Jev's and cannot be
+diffed against them, so without it every gap below would have two explanations.
+
+**The comparison.** Macro 0.489 against Jev's 0.754, on identical files. Jev's
+own published macro is 0.768, a third sign the harness is sound.
+
+| subset | lev | Jev | gap |
+|---|---|---|---|
+| boolq | 0.803 | 0.910 | -10.7 |
+| paws | 0.712 | 0.820 | -10.8 |
+| helpsteer2 | 0.240 | 0.304 | -6.4 |
+| vitaminc-dev | 0.578 | 0.846 | -26.8 |
+| massive-en-US | 0.291 | 0.814 | -52.3 |
+| aegis2 | 0.312 | 0.832 | -52.0 |
+
+The two collapses are separate defects, both isolated by follow-up probes rather
+than inferred from the table.
+
+### Noul does not condition on the question's polarity
+
+aegis2's 0.312 is below *every* constant predictor (always-safe scores 0.388,
+always-unsafe 0.612), and confidence runs backwards: accuracy 0.574 in the
+[0.5,0.6) bin against 0.034 in [0.9,1.0). Asking the same 120 states both ways
+through one request:
+
+    "Is this prompt unsafe?"  accuracy 0.308
+    "Is this prompt safe?"    accuracy 0.775
+
+Accuracy alone cannot explain that. The two sum to 1.083, and a model that
+ignores the instruction entirely -- emitting one state-dependent score into both
+slots -- sums to exactly 1.000 by construction, since each item contributes one
+correct answer between the two framings. Only the per-item probabilities
+separate "reads polarity but inverted" from "ignores the question":
+
+    mean(p_unsafe + p_safe)   0.713    1.00 would mean complementary
+    mean|p_unsafe - p_safe|   0.079    0.00 means the question is ignored
+    89/120 items differ by <0.10;  23/120 sum to within 0.10 of 1.0
+
+The pairs are near-identical rather than complementary. The model returns
+roughly the same number whichever way it is asked, so it is not reading the
+polarity and inverting it -- on this subset it is not conditioning on
+`instructions` at all.
+
+The underlying signal is real: that state-only score tracks actual safety well
+enough to reach 0.775 when it happens to be read as P(safe), which is why the
+positive framing looks competent. What is missing is that the question does not
+modulate it. Noul supervision came only from imdb and rotten_tomatoes, where
+yes = positive = good, so the model learned a benignness prior over states
+rather than a function of the question.
+
+This is not a blanket failure of Noul: boolq (0.803 against a 0.603 base rate)
+and paws (0.712 against 0.520) both beat their base rates, so the question does
+carry on subsets whose yes-axis is goodness-aligned or neutral. The fix is the
+same in either case -- Noul needs training questions whose "yes" denotes the
+undesirable outcome.
+
+### massive-en-US never reached Mode B
+
+The 0.291 was read as a Mode B result -- 60 options is over the 26 single-letter
+codes -- and two follow-up probes were reported as Mode B transfer behaviour.
+Both readings were wrong, and the correction matters more than the number.
+
+The router is tokenizer-verified, not count-based, and Qwen3.5's 248k vocabulary
+encodes every two-letter code up to `BP` as one token:
+
+    n=60   single-token codes 60/60  -> Mode A
+    n=77   single-token codes 76/77  -> Mode B   (`BQ` is the first that splits)
+
+The live server confirms it: a 60-option Choice cost 839 input tokens (the
+options were listed in the prompt, which only Mode A does) and a 77-option one
+cost 28 (Mode B lists nothing). So massive ran in Mode A, with two-letter codes
+the model had never seen, over a candidate set four times larger than any it had
+trained on in that mode (dbpedia_14, 14 options). The Mode B head sat idle.
+
+That also explains the order sensitivity. Same 60 items, same options, two
+orders: argmax agreement 0.15, mean L1 between the distributions 1.23. Identical
+order, same request: L1 0.0000. A GPU diagnostic (`modal run
+modal/app.py::diagnose_candidates`) rules out the candidate encoder -- a string's
+representation is bit-identical across batch orders, `max_abs 0.0`. What is left
+is the one mechanism that *is* order-dependent by construction: letter-position
+bias in Mode A, which reflex measured on the same backbone and cancels by reading
+each question in two option orders.
+
+Consequently the "60 options 0.375 / 30 options 0.592" probes measured Mode A
+with lettered codes, not the candidate-path head, and **Mode B on an unseen
+taxonomy is untested**. banking77 and clinc_oos were both training sources, so
+0.87 there was held-out rows, not held-out labels.
+
+Two fixes follow, neither needing retraining (ADR-020): a policy cap of 26 on
+Mode A applied identically in training and serving, so anything above single
+letters goes to the head that was trained for large sets; and two-order
+averaging for Choice and binary Noul.
+
+**Redeployed with the cap, same checkpoint, same files** (`/health` reports
+`max_label_options: 26`): massive-en-US now costs 41 input tokens per item
+instead of 664 -- it is in Mode B -- and scores **0.166**. That is the first
+real Mode B transfer number: ten times chance (1/60), and well calibrated about
+its own ignorance (ECE 0.076; the 142 items it placed in the 0-0.1 bin score
+0.070), but far below Mode A's 0.291 and Jev's 0.814. The head learned some
+general matching and mostly its two training taxonomies. The option key
+format is not the cause: snake_case keys and humanised keys score identically,
+0.140 on the same 150 items. More taxonomies in the mixture is the fix, and it
+needs a retrain.
+
+Two-order averaging moved vitaminc 0.578 -> 0.588 and helpsteer2 0.240 ->
+0.216, both inside sampling noise -- but helpsteer2 is a Score, and reversing
+an ordered scale shows the model a prompt training never produces. Averaging
+is now limited to Choice and binary Noul. aegis2, boolq and paws are unchanged
+to three decimals, as expected: nothing in the rating-scale Noul path changed.
+
+### Caveat
+
+Calibration was fitted on lev's own mixture, and all six subsets are
+out-of-distribution for it, so the ECE figures from this run are not comparable
+to the 0.0529 measured on the held-out split.

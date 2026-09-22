@@ -28,3 +28,4 @@ wandb/
 # without carrying hundreds of MB in git.
 data/mixture/
 data/eval/
+data/s1bench/

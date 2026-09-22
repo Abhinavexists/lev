@@ -135,3 +135,23 @@ def assert_clean(dataset_names: Iterable[str]) -> None:
             "Remove them. Training on an evaluation subset invalidates the calibration "
             "result this project exists to produce. See docs/ARCHITECTURE.md §5.7."
         )
+def assert_eval_only(dataset_name: str) -> str:
+    """The mirror of `assert_clean`: raise unless `dataset_name` *is* a blocked
+    subset, and return the subset it resolves to.
+
+    The evaluation harness has to load the thirteen, so it needs a door the
+    training path does not have. Making that door open only onto blocked subsets
+    is what stops it becoming a general-purpose loader -- one that would quietly
+    grow a second route into the mixture and undo the guard it sits beside.
+    """
+    subset = resolve(dataset_name)
+    if subset is None:
+        raise ContaminationError(
+            f"{dataset_name!r} is not an S1Bench evaluation subset. This loader "
+            f"exists only to read the thirteen blocked subsets for evaluation; "
+            f"training data must go through the normal source registry, which is "
+            f"checked by `assert_clean`."
+        )
+    return subset
+
+

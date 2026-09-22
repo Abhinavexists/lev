@@ -137,6 +137,21 @@ def cmd_eval_parser(args: argparse.Namespace) -> None:
 
 def cmd_train(args: argparse.Namespace) -> None:
     from .train.config import PRESETS
+def cmd_s1bench_export(args: argparse.Namespace) -> None:
+    """Export the S1Bench evaluation subsets as levbench task files."""
+    from .data.s1bench import export
+
+    index = export(args.out, args.subsets, args.limit)
+    print(f"wrote {index['total_items']:,} items to {args.out} (seed {index['seed']})")
+    print(f"  {'subset':<16}{'items':>7}{'type':>8}{'jev':>8}")
+    for subset, info in index["subsets"].items():
+        print(f"  {subset:<16}{info['items']:>7,}{info['type']:>8}{info['jev_measured']:>8.4f}")
+    print("\n  validate the harness against Jev first:")
+    print(f"    uv run levbench eval --backend jev --tasks {args.out}")
+    print("  then score lev on the same files:")
+    print(f"    uv run levbench eval --backend lev --tasks {args.out} --base-url $URL")
+
+
     from .train.loop import run_training
 
     config = PRESETS[args.preset]
@@ -245,3 +260,20 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
+    s1_parser = sub.add_parser(
+        "s1bench", help="export the S1Bench evaluation subsets (evaluation only)"
+    )
+    s1_sub = s1_parser.add_subparsers(dest="s1bench_command", required=True)
+    s1_export = s1_sub.add_parser("export", help="write the subsets as levbench task files")
+    s1_export.add_argument("--out", default="data/s1bench")
+    s1_export.add_argument(
+        "--subsets",
+        nargs="*",
+        default=None,
+        help="subset names; defaults to all six with a measured Jev accuracy",
+    )
+    s1_export.add_argument(
+        "--limit", type=int, default=None, help="rows per subset; defaults to the count S1Bench ran"
+    )
+    s1_export.set_defaults(func=cmd_s1bench_export)
+

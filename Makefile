@@ -5,16 +5,17 @@
 PRESET ?= 4b
 OUT    ?= data/mixture
 EVAL   ?= data/eval
+S1     ?= data/s1bench
 LIMIT  ?= 20000
 STEPS  ?= 20
 URL    ?= http://localhost:8000
 
 .PHONY: help setup setup-train setup-serve setup-modal test lint fmt check \
-        bench bench-local sweep plan check-data data eval-set smoke smoke-local \
+        bench bench-local sweep plan check-data data eval-set s1bench smoke smoke-local \
         train calibrate serve clean
 
 help: ## Show this help
-	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
+	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
 setup: ## Install the workspace (CPU only; no torch)
@@ -62,6 +63,9 @@ data: ## Build the training mixture locally (LIMIT=rows per source)
 
 eval-set: ## Export the held-out split as levbench task files
 	uv run lev data eval --data $(OUT) --out $(EVAL)
+
+s1bench: ## Export the S1Bench eval subsets as levbench task files
+	uv run lev s1bench export --out $(S1)
 
 smoke-local: ## Train 0.8B on CPU for a few steps — proves the path without Modal
 	uv run lev data build --out /tmp/lev-mix --limit-per-source 2000 --n-examples 4000
