@@ -31,6 +31,7 @@ from lev.data.splits import (
 from lev.labels import NOUL_RATING_TOKENS
 from lev.prompt import Layout
 from lev.router import candidate_count
+from lev.types import Choice, Noul, Score
 
 
 class FakeFeature:
@@ -368,3 +369,288 @@ class TestModeBPrompt:
             ["A", "B"],
         ).full
         assert "  A: alpha" in text and "  B: beta" in text
+
+
+class TestReaders:
+    """Per-row readers are pure functions; drive them with the real column shapes."""
+
+    def test_race_maps_the_answer_letter_to_an_index(self):
+        import random
+
+        from lev.data.sources import _read_race
+
+        row = {"article": "A.", "question": "Q?", "options": ["w", "x", "y", "z"], "answer": "C"}
+        state, options, target = _read_race(row, random.Random(0))
+        assert options[target] == "y"
+        assert state == {"passage": "A.", "question": "Q?"}
+
+    def test_keyed_choices_match_arc_numeric_keys(self):
+        import random
+
+        from lev.data.sources import _read_keyed_choices
+
+        row = {
+            "question": "Q?",
+            "choices": {"label": ["1", "2", "3"], "text": ["a", "b", "c"]},
+            "answerKey": "3",
+        }
+        _, options, target = _read_keyed_choices("question")(row, random.Random(0))
+        assert options[target] == "c"
+
+    def test_keyed_choices_attach_context_when_present(self):
+        import random
+
+        from lev.data.sources import _read_keyed_choices
+
+        row = {
+            "question_stem": "Q?",
+            "fact1": "F.",
+            "choices": {"label": ["A", "B"], "text": ["a", "b"]},
+            "answerKey": "B",
+        }
+        state, _, _ = _read_keyed_choices("question_stem", "fact1")(row, random.Random(0))
+        assert state == {"question": "Q?", "context": "F."}
+
+    def test_sciq_shuffles_but_keeps_the_gold_index_right(self):
+        import random
+
+        from lev.data.sources import _read_sciq
+
+        row = {
+            "question": "Q?",
+            "support": "",
+            "correct_answer": "gold",
+            "distractor1": "d1",
+            "distractor2": "d2",
+            "distractor3": "d3",
+        }
+        seen_first = set()
+        for seed in range(20):
+            _, options, target = _read_sciq(row, random.Random(seed))
+            assert options[target] == "gold"
+            seen_first.add(options[0])
+        assert len(seen_first) > 1, "the gold answer must not always sit first"
+
+    def test_sciq_skips_duplicate_options(self):
+        import random
+
+        from lev.data.sources import _read_sciq
+
+        row = {
+            "question": "Q?",
+            "support": "",
+            "correct_answer": "x",
+            "distractor1": "x",
+            "distractor2": "y",
+            "distractor3": "z",
+        }
+        assert _read_sciq(row, random.Random(0)) is None
+
+    def test_nli_skips_rows_without_gold(self):
+        import random
+
+        from lev.data.sources import _read_nli
+
+        assert _read_nli({"premise": "p", "hypothesis": "h", "label": -1}, random.Random(0)) is None
+        _, options, target = _read_nli(
+            {"premise": "p", "hypothesis": "h", "label": 2}, random.Random(0)
+        )
+        assert options is None and target == 2
+
+    def test_toxigen_uses_the_dataset_threshold(self):
+        import random
+
+        from lev.data.sources import _read_toxigen
+
+        assert _read_toxigen({"text": "t", "toxicity_human": 2.9}, random.Random(0))[2] == 0
+        assert _read_toxigen({"text": "t", "toxicity_human": 3.0}, random.Random(0))[2] == 1
+        assert _read_toxigen({"text": "t", "toxicity_human": None}, random.Random(0)) is None
+
+    def test_beavertails_yes_means_safe(self):
+        import random
+
+        from lev.data.sources import _read_beavertails
+
+        row = {"prompt": "p", "response": "r", "is_safe": True}
+        assert _read_beavertails(row, random.Random(0))[2] == 1
+
+    def test_ultrafeedback_flattens_completions_and_drops_bad_ratings(self):
+        import random
+
+        from lev.data.sources import _read_ultrafeedback
+
+        row = {
+            "instruction": "do x",
+            "completions": [
+                {"response": "a", "annotations": {"helpfulness": {"Rating": "5"}}},
+                {"response": "b", "annotations": {"helpfulness": {"Rating": "N/A"}}},
+                {"response": "", "annotations": {"helpfulness": {"Rating": "3"}}},
+                {"response": "c", "annotations": {"helpfulness": {"Rating": "1"}}},
+            ],
+        }
+        rows = _read_ultrafeedback(row, random.Random(0))
+        assert [(r[0]["response"], r[2]) for r in rows] == [("a", 4), ("c", 0)]
+
+    def test_snips_unknown_category_is_skipped(self):
+        import random
+
+        from lev.data.sources import SNIPS_INTENTS, _read_snips
+
+        assert _read_snips({"text": "t", "category": "Nope"}, random.Random(0)) is None
+        assert _read_snips({"text": "t", "category": "GetWeather"}, random.Random(0))[2] == (
+            SNIPS_INTENTS.index("GetWeather")
+        )
+
+    def test_humanise_splits_camel_case(self):
+        assert humanise("SearchScreeningEvent") == "Search Screening Event"
+        assert humanise("card_arrival") == "card arrival"
+
+
+class TestReaderSources:
+    def test_per_row_options_become_per_row_questions(self):
+        rows = [
+            {
+                "article": "A",
+                "question": f"Q{i}",
+                "options": ["w", "x", "y", "z"],
+                "answer": "ABCD"[i % 4],
+            }
+            for i in range(8)
+        ]
+
+        def loader(hf_id, config=None, split=None, cache_dir=None, **kw):
+            return FakeDataset(rows, {})
+
+        examples = list(load_source(REGISTRY["race"], load_dataset=loader))
+        assert len(examples) == 8
+        assert all(
+            isinstance(e.question, Choice) and len(e.question.criteria) == 4 for e in examples
+        )
+        assert [list(e.question.criteria)[e.target] for e in examples] == ["w", "x", "y", "z"] * 2
+
+    def test_noul_reader_targets_land_on_the_rating_ends(self):
+        rows = [{"text1": "a", "text2": "b", "label": 1}, {"text1": "c", "text2": "d", "label": 0}]
+
+        def loader(hf_id, config=None, split=None, cache_dir=None, **kw):
+            return FakeDataset(rows, {})
+
+        examples = list(load_source(REGISTRY["mrpc"], load_dataset=loader))
+        assert [e.target for e in examples] == [len(NOUL_RATING_TOKENS) - 1, 0]
+        assert examples[0].state == {"sentence1": "a", "sentence2": "b"}
+
+    def test_every_noul_source_carries_a_negation(self):
+        """The aegis2 failure: Noul learned yes = good because no training
+        question ever made yes the bad outcome."""
+        for name, spec in REGISTRY.items():
+            if spec.primitive == "noul":
+                assert spec.negations, f"{name} has no negated question"
+
+    def test_augmentation_map_keeps_mode_b_sources_above_the_cap(self):
+        from lev.data.sources import augmentation_map
+
+        aug = augmentation_map()
+        for name in MODE_B_SOURCES:
+            assert aug[name].min_options == SINGLE_TOKEN_CODE_CEILING + 1
+        assert aug["ag_news"].min_options == 2
+
+
+class TestAugmentation:
+    def choice_pool(self, n_options=10, n=40):
+        q = Choice(
+            instructions="canonical",
+            criteria={f"opt{i}": f"desc {i}" for i in range(n_options)},
+        )
+        return [an_example(q, target=i % n_options, source="c", state=f"s{i}") for i in range(n)]
+
+    def run(self, pool, augment, **knobs):
+        from lev.data.mixture import Augment
+
+        spec = MixtureSpec(
+            sources={"c": 1.0},
+            n_examples=600,
+            abstain_fraction=knobs.pop("abstain_fraction", 0.0),
+            augment={"c": Augment(**augment)},
+            **knobs,
+        )
+        return list(build_mixture(spec, {"c": lambda: pool}))
+
+    def test_paraphrases_are_sampled_and_canonical_survives(self):
+        out = self.run(self.choice_pool(), {"paraphrases": ("p1", "p2")}, paraphrase_fraction=0.5)
+        seen = {e.question.instructions for e in out}
+        assert seen == {"canonical", "p1", "p2"}
+
+    def test_subsampling_keeps_the_gold_option_and_reindexes(self):
+        out = self.run(self.choice_pool(), {"min_options": 2}, subsample_fraction=1.0)
+        sizes = {len(e.question.criteria) for e in out}
+        assert min(sizes) >= 2 and max(sizes) < 10, sizes
+        for e in out:
+            key = list(e.question.criteria)[e.target]
+            original_index = int(key.removeprefix("opt"))
+            assert original_index == int(e.state.removeprefix("s")) % 10
+
+    def test_mode_b_floor_is_respected(self):
+        out = self.run(self.choice_pool(n_options=30), {"min_options": 27}, subsample_fraction=1.0)
+        assert all(len(e.question.criteria) >= 27 for e in out)
+
+    def test_descriptions_are_sometimes_withheld(self):
+        out = self.run(self.choice_pool(), {}, description_dropout=0.5, subsample_fraction=0.0)
+        with_desc = [e for e in out if any(v for v in e.question.criteria.values())]
+        without = [e for e in out if not any(v for v in e.question.criteria.values())]
+        assert with_desc and without
+
+    def test_order_is_shuffled_but_shuffle_is_not_universal(self):
+        out = self.run(self.choice_pool(), {}, subsample_fraction=0.0, shuffle_fraction=0.5)
+        canonical = [f"opt{i}" for i in range(10)]
+        orders = [list(e.question.criteria) for e in out]
+        assert any(o == canonical for o in orders) and any(o != canonical for o in orders)
+
+    def test_negation_flips_the_noul_target(self):
+        q = Noul(instructions="is it good?")
+        top = len(NOUL_RATING_TOKENS) - 1
+        pool = [
+            an_example(q, target=top if i % 2 else 0, source="c", state=f"s{i}") for i in range(40)
+        ]
+        out = self.run(pool, {"negations": ("is it bad?",)}, negate_fraction=1.0)
+        for e in out:
+            assert e.question.instructions == "is it bad?"
+            original = top if int(e.state.removeprefix("s")) % 2 else 0
+            assert e.target == top - original
+
+    def test_negation_never_touches_abstain_rows(self):
+        q = Noul(instructions="is it good?")
+        pool = [an_example(q, target=8, source="c", state=f"s{i}") for i in range(40)]
+        pool += [an_example(a_choice(3), target=0, source="d", state=f"d{i}") for i in range(40)]
+        from lev.data.mixture import Augment
+
+        spec = MixtureSpec(
+            sources={"c": 0.5, "d": 0.5},
+            n_examples=400,
+            abstain_fraction=0.5,
+            negate_fraction=1.0,
+            augment={"c": Augment(negations=("is it bad?",))},
+        )
+        out = list(build_mixture(spec, {"c": lambda: pool[:40], "d": lambda: pool[40:]}))
+        for e in out:
+            if e.source == "c" and e.abstain:
+                assert e.question.instructions == "is it good?"
+                assert e.soft_target is not None and len(e.soft_target) == len(NOUL_RATING_TOKENS)
+
+    def test_abstain_soft_target_matches_the_subsampled_candidate_count(self):
+        out = self.run(
+            self.choice_pool(), {"min_options": 2}, subsample_fraction=1.0, abstain_fraction=0.5
+        )
+        for e in out:
+            if e.abstain:
+                assert len(e.soft_target) == len(e.question.criteria)
+
+    def test_scores_keep_their_level_order(self):
+        q = Score(instructions="how", criteria=["low", "mid", "high"])
+        pool = [an_example(q, target=i % 3, source="c", state=f"s{i}") for i in range(30)]
+        out = self.run(pool, {"paraphrases": ("p",)}, subsample_fraction=1.0, shuffle_fraction=1.0)
+        assert all(e.question.criteria == ["low", "mid", "high"] for e in out)
+
+    def test_no_augment_entry_means_canonical_questions(self):
+        pool = self.choice_pool()
+        spec = MixtureSpec(sources={"c": 1.0}, n_examples=100)
+        out = list(build_mixture(spec, {"c": lambda: pool}))
+        assert all(e.question is pool[0].question for e in out)

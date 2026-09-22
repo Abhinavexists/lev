@@ -118,7 +118,16 @@ def _hf_secrets() -> list:
     return [modal.Secret.from_dict({"HF_TOKEN": token})] if token else []
 
 
-SECRETS = _hf_secrets()
+def _serve_overrides() -> list:
+    """`LEV_SERVE_MODEL=Qwen/Qwen3.5-4B modal serve modal/app.py` serves that
+    checkpoint frozen -- no adapter, binary Noul -- which is the zero-shot
+    baseline every trained run has to beat (reflex-4b: 0.719 on S1Bench).
+    Local env does not reach the container, so it travels as a Secret."""
+    model = os.environ.get("LEV_SERVE_MODEL")
+    return [modal.Secret.from_dict({"LEV_SERVE_MODEL": model})] if model else []
+
+
+SECRETS = _hf_secrets() + _serve_overrides()
 
 
 @app.function(volumes={MODELS_DIR: models}, secrets=SECRETS, timeout=60 * 60)
@@ -332,8 +341,121 @@ def serve():
     )
 
 
+    # A frozen model is a different backbone; the adapter trained on -Base
+    # cannot be applied to it, so the checkpoint is deliberately not loaded.
+    frozen = os.environ.get("LEV_SERVE_MODEL")
+    if frozen:
+        print(f"serving {frozen} frozen: no adapter, binary Noul, raw softmax")
+        return create_app(checkpoint_dir=None, model_cache=MODELS_DIR, model_id=frozen)
+
+
 @app.local_entrypoint()
 def main(preset: str = "4b", dry_run: bool = True):
     """Default entrypoint: print the budget without spending it."""
     result = train.remote(preset=preset, dry_run=dry_run)
     print(result)
+
+
+@app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=30 * 60)
+def diagnose_candidates(model_id: str = "Qwen/Qwen3.5-4B-Base") -> dict:
+    """Is a candidate string's representation independent of its batch neighbours?
+
+    Mode B embeds each option string by running the whole option set through
+    the backbone as one right-padded batch and reading the last real position.
+    The head is permutation-invariant, yet reordering the options changes the
+    served distribution almost entirely (L1 1.23 on massive-en-US). If a
+    string's vector differs between "alone" and "in a batch", or between two
+    batch orders, the padded forward is leaking across rows and every Mode B
+    representation the head was trained on was position-contaminated.
+    """
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(model_id, cache_dir=MODELS_DIR)
+    model = (
+        AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16, cache_dir=MODELS_DIR)
+        .cuda()
+        .eval()
+    )
+    texts = [
+        "datetime query",
+        "iot hue lightchange",
+        "transport ticket",
+        "takeaway query",
+        "qa stock",
+        "general greet",
+        "recommendation events",
+        "music dislikeness",
+        "iot wemo off",
+        "cooking recipe",
+        "qa currency",
+        "transport traffic",
+        "general quirky",
+        "weather query",
+        "audio volume up",
+        "email addcontact",
+        "takeaway order",
+        "email querycontact",
+        "iot hue lightup",
+        "recommendation locations",
+        "play audiobook",
+        "lists createoradd",
+        "news query",
+        "alarm query",
+        "iot wemo on",
+        "general joke",
+        "qa definition",
+        "social query",
+        "music settings",
+        "audio volume other",
+        "calendar remove",
+        "iot hue lightdim",
+        "calendar query",
+        "email sendemail",
+        "iot cleaning",
+        "audio volume down",
+        "play radio",
+        "cooking query",
+        "datetime convert",
+        "qa maths",
+    ]
+
+    def reprs(batch, side="right"):
+        tok.padding_side = side
+        enc = tok(batch, return_tensors="pt", padding=True, add_special_tokens=False).to("cuda")
+        with torch.no_grad():
+            hs = model(**enc, output_hidden_states=True, use_cache=False).hidden_states[-1]
+        last = (
+            enc["attention_mask"].sum(1) - 1
+            if side == "right"
+            else torch.full((len(batch),), hs.size(1) - 1, device="cuda")
+        )
+        return hs[torch.arange(len(batch), device="cuda"), last].float()
+
+    solo = torch.cat([reprs([t]) for t in texts])
+    in_order = reprs(texts)
+    reversed_ = reprs(texts[::-1]).flip(0)
+    left = reprs(texts, side="left")
+
+    def gap(a, b):
+        diff = (a - b).abs()
+        cos = torch.nn.functional.cosine_similarity(a, b, dim=-1)
+        return {
+            "max_abs": round(diff.max().item(), 4),
+            "mean_abs": round(diff.mean().item(), 5),
+            "min_cosine": round(cos.min().item(), 4),
+            "rows_changed": int((diff.max(dim=1).values > 1e-2).sum().item()),
+        }
+
+    report = {
+        "model": model_id,
+        "n_texts": len(texts),
+        "repr_norm_mean": round(solo.norm(dim=-1).mean().item(), 3),
+        "batch_vs_solo (right pad)": gap(in_order, solo),
+        "order_vs_reversed (right pad)": gap(in_order, reversed_),
+        "leftpad_vs_solo": gap(left, solo),
+        "attn_implementation": getattr(model.config, "_attn_implementation", None),
+    }
+    for key, value in report.items():
+        print(f"{key:<32} {value}")
+    return report

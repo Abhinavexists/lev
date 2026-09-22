@@ -63,7 +63,7 @@ def collect_logits(
     from ..data.build import load_split
     from ..data.splits import Split
     from ..train.checkpoints import load_checkpoint
-    from ..train.collate import DecisionCollator, ModeBatcher
+    from ..train.collate import DecisionCollator, ModeBatcher, RouteCache
     from ..train.config import PRESETS
     from ..train.loop import build_head, build_model, candidate_logits, device_of, to_device
 
@@ -79,8 +79,9 @@ def collect_logits(
     if limit:
         rows = rows[:limit]
 
-    collator = DecisionCollator(tokenizer, max_seq_len=config.max_seq_len)
-    batcher = ModeBatcher(tokenizer, batch_size=batch_size)
+    routes = RouteCache(tokenizer, config.max_label_options)
+    collator = DecisionCollator(tokenizer, max_seq_len=config.max_seq_len, routes=routes)
+    batcher = ModeBatcher(tokenizer, batch_size=batch_size, routes=routes)
     device = device_of(model)
 
     buckets: dict[str, list[tuple[list[float], int]]] = {}

@@ -145,7 +145,7 @@ def evaluate_split(
                 kept.append(row)
         rows = kept
 
-    routes = RouteCache(tokenizer)
+    routes = RouteCache(tokenizer, config.max_label_options)
     collator = DecisionCollator(tokenizer, max_seq_len=config.max_seq_len, routes=routes)
     # Bucketed like training: every row is scored exactly once whatever the
     # batch order, so the 4.4x padding saving is free here.

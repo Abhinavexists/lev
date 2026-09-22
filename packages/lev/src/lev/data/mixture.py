@@ -18,9 +18,10 @@ import random
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 
+from ..labels import NOUL_RATING_TOKENS
 from ..prompt import Layout
 from ..router import candidate_count
-from ..types import Question
+from ..types import Choice, Noul, Question, Score
 from .contamination import assert_clean
 
 
@@ -39,6 +40,21 @@ class Example:
     soft_target: list[float] | None = None
 
 
+@dataclass(frozen=True)
+class Augment:
+    """How one source's questions may be varied in the training mixture.
+
+    `negations` ask the opposite question, so the Noul target flips; they are
+    what stops "yes" meaning "good" in every training row. `min_options` is the
+    floor when a Choice is subsampled -- above the Mode A cap for Mode B sources,
+    so subsampling cannot quietly move them to the other readout.
+    """
+
+    paraphrases: tuple[str, ...] = ()
+    negations: tuple[str, ...] = ()
+    min_options: int = 2
+
+
 @dataclass
 class MixtureSpec:
     """Which sources to draw from, and in what proportion."""
@@ -51,6 +67,14 @@ class MixtureSpec:
     # source -> sources whose states must not be used as abstain donors,
     # because they would in fact answer the question. See `sources.ADJACENT`.
     adjacent: dict[str, frozenset[str]] = field(default_factory=dict)
+    # Training-only variation, per source. Empty means canonical questions only,
+    # which is what the held-out splits use. See ADR-020.
+    augment: dict[str, Augment] = field(default_factory=dict)
+    paraphrase_fraction: float = 0.7
+    negate_fraction: float = 0.5
+    subsample_fraction: float = 0.5
+    shuffle_fraction: float = 0.5
+    description_dropout: float = 0.3
 
     def validate(self) -> None:
         # Raises on any source colliding with an S1Bench evaluation subset. This
@@ -96,6 +120,14 @@ def build_mixture(spec: MixtureSpec, loaders: dict[str, Loader]) -> Iterator[Exa
 
         abstain = rng.random() < spec.abstain_fraction
         state = example.state
+        question, target = example.question, example.target
+        if (augment := spec.augment.get(source)) is not None:
+            # Negation flips the target, so it must not touch an abstain row,
+            # whose supervision is uniform regardless of polarity.
+            question, target = _vary(
+                question, target, augment, spec, rng, allow_negation=not abstain
+            )
+
         soft_target = None
         if abstain:
             # Replace the state, so the question becomes genuinely unanswerable,
@@ -103,20 +135,71 @@ def build_mixture(spec: MixtureSpec, loaders: dict[str, Loader]) -> Iterator[Exa
             # candidate is equally supported, and that is the calibrated answer
             # rather than a hedge. See ADR-012.
             state = _donor_state(pools, source, spec.adjacent, rng)
-            n_candidates = candidate_count(example.question)
+            n_candidates = candidate_count(question)
             soft_target = [1.0 / n_candidates] * n_candidates
 
         yield Example(
             state=state,
             name=example.name,
-            question=example.question,
+            question=question,
             # Kept for bookkeeping on abstain rows; the loss reads soft_target.
-            target=example.target,
+            target=target,
             layout=layout,
             source=source,
             abstain=abstain,
             soft_target=soft_target,
         )
+
+
+def _vary(
+    question: Question,
+    target: int,
+    augment: Augment,
+    spec: MixtureSpec,
+    rng: random.Random,
+    allow_negation: bool,
+) -> tuple[Question, int]:
+    """One training row's question, varied so the state alone cannot answer it.
+
+    Instruction: a paraphrase, or for a Noul a negation with the rating target
+    mirrored (0 <-> 8). Choice: a random subset of the options that keeps the
+    gold one, in shuffled order, sometimes with descriptions withheld -- so
+    codes, positions and option counts all vary across rows of one source.
+    Score levels are ordered and are never subsampled or reordered.
+    """
+    instructions = question.instructions
+    negate = isinstance(question, Noul) and augment.negations and allow_negation
+    if negate and rng.random() < spec.negate_fraction:
+        instructions = rng.choice(augment.negations)
+        target = (len(NOUL_RATING_TOKENS) - 1) - target
+        return Noul(instructions=instructions, criteria=question.criteria), target
+    if augment.paraphrases and rng.random() < spec.paraphrase_fraction:
+        instructions = rng.choice(augment.paraphrases)
+
+    if isinstance(question, Noul):
+        return Noul(instructions=instructions, criteria=question.criteria), target
+    if isinstance(question, Score):
+        return Score(instructions=instructions, criteria=question.criteria), target
+
+    options = list(question.criteria.items())
+    gold = options[target]
+    if len(options) > augment.min_options and rng.random() < spec.subsample_fraction:
+        k = rng.randint(augment.min_options, len(options) - 1)
+        others = [o for i, o in enumerate(options) if i != target]
+        options = [gold] + rng.sample(others, k - 1)
+        rng.shuffle(options)
+    elif rng.random() < spec.shuffle_fraction:
+        rng.shuffle(options)
+    if rng.random() < spec.description_dropout:
+        options = [(key, None) for key, _ in options]
+    return Choice(instructions=instructions, criteria=dict(options)), _index_of(options, gold[0])
+
+
+def _index_of(options: list[tuple[str, object]], key: str) -> int:
+    for i, (k, _) in enumerate(options):
+        if k == key:
+            return i
+    raise AssertionError(f"gold option {key!r} lost during augmentation")
 
 
 def _donor_state(

@@ -14,6 +14,15 @@ from __future__ import annotations
 from itertools import product
 from string import ascii_uppercase
 
+# Policy cap on Mode A, applied identically in training and serving. The
+# tokenizer limit is not the right boundary: Qwen3.5 encodes every two-letter
+# code up to `BP` as one token, so 60 options are *expressible* in Mode A --
+# and were served that way, in a regime the model had trained on at most 14
+# options in, with codes it had never seen. massive-en-US scored 0.291 there
+# while the Mode B head sat idle. Above single letters, route to the head that
+# was trained for large sets; see ADR-020.
+LABEL_OPTION_CAP = len(ascii_uppercase)
+
 
 def label_codes(n: int) -> list[str]:
     """First `n` codes: A..Z, then AA..ZZ, then AAA..ZZZ.

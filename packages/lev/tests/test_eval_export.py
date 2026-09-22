@@ -105,3 +105,25 @@ class TestExport:
         rows = [example(CHOICE, i % 2, i, source="a") for i in range(24)]
         with pytest.raises(ValueError, match="cannot tell you"):
             export(self.write_split(tmp_path / "mix", rows), tmp_path / "eval")
+
+
+class TestVariableQuestions:
+    def test_sources_whose_question_varies_per_row_are_skipped_and_listed(self, tmp_path):
+        """A task file has one question for all its items; per-row QA options
+        cannot be expressed in it, and must not be silently written under the
+        first row's option set."""
+        rows = [example(CHOICE, i % 2, i, source="a") for i in range(MIN_USEFUL_ITEMS + 10)]
+        rows += [
+            example(
+                Choice(instructions="q", criteria={f"o{i}": None, "z": None}), 0, i, source="qa"
+            )
+            for i in range(30)
+        ]
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        write_jsonl(tmp_path / SPLIT_FILES[Split.TEST], rows)
+        out = tmp_path / "eval"
+        index = export(tmp_path, out)
+
+        assert set(index["sources"]) == {"a"}
+        assert index["skipped_variable_question"] == ["qa"]
+        assert not (out / "qa.json").exists()

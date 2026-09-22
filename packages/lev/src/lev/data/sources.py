@@ -34,20 +34,21 @@ can run offline. A dead or renamed id surfaces only on the next real `data build
 
 from __future__ import annotations
 
+import random
 import re
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Literal
 
-from ..labels import NOUL_RATING_TOKENS
+from ..labels import LABEL_OPTION_CAP, NOUL_RATING_TOKENS
 from ..prompt import Layout
 from ..types import Choice, Noul, Question, Score
 from .contamination import assert_clean
-from .mixture import Example
+from .mixture import Augment, Example
 
-# Options beyond this many cannot get a single-token label code in any tokenizer
-# targeted here (A..Z is 26). Sources above it are the Mode B training signal.
-SINGLE_TOKEN_CODE_CEILING = 26
+# Sources with more options than the Mode A policy cap are the Mode B training
+# signal. The cap, not the tokenizer, draws this line -- see `labels.LABEL_OPTION_CAP`.
+SINGLE_TOKEN_CODE_CEILING = LABEL_OPTION_CAP
 
 # Sources known to exceed the ceiling but whose label names are read from the
 # dataset at load time, so `label_names` is None and the count is not visible
@@ -63,28 +64,186 @@ Primitive = Literal["choice", "score", "noul"]
 MODE_B_SHARE = 0.25
 
 
+# What a per-row reader returns: the state to show, the option texts if the row
+# carries its own (None means the source's fixed label set), and the gold index.
+Row = tuple[str | dict, list[str] | None, int]
+Reader = Callable[[dict, random.Random], Row | None]
+
+
 @dataclass(frozen=True)
 class SourceSpec:
-    """One HuggingFace dataset, and how to read a typed question out of it."""
+    """One HuggingFace dataset, and how to read a typed question out of it.
+
+    `instructions` is the canonical wording, used for the held-out splits.
+    `paraphrases` are alternatives the training mixture samples from, and
+    `negations` (Noul only) ask the opposite question so the target flips. With
+    one fixed wording per source the state alone identified the answer set and
+    the model learned to ignore the question -- measured on aegis2, where
+    "is this unsafe?" and "is this safe?" returned the same number. ADR-020.
+
+    `reader` handles sources whose rows are not `text_field` + `label_field`:
+    QA sets with per-row options, sentence pairs, nested rating annotations.
+    """
 
     name: str
     hf_id: str
-    text_field: str
-    label_field: str
     primitive: Primitive
     instructions: str
+    text_field: str = "text"
+    label_field: str = "label"
     hf_config: str | None = None
     split: str = "train"
+    revision: str | None = None
     # Only for sources whose ClassLabel names are absent or unusable.
     label_names: tuple[str, ...] | None = None
     descriptions: dict[str, str] = field(default_factory=dict)
+    paraphrases: tuple[str, ...] = ()
+    negations: tuple[str, ...] = ()
+    reader: Reader | None = None
 
     @property
     def is_mode_b(self) -> bool:
-        """True when the option set cannot fit single-token label codes."""
+        """True when the option set is over the Mode A cap."""
         if self.name in _LARGE_OPTION_SETS:
             return True
         return bool(self.label_names) and len(self.label_names) > SINGLE_TOKEN_CODE_CEILING
+
+
+# --- Per-row readers -------------------------------------------------------
+#
+# Each returns `(state, options, target)` or a list of them, or None to skip the
+# row. `options` is None when the source has a fixed label set. The `rng` is the
+# loader's seeded stream, so a reader that shuffles stays reproducible.
+
+
+def _read_race(row: dict, rng: random.Random) -> Row | None:
+    options = [str(o) for o in row["options"]]
+    index = ord(str(row["answer"]).strip().upper()[:1] or "?") - ord("A")
+    if len(options) < 2 or not 0 <= index < len(options):
+        return None
+    return {"passage": row["article"], "question": row["question"]}, options, index
+
+
+def _read_keyed_choices(question_field: str, context_field: str | None = None) -> Reader:
+    """`choices={"label": [...], "text": [...]}` plus `answerKey` -- the shape
+    commonsense_qa, openbookqa and ARC share. ARC keys some rows 1-4 rather
+    than A-D, so the key is matched against the labels, never against A-Z."""
+
+    def reader(row: dict, rng: random.Random) -> Row | None:
+        labels = [str(x) for x in row["choices"]["label"]]
+        texts = [str(x) for x in row["choices"]["text"]]
+        key = str(row["answerKey"]).strip()
+        if key not in labels or len(texts) < 2:
+            return None
+        question = row[question_field]
+        state = (
+            question
+            if context_field is None or not row.get(context_field)
+            else {"question": question, "context": row[context_field]}
+        )
+        return state, texts, labels.index(key)
+
+    return reader
+
+
+def _read_sciq(row: dict, rng: random.Random) -> Row | None:
+    gold = row["correct_answer"]
+    options = [gold, row["distractor1"], row["distractor2"], row["distractor3"]]
+    options = [o for o in options if o and str(o).strip()]
+    if len(options) < 2 or len(set(options)) != len(options):
+        return None
+    # The gold answer ships first; shuffle so its position carries no signal.
+    rng.shuffle(options)
+    support = row.get("support")
+    state = {"question": row["question"], "context": support} if support else row["question"]
+    return state, options, options.index(gold)
+
+
+NLI_LABELS = ("entailment", "neutral", "contradiction")
+NLI_DESCRIPTIONS = {
+    "entailment": "the hypothesis must be true given the premise",
+    "neutral": "the premise neither confirms nor rules out the hypothesis",
+    "contradiction": "the hypothesis cannot be true given the premise",
+}
+
+
+def _read_nli(row: dict, rng: random.Random) -> Row | None:
+    label = int(row["label"])
+    # SNLI marks rows without annotator agreement as -1.
+    if not 0 <= label < len(NLI_LABELS):
+        return None
+    return {"premise": row["premise"], "hypothesis": row["hypothesis"]}, None, label
+
+
+def _read_pair(first: str, second: str) -> Reader:
+    def reader(row: dict, rng: random.Random) -> Row | None:
+        return {"sentence1": row[first], "sentence2": row[second]}, None, int(row["label"])
+
+    return reader
+
+
+def _read_toxic_chat(row: dict, rng: random.Random) -> Row | None:
+    return row["user_input"], None, int(row["toxicity"])
+
+
+def _read_toxigen(row: dict, rng: random.Random) -> Row | None:
+    score = row.get("toxicity_human")
+    if score is None:
+        return None
+    # Annotators rate 1-5; the dataset's own threshold for "toxic" is >= 3.
+    return row["text"], None, int(float(score) >= 3.0)
+
+
+def _read_beavertails(row: dict, rng: random.Random) -> Row | None:
+    # `is_safe` True -> yes. A "yes = good" Noul, paired in the registry with a
+    # negation ("is this response harmful?") so polarity is not a constant.
+    return {"prompt": row["prompt"], "response": row["response"]}, None, int(bool(row["is_safe"]))
+
+
+HELPFULNESS_LEVELS = (
+    "not helpful",
+    "slightly helpful",
+    "partially helpful",
+    "mostly helpful",
+    "fully helpful",
+)
+
+
+def _read_ultrafeedback(row: dict, rng: random.Random) -> list[Row] | None:
+    """One instruction, up to four rated completions -- each becomes a Score row."""
+    out: list[Row] = []
+    for completion in row.get("completions") or []:
+        rating = ((completion.get("annotations") or {}).get("helpfulness") or {}).get("Rating")
+        try:
+            level = int(rating) - 1
+        except (TypeError, ValueError):
+            continue
+        response = completion.get("response")
+        if not response or not 0 <= level < len(HELPFULNESS_LEVELS):
+            continue
+        out.append(({"instruction": row["instruction"], "response": response}, None, level))
+    return out or None
+
+
+SNIPS_INTENTS = (
+    "AddToPlaylist",
+    "BookRestaurant",
+    "GetWeather",
+    "PlayMusic",
+    "RateBook",
+    "SearchCreativeWork",
+    "SearchScreeningEvent",
+)
+
+
+def _read_snips(row: dict, rng: random.Random) -> Row | None:
+    category = row["category"]
+    if category not in SNIPS_INTENTS:
+        return None
+    return row["text"], None, SNIPS_INTENTS.index(category)
+
+
+YES_NO = ("no", "yes")
 
 
 REGISTRY: dict[str, SourceSpec] = {
@@ -92,62 +251,164 @@ REGISTRY: dict[str, SourceSpec] = {
     "ag_news": SourceSpec(
         name="ag_news",
         hf_id="fancyzhx/ag_news",
-        text_field="text",
-        label_field="label",
         primitive="choice",
         instructions="Which section of the paper does this story belong in?",
+        paraphrases=(
+            "What is the topic of this news story?",
+            "Under which heading would an editor file this article?",
+            "Classify this story by subject.",
+        ),
     ),
     "emotion": SourceSpec(
         name="emotion",
         hf_id="dair-ai/emotion",
-        text_field="text",
-        label_field="label",
         primitive="choice",
         instructions="Which emotion is the writer expressing?",
+        paraphrases=(
+            "How is the author feeling?",
+            "What emotion does this message convey?",
+            "Label the emotional tone of this text.",
+        ),
     ),
     "dbpedia_14": SourceSpec(
         name="dbpedia_14",
         hf_id="fancyzhx/dbpedia_14",
         text_field="content",
-        label_field="label",
         primitive="choice",
         instructions="What kind of thing is this article about?",
+        paraphrases=(
+            "Which category does the subject of this article fall into?",
+            "What type of entity is being described?",
+        ),
     ),
-    # Mode B: option sets too large for single-token label codes.
+    # Choice with the question varying per row: the state alone cannot identify
+    # the answer set, so the model has to read the question.
+    "race": SourceSpec(
+        name="race",
+        hf_id="ehovy/race",
+        hf_config="all",
+        primitive="choice",
+        instructions="Which option correctly answers the question about the passage?",
+        paraphrases=(
+            "Based on the passage, which answer is correct?",
+            "Read the passage and answer the question.",
+        ),
+        reader=_read_race,
+    ),
+    "commonsense_qa": SourceSpec(
+        name="commonsense_qa",
+        hf_id="tau/commonsense_qa",
+        primitive="choice",
+        instructions="Which option best answers the question?",
+        paraphrases=("Pick the most sensible answer.", "What is the right answer here?"),
+        reader=_read_keyed_choices("question"),
+    ),
+    "sciq": SourceSpec(
+        name="sciq",
+        hf_id="allenai/sciq",
+        primitive="choice",
+        instructions="Which option answers the science question?",
+        paraphrases=("Using the context if given, which answer is correct?",),
+        reader=_read_sciq,
+    ),
+    "openbookqa": SourceSpec(
+        name="openbookqa",
+        hf_id="allenai/openbookqa",
+        hf_config="additional",
+        primitive="choice",
+        instructions="Given the fact, which option completes the question correctly?",
+        paraphrases=("Which answer follows from the fact and the question?",),
+        reader=_read_keyed_choices("question_stem", context_field="fact1"),
+    ),
+    "arc_easy": SourceSpec(
+        name="arc_easy",
+        hf_id="allenai/ai2_arc",
+        hf_config="ARC-Easy",
+        primitive="choice",
+        instructions="Which option correctly answers the question?",
+        paraphrases=("Choose the correct answer.", "What is the right answer to this question?"),
+        reader=_read_keyed_choices("question"),
+    ),
+    # Natural language inference: the same three options every time, but the
+    # answer depends on a relation between two fields, not on either alone.
+    "snli": SourceSpec(
+        name="snli",
+        hf_id="stanfordnlp/snli",
+        primitive="choice",
+        instructions="What is the relation between the premise and the hypothesis?",
+        paraphrases=(
+            "Does the premise entail, contradict, or say nothing about the hypothesis?",
+            "Given the premise, is the hypothesis true, false, or undetermined?",
+        ),
+        label_names=NLI_LABELS,
+        descriptions=NLI_DESCRIPTIONS,
+        reader=_read_nli,
+    ),
+    "anli": SourceSpec(
+        name="anli",
+        hf_id="facebook/anli",
+        split="train_r3",
+        primitive="choice",
+        instructions="What is the relation between the premise and the hypothesis?",
+        paraphrases=(
+            "Does the premise entail, contradict, or say nothing about the hypothesis?",
+            "Given the premise, is the hypothesis true, false, or undetermined?",
+        ),
+        label_names=NLI_LABELS,
+        descriptions=NLI_DESCRIPTIONS,
+        reader=_read_nli,
+    ),
+    "snips": SourceSpec(
+        name="snips",
+        hf_id="benayas/snips",
+        primitive="choice",
+        instructions="What does the user want to do?",
+        paraphrases=("What is the user's intent?", "Which action is being requested?"),
+        label_names=SNIPS_INTENTS,
+        reader=_read_snips,
+    ),
+    # Mode B: option sets over the Mode A cap.
     "banking77": SourceSpec(
         name="banking77",
         hf_id="legacy-datasets/banking77",
-        text_field="text",
-        label_field="label",
         primitive="choice",
         instructions="What is this customer trying to do?",
+        paraphrases=(
+            "Which banking intent does this message express?",
+            "What does the customer need help with?",
+            "Classify the customer's request.",
+        ),
     ),
     "clinc_oos": SourceSpec(
         name="clinc_oos",
         hf_id="clinc/clinc_oos",
         hf_config="plus",
-        text_field="text",
         label_field="intent",
         primitive="choice",
         instructions="What is the user asking the assistant to do?",
+        paraphrases=(
+            "What is the user's intent?",
+            "Which command does this utterance correspond to?",
+        ),
     ),
     # Score: genuinely ordered levels.
     "yelp_review_full": SourceSpec(
         name="yelp_review_full",
         hf_id="Yelp/yelp_review_full",
-        text_field="text",
-        label_field="label",
         primitive="score",
         instructions="How positive is this review?",
+        paraphrases=("How many stars did this reviewer give?", "Rate the reviewer's satisfaction."),
         label_names=("1 star", "2 stars", "3 stars", "4 stars", "5 stars"),
     ),
     "sst5": SourceSpec(
         name="sst5",
         hf_id="SetFit/sst5",
-        text_field="text",
-        label_field="label",
         primitive="score",
         instructions="How positive is this sentence?",
+        paraphrases=(
+            "What is the sentiment of this sentence?",
+            "Rate the tone from very negative to very positive.",
+        ),
         label_names=(
             "very negative",
             "negative",
@@ -156,22 +417,88 @@ REGISTRY: dict[str, SourceSpec] = {
             "very positive",
         ),
     ),
-    # Noul: a single yes/no proposition.
+    "ultrafeedback": SourceSpec(
+        name="ultrafeedback",
+        hf_id="openbmb/UltraFeedback",
+        primitive="score",
+        instructions="How helpful is the response to the instruction?",
+        paraphrases=(
+            "Rate how well the response serves the request.",
+            "How useful is this answer?",
+        ),
+        label_names=HELPFULNESS_LEVELS,
+        reader=_read_ultrafeedback,
+    ),
+    # Noul: a single yes/no proposition. Every source carries a negation, so the
+    # mixture asks both polarities and "yes" is not always the good outcome.
     "imdb": SourceSpec(
         name="imdb",
         hf_id="stanfordnlp/imdb",
-        text_field="text",
-        label_field="label",
         primitive="noul",
         instructions="Did this reviewer like the film?",
+        paraphrases=("Is this a positive review?", "Would this reviewer recommend the film?"),
+        negations=("Did this reviewer dislike the film?", "Is this a negative review?"),
     ),
     "rotten_tomatoes": SourceSpec(
         name="rotten_tomatoes",
         hf_id="cornell-movie-review-data/rotten_tomatoes",
-        text_field="text",
-        label_field="label",
         primitive="noul",
         instructions="Is this review positive?",
+        paraphrases=("Did the critic like it?", "Is the sentiment favourable?"),
+        negations=("Is this review negative?", "Did the critic pan it?"),
+    ),
+    "mrpc": SourceSpec(
+        name="mrpc",
+        hf_id="SetFit/mrpc",
+        primitive="noul",
+        instructions="Do these two sentences mean the same thing?",
+        paraphrases=("Are these sentences paraphrases of each other?",),
+        negations=("Do these sentences differ in meaning?",),
+        label_names=YES_NO,
+        reader=_read_pair("text1", "text2"),
+    ),
+    "qqp": SourceSpec(
+        name="qqp",
+        hf_id="SetFit/qqp",
+        primitive="noul",
+        instructions="Are these two questions asking the same thing?",
+        paraphrases=("Are these questions duplicates?",),
+        negations=("Are these two questions asking different things?",),
+        label_names=YES_NO,
+        reader=_read_pair("text1", "text2"),
+    ),
+    "toxic_chat": SourceSpec(
+        name="toxic_chat",
+        hf_id="lmsys/toxic-chat",
+        hf_config="toxicchat0124",
+        primitive="noul",
+        instructions="Is this message toxic?",
+        paraphrases=("Is this user message harmful or abusive?", "Should a moderator flag this?"),
+        negations=("Is this message acceptable?", "Is this message harmless?"),
+        label_names=YES_NO,
+        reader=_read_toxic_chat,
+    ),
+    "toxigen": SourceSpec(
+        name="toxigen",
+        hf_id="toxigen/toxigen-data",
+        hf_config="annotated",
+        primitive="noul",
+        instructions="Is this text toxic?",
+        paraphrases=("Does this statement demean a group of people?",),
+        negations=("Is this text benign?",),
+        label_names=YES_NO,
+        reader=_read_toxigen,
+    ),
+    "beavertails": SourceSpec(
+        name="beavertails",
+        hf_id="PKU-Alignment/BeaverTails",
+        split="330k_train",
+        primitive="noul",
+        instructions="Is this response safe?",
+        paraphrases=("Is the assistant's reply harmless?",),
+        negations=("Is this response harmful?", "Does this reply violate safety norms?"),
+        label_names=YES_NO,
+        reader=_read_beavertails,
     ),
 }
 
@@ -189,8 +516,12 @@ MODE_B_SOURCES: frozenset[str] = frozenset(
 # movie-review sentiment -- and clinc_oos contains banking intents.
 ADJACENT: tuple[frozenset[str], ...] = (
     frozenset({"imdb", "rotten_tomatoes", "sst5", "yelp_review_full", "emotion"}),
-    frozenset({"banking77", "clinc_oos"}),
+    frozenset({"banking77", "clinc_oos", "snips"}),
     frozenset({"ag_news", "dbpedia_14"}),
+    frozenset({"snli", "anli"}),
+    frozenset({"mrpc", "qqp"}),
+    frozenset({"toxic_chat", "toxigen", "beavertails"}),
+    frozenset({"race", "commonsense_qa", "sciq", "openbookqa", "arc_easy"}),
 )
 
 
@@ -220,7 +551,8 @@ def humanise(label: str) -> str:
     banking77 and clinc_oos ship snake_case intent ids. Feeding those to the
     model as option text trains it on a token distribution no real request uses.
     """
-    return re.sub(r"[_\-]+", " ", label).strip()
+    spaced = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", label)
+    return re.sub(r"[_\-]+", " ", spaced).strip()
 
 
 def _label_names(spec: SourceSpec, dataset) -> list[str]:
@@ -274,32 +606,86 @@ def load_source(
     if load_dataset is None:
         from datasets import load_dataset  # noqa: PLC0415
 
-    dataset = load_dataset(spec.hf_id, spec.hf_config, split=spec.split, cache_dir=cache_dir)
-    names = _label_names(spec, dataset)
+    extra = {"revision": spec.revision} if spec.revision else {}
+    dataset = load_dataset(
+        spec.hf_id, spec.hf_config, split=spec.split, cache_dir=cache_dir, **extra
+    )
     if limit is not None and limit < len(dataset):
         dataset = dataset.shuffle(seed=seed).select(range(limit))
-    question = build_question(spec, names)
-    n_labels = len(names)
-    is_noul = spec.primitive == "noul"
 
-    for i, row in enumerate(dataset):
-        text = row[spec.text_field]
-        target = int(row[spec.label_field])
-        if not text or not text.strip():
-            continue
+    # A fixed label set comes from the ClassLabel or the spec; a reader that
+    # supplies options per row has none.
+    names = _label_names(spec, dataset) if spec.reader is None or spec.label_names else None
+    fixed_question = build_question(spec, names) if names is not None else None
+    is_noul = spec.primitive == "noul"
+    rng = random.Random(seed)
+
+    def emit(state, question: Question, target: int, n_labels: int, i: int) -> Example:
         if not 0 <= target < n_labels:
             raise ValueError(
                 f"{spec.name} row {i}: label {target} out of range for "
                 f"{n_labels} classes -- the label column is not what we think"
             )
-        yield Example(
-            state=text.strip(),
+        return Example(
+            state=state,
             name=spec.name,
             question=question,
             target=_noul_rating(target) if is_noul else target,
             layout=Layout.STATE_FIRST,  # reassigned by build_mixture
             source=spec.name,
         )
+
+    for i, row in enumerate(dataset):
+        if spec.reader is None:
+            text = row[spec.text_field]
+            if not text or not text.strip():
+                continue
+            yield emit(text.strip(), fixed_question, int(row[spec.label_field]), len(names), i)
+            continue
+
+        produced = spec.reader(row, rng)
+        if produced is None:
+            continue
+        rows = produced if isinstance(produced, list) else [produced]
+        for state, options, target in rows:
+            if _blank(state):
+                continue
+            if options is None:
+                if fixed_question is None:
+                    raise ValueError(f"{spec.name}: reader gave no options and spec has no labels")
+                yield emit(state, fixed_question, target, len(names), i)
+            else:
+                # Per-row options; duplicates would collapse in the criteria map
+                # and silently shift the gold index.
+                if len(set(options)) != len(options):
+                    continue
+                question = Choice(
+                    instructions=spec.instructions, criteria={opt: None for opt in options}
+                )
+                yield emit(state, question, target, len(options), i)
+
+
+def _blank(state) -> bool:
+    if isinstance(state, str):
+        return not state.strip()
+    return not any(str(v).strip() for v in state.values())
+
+
+def augmentation_map() -> dict[str, Augment]:
+    """Per-source training augmentation, read off the registry.
+
+    Mode B sources keep at least `LABEL_OPTION_CAP + 1` options when subsampled,
+    so they stay Mode B and the head keeps its share of the mixture; everything
+    else may be cut down to two.
+    """
+    return {
+        name: Augment(
+            paraphrases=spec.paraphrases,
+            negations=spec.negations,
+            min_options=(LABEL_OPTION_CAP + 1) if spec.is_mode_b else 2,
+        )
+        for name, spec in REGISTRY.items()
+    }
 
 
 def default_weights() -> dict[str, float]:

@@ -60,8 +60,28 @@ def render_state(state) -> str:
     return json.dumps(state, sort_keys=True, ensure_ascii=False, indent=None)
 
 
-def render_question(name: str, question: Question, codes: list[str] | None) -> str:
-    """Render one question. `codes` are Mode A label codes; None means Mode B."""
+BINARY_NOUL_OPTIONS = ("yes", "no")
+
+
+def _ordered(items: list, order: list[int] | None) -> list:
+    return items if order is None else [items[i] for i in order]
+
+
+def render_question(
+    name: str, question: Question, codes: list[str] | None, order: list[int] | None = None
+) -> str:
+    """Render one question. `codes` are Mode A label codes; None means Mode B.
+
+    `order` lists the candidates in the sequence they should appear, as indices
+    into the question's own candidate order. Codes are assigned by position, so
+    rendering the same question under two orders and averaging the readouts
+    cancels the model's preference for whichever letter comes first -- the
+    position bias reflex measured and corrects the same way.
+
+    A Noul with exactly two codes is the binary yes/no readout, used when no
+    trained adapter exists: a stock checkpoint cannot rate 0-8 (ADR-007) but can
+    pick between two lettered options.
+    """
     lines = [f"Question: {question.instructions or name}"]
 
     if isinstance(question, Choice):
@@ -70,23 +90,33 @@ def render_question(name: str, question: Question, codes: list[str] | None) -> s
         # ~700 tokens per prompt and buy nothing.
         if codes:
             lines.append("Options:")
-            for code, (key, desc) in zip(codes, question.criteria.items(), strict=False):
+            items = _ordered(list(question.criteria.items()), order)
+            for code, (key, desc) in zip(codes, items, strict=False):
                 lines.append(f"  {code}: {key}" + (f" - {render_content(desc)}" if desc else ""))
         else:
             lines.append(f"Choose the best of the {len(question.criteria)} candidates given.")
     elif isinstance(question, Score):
         if codes:
             lines.append("Levels:")
-            for code, desc in zip(codes, question.criteria, strict=False):
+            for code, desc in zip(codes, _ordered(list(question.criteria), order), strict=False):
                 lines.append(f"  {code}: {render_content(desc)}")
         else:
             lines.append(f"Choose the best of the {len(question.criteria)} levels given.")
     elif isinstance(question, Noul):
-        lines.append("Rate 0-8 how strongly this is true (0 = certainly no, 8 = certainly yes).")
-        if question.criteria:
-            for key in ("true", "false"):
-                if (desc := question.criteria.get(key)) is not None:
-                    lines.append(f"  {key}: {render_content(desc)}")
+        if codes and len(codes) == len(BINARY_NOUL_OPTIONS):
+            lines.append("Options:")
+            described = {"yes": "true", "no": "false"}
+            for code, option in zip(codes, _ordered(list(BINARY_NOUL_OPTIONS), order), strict=True):
+                desc = (question.criteria or {}).get(described[option])
+                lines.append(f"  {code}: {option}" + (f" - {render_content(desc)}" if desc else ""))
+        else:
+            lines.append(
+                "Rate 0-8 how strongly this is true (0 = certainly no, 8 = certainly yes)."
+            )
+            if question.criteria:
+                for key in ("true", "false"):
+                    if (desc := question.criteria.get(key)) is not None:
+                        lines.append(f"  {key}: {render_content(desc)}")
 
     return "\n".join(lines)
 
@@ -118,10 +148,11 @@ def build(
     codes: list[str] | None,
     layout: Layout = Layout.STATE_FIRST,
     cached_schema: str | None = None,
+    order: list[int] | None = None,
 ) -> Rendered:
     """Render one question against one state, cut for the chosen layout."""
     state_block = f"Context:\n{render_state(state)}\n\n"
-    question_block = render_question(name, question, codes)
+    question_block = render_question(name, question, codes, order)
 
     if layout is Layout.STATE_FIRST:
         return Rendered(prefix=state_block, suffix=f"{question_block}\n{ANSWER_CUE}")

@@ -65,10 +65,18 @@ def export(
     by_source = _group_by_source(answerable)
 
     index: dict[str, dict] = {}
+    variable: list[str] = []
     for source, rows in sorted(by_source.items()):
         if limit_per_source:
             rows = rows[:limit_per_source]
         question = rows[0].question
+        # A levbench task file carries one question for every item. QA sources
+        # (race, sciq, ...) supply options per row, so they cannot be written in
+        # this format; they are still scored in-process by `evaluate_split`.
+        payloads = {json.dumps(question_payload(r.question), sort_keys=True) for r in rows}
+        if len(payloads) != 1:
+            variable.append(source)
+            continue
         payload = {
             "questions": {source: question_payload(question)},
             "items": [
@@ -89,6 +97,11 @@ def export(
             f"`--limit-per-source`."
         )
 
-    summary = {"split": split.value, "total_items": total, "sources": index}
+    summary = {
+        "split": split.value,
+        "total_items": total,
+        "sources": index,
+        "skipped_variable_question": variable,
+    }
     (out / "index.json").write_text(json.dumps(summary, indent=2) + "\n")
     return summary

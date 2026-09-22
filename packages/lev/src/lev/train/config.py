@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..labels import LABEL_OPTION_CAP
+
 # Effective bf16 throughput on one H100 with gradient checkpointing. Peak is
 # ~990 TFLOP/s; 400 is a realistic sustained figure and the number §5.8 quotes.
 H100_EFFECTIVE_FLOPS = 4.0e14
@@ -51,6 +53,10 @@ class TrainConfig:
     # LoRA freezing the backbone. This was the non-obvious part of choosing LoRA.
     train_mode_b_head: bool = True
     mode_b_proj_dim: int = 512
+    # Mode A above this many options routes to Mode B. Must match the serving
+    # engine's `EngineConfig.max_label_options`, or the model is asked at serve
+    # time to do something it was never trained for. See `labels.LABEL_OPTION_CAP`.
+    max_label_options: int | None = LABEL_OPTION_CAP
 
     # Data.
     n_examples: int = 200_000
@@ -193,6 +199,15 @@ class TrainConfig:
 # Named presets matching the backbone comparison in §5.1.
 PRESETS: dict[str, TrainConfig] = {
     "4b": TrainConfig(),
+    # The instruct checkpoint of the same backbone. Frozen, it scores 0.719 on
+    # S1Bench (reflex-4b); the Base fine-tune scored 0.489. Starting from a
+    # model that already follows instructions makes zero-shot judgement the
+    # floor rather than zero, and a gentler learning rate protects it. ADR-020.
+    "4b-instruct": TrainConfig(
+        model_id="Qwen/Qwen3.5-4B",
+        learning_rate=5e-5,
+        output_dir="checkpoints/lev-4b-instruct",
+    ),
     "2b": TrainConfig(
         model_id="Qwen/Qwen3.5-2B-Base",
         params_b=2.0,

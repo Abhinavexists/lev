@@ -45,18 +45,36 @@ def candidate_count(question: Question) -> int:
     raise TypeError(f"unknown question type {type(question).__name__}")
 
 
-def route(question: Question, tokenizer, max_label_options: int | None = None) -> Route:
+BINARY_NOUL = "binary yes/no"
+
+
+def route(
+    question: Question,
+    tokenizer,
+    max_label_options: int | None = None,
+    noul_binary: bool = False,
+) -> Route:
     """Pick a mode for one question.
 
     `max_label_options` is an optional policy cap *below* the tokenizer limit. Mode A
     accuracy decays as the label set grows -- decider measured -5 to -24 points on
     50-219 options -- so a deployment may prefer Mode B well before Mode A becomes
     impossible. None means "use Mode A whenever it is expressible".
+
+    `noul_binary` reads a Noul as two lettered options instead of the 0-8 rating
+    scale. The scale is the trained target and the only calibratable form, but a
+    stock checkpoint pins it at one end regardless of content (ADR-007), so an
+    untrained deployment must use this.
     """
     n = candidate_count(question)
 
     if max_label_options is not None and n > max_label_options:
         return Route(Mode.CANDIDATE_PATH, None, f"{n} options over policy cap {max_label_options}")
+
+    if isinstance(question, Noul) and noul_binary:
+        codes = single_token_codes(tokenizer, 2)
+        if codes is not None:
+            return Route(Mode.LABEL_TOKEN, codes, BINARY_NOUL)
 
     if isinstance(question, Noul):
         # Noul's candidates are the fixed rating scale, not user-supplied.
@@ -72,6 +90,11 @@ def route(question: Question, tokenizer, max_label_options: int | None = None) -
 
 
 def route_all(
-    questions: dict[str, Question], tokenizer, max_label_options: int | None = None
+    questions: dict[str, Question],
+    tokenizer,
+    max_label_options: int | None = None,
+    noul_binary: bool = False,
 ) -> dict[str, Route]:
-    return {name: route(q, tokenizer, max_label_options) for name, q in questions.items()}
+    return {
+        name: route(q, tokenizer, max_label_options, noul_binary) for name, q in questions.items()
+    }

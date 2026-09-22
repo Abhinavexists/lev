@@ -27,13 +27,14 @@ The cache fork was the one part that could not be reasoned about -- see `_fork`.
 from __future__ import annotations
 
 import copy
+from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from .calibrate import CalibrationProfile
-from .labels import noul_probability
-from .prompt import Layout, build, candidate_texts, schema_block
-from .router import Mode, Route, route_all
+from .labels import LABEL_OPTION_CAP, noul_probability
+from .prompt import Layout, Rendered, build, candidate_texts, schema_block
+from .router import BINARY_NOUL, Mode, Route, route_all
 from .types import (
     Choice,
     ChoiceAnswer,
@@ -50,10 +51,46 @@ from .types import (
 @dataclass
 class EngineConfig:
     model_id: str = "Qwen/Qwen3.5-4B-Base"
-    max_label_options: int | None = None
+    # Same cap as training (`TrainConfig.max_label_options`), for the same
+    # reason: above it the model is in a regime it was never trained for.
+    max_label_options: int | None = LABEL_OPTION_CAP
     layout: Layout = Layout.STATE_FIRST
     device: str = "auto"
     dtype: str = "bfloat16"
+    # "rating" is the trained 0-8 scale; "binary" is two lettered options for a
+    # checkpoint that was never trained on the scale (ADR-007).
+    noul_readout: Literal["rating", "binary"] = "rating"
+    # Read every Mode A question in two option orders and average. Cancels the
+    # letter-position bias that reordering exposed on massive-en-US (argmax
+    # agreement 0.15 between two orders of the same 60 options). Two suffix rows
+    # instead of one, in the same batched forward -- no extra prefill.
+    order_average: bool = True
+
+
+@dataclass(frozen=True)
+class Variant:
+    """One rendering of one question: the candidate order shown, and its suffix."""
+
+    name: str
+    order: list[int] | None
+    suffix_ids: list[int]
+
+
+def average_orders(prob_rows: list[list[float]], orders: list[list[int] | None]) -> list[float]:
+    """Map each rendered-order distribution back to canonical order and average.
+
+    Rendered position `j` showed candidate `order[j]`, so `probs[j]` belongs to
+    canonical slot `order[j]`. Averaging probabilities rather than logits keeps
+    the result a distribution without renormalising.
+    """
+    if len(prob_rows) != len(orders):
+        raise ValueError("one order per probability row")
+    k = len(prob_rows[0])
+    total = [0.0] * k
+    for probs, order in zip(prob_rows, orders, strict=True):
+        for j, p in enumerate(probs):
+            total[j if order is None else order[j]] += p
+    return [t / len(prob_rows) for t in total]
 
 
 class DecisionEngine:
@@ -75,7 +112,12 @@ class DecisionEngine:
         self._candidate_cache: dict[tuple[str, ...], Any] = {}
 
     def system_one(self, state, questions: dict[str, Question]) -> SystemOneResponse:
-        routes = route_all(questions, self.tokenizer, self.config.max_label_options)
+        routes = route_all(
+            questions,
+            self.tokenizer,
+            self.config.max_label_options,
+            noul_binary=self.config.noul_readout == "binary",
+        )
 
         unsupported = [
             name
@@ -89,14 +131,30 @@ class DecisionEngine:
                 "question in Mode A."
             )
 
-        prefix, suffixes = self._render(state, questions, routes)
+        prefix, variants = self._render(state, questions, routes)
         want_hidden = any(r.mode is Mode.CANDIDATE_PATH for r in routes.values())
+        suffixes = [v.suffix_ids for v in variants]
         prefix_ids, logits, last_positions, hidden = self._forward(prefix, suffixes, want_hidden)
 
-        answers = {}
-        for i, (name, question) in enumerate(questions.items()):
-            scores = self._scores(logits, last_positions, i, routes[name], question, hidden)
-            answers[name] = self._to_answer(question, routes[name], scores)
+        # Calibrate each rendered variant, then average per question in the
+        # question's own candidate order.
+        probs_by_question: dict[str, list[list[float]]] = defaultdict(list)
+        orders_by_question: dict[str, list[list[int] | None]] = defaultdict(list)
+        for row, variant in enumerate(variants):
+            question, route = questions[variant.name], routes[variant.name]
+            scores = self._scores(logits, last_positions, row, route, question, hidden)
+            probs = self.calibration.apply(scores, _bucket_type(question, route), route.mode.value)
+            probs_by_question[variant.name].append(probs)
+            orders_by_question[variant.name].append(variant.order)
+
+        answers = {
+            name: self._to_answer(
+                question,
+                routes[name],
+                average_orders(probs_by_question[name], orders_by_question[name]),
+            )
+            for name, question in questions.items()
+        }
 
         return SystemOneResponse(
             model=self.config.model_id,
@@ -108,22 +166,53 @@ class DecisionEngine:
             ),
         )
 
-    def _render(self, state, questions: dict[str, Question], routes: dict[str, Route]):
+    def _orders(self, question: Question, route: Route) -> list[list[int] | None]:
+        """The candidate orders to render a question in. `None` is its own order.
+
+        Two orders only where the order is arbitrary and position bias can act:
+        Choice and binary Noul, under lettered codes, in the state-first layout
+        (schema-first puts the options in the shared prefix, so a second order
+        would mean a second prefix). Ordered readouts are never reversed: a
+        Score's levels run low to high and the rating scale's digits carry
+        meaning, and training presents both in that order only -- a reversed
+        scale is a prompt the model has never seen. Measured: reversing Score
+        cost 2.4 points on helpsteer2.
+        """
+        if (
+            not self.config.order_average
+            or route.mode is not Mode.LABEL_TOKEN
+            or self.config.layout is not Layout.STATE_FIRST
+            or isinstance(question, Score)
+            or (isinstance(question, Noul) and route.reason != BINARY_NOUL)
+        ):
+            return [None]
+        n = len(route.codes or [])
+        return [None, list(reversed(range(n)))] if n >= 2 else [None]
+
+    def _render(
+        self, state, questions: dict[str, Question], routes: dict[str, Route]
+    ) -> tuple[str, list[Variant]]:
         codes = {name: route.codes for name, route in routes.items()}
         cached_schema = (
             schema_block(questions, codes) if self.config.layout is Layout.SCHEMA_FIRST else None
         )
-        rendered = [
-            build(state, name, question, routes[name].codes, self.config.layout, cached_schema)
+        rendered: list[tuple[str, list[int] | None, Rendered]] = [
+            (
+                name,
+                order,
+                build(state, name, question, codes[name], self.config.layout, cached_schema, order),
+            )
             for name, question in questions.items()
+            for order in self._orders(question, routes[name])
         ]
-        # Every question shares one prefix by construction; assert it, because a
+        # Every variant shares one prefix by construction; assert it, because a
         # silent mismatch would make the cache wrong rather than merely slow.
-        prefixes = {r.prefix for r in rendered}
+        prefixes = {r.prefix for _, _, r in rendered}
         if len(prefixes) != 1:
             raise AssertionError(f"layout produced {len(prefixes)} prefixes, expected 1")
-        return rendered[0].prefix, [
-            self.tokenizer.encode(r.suffix, add_special_tokens=False) for r in rendered
+        return rendered[0][2].prefix, [
+            Variant(name, order, self.tokenizer.encode(r.suffix, add_special_tokens=False))
+            for name, order, r in rendered
         ]
 
     def _forward(self, prefix: str, suffixes: list[list[int]], want_hidden: bool = False):
@@ -242,9 +331,8 @@ class DecisionEngine:
         self._candidate_cache[key] = reprs
         return reprs
 
-    def _to_answer(self, question: Question, route: Route, scores: list[float]):
-        """Calibrate the raw scores, then shape them as the question's answer type."""
-        probs = self.calibration.apply(scores, question.type, route.mode.value)
+    def _to_answer(self, question: Question, route: Route, probs: list[float]):
+        """Shape a calibrated distribution as the question's answer type."""
         confidence = _gini(probs)
 
         if isinstance(question, Choice):
@@ -265,6 +353,10 @@ class DecisionEngine:
             )
 
         if isinstance(question, Noul):
+            if route.reason == BINARY_NOUL:
+                # Two lettered options, yes first. No rating distribution exists
+                # to report, so `probabilities` stays absent rather than faked.
+                return NoulAnswer(noul=probs[0], probabilities=None, confidence=confidence)
             by_rating = dict(enumerate(probs))
             return NoulAnswer(
                 noul=noul_probability(by_rating),
@@ -273,6 +365,12 @@ class DecisionEngine:
             )
 
         raise TypeError(f"unknown question type {question.type!r}")
+
+
+def _bucket_type(question: Question, route: Route) -> str:
+    """Calibration bucket. A binary Noul must not borrow the rating scale's
+    temperature: the two readouts have nothing in common but the answer type."""
+    return "noul_binary" if route.reason == BINARY_NOUL else question.type
 
 
 def _fork(cache, n: int, device=None):

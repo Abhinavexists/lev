@@ -631,6 +631,109 @@ worse than no table, because a reader takes the fourth decimal for a result.
 
 ---
 
+## ADR-020 — The trained model lost to the frozen one; what changes and what does not
+
+**Accepted.** Measured on 1,999 S1Bench items through identical task files
+(FINDINGS.md §12), plus targeted probes against the live server and one GPU
+diagnostic.
+
+### What was measured
+
+`reflex-4b` serves **frozen Qwen3.5-4B** -- no adapter, no training -- and scores
+0.719 macro, ECE 0.085, 138 ms on CPU. Our LoRA fine-tune of the same backbone
+scored **0.489**, below the frozen model on every one of the six subsets. Its
+README names the failure before we hit it: every adapter they trained "won on
+data shaped like its training mix and lost general judgement".
+
+Four causes, each with a probe behind it:
+
+1. **The mixture confounded state with answer set.** Nine sources, one fixed
+   instruction each, one question per row. The state alone identified the label
+   set, so the model never had to read the question -- and does not: on aegis2,
+   "is this unsafe?" and "is this safe?" return the same number (mean |Δp| =
+   0.079 over 120 items; 89 differ by <0.10).
+2. **Base checkpoint, decider's cost without decider's data.** ADR-003 chose
+   `-Base` on decider's precedent. decider trained it on 1.47M examples, 455M
+   tokens/epoch, ~95 datasets, full fine-tune, teacher-written questions. We
+   used 200k, 24M, 9, LoRA r32 -- 7x, 19x, 11x less -- so every bit of judgement
+   had to come from sentiment and topic labels, and a model with no zero-shot
+   floor (Noul 0.292 untrained, ADR-007) ended below one that never trained.
+3. **60 options routed to Mode A.** The router is tokenizer-verified, and this
+   tokenizer has single tokens for every two-letter code up to `BP`, so
+   massive-en-US (60 intents) ran as Mode A with codes and a set size the model
+   had never seen, while the trained Mode B head sat idle (839 input tokens
+   listed vs 28 for a 77-option Mode B question). Reordering the options changed
+   the argmax on 85% of items; a GPU diagnostic shows candidate representations
+   are bit-identical across orders, so this is Mode A letter-position bias, not
+   the encoder.
+4. **The latency is the deployment, not the model.** `/health` alone takes 0.9 s
+   from the client; one Noul takes 1.16 s and eight Nouls sharing a state take
+   1.16 s. The cache fork works; ~0.9 s is Modal ingress from this machine.
+
+Two things were caught on the way that are bugs regardless of the above: the
+contamination guard matched blocked *subset* names inside longer ids but not
+*aliases*, so `SetFit/amazon_massive_intent_en-US` and `nvidia/Aegis-...-1.0`
+passed; and hwu64 -- a candidate Mode B source -- is the 64-intent schema MASSIVE
+inherited via SLURP, so training on it would turn massive-en-US from an
+unseen-taxonomy test into a seen one.
+
+### Decisions that need no retraining
+
+- **`LABEL_OPTION_CAP = 26`**, applied by `TrainConfig` and `EngineConfig` alike.
+  The cap draws the Mode A / Mode B line, not the tokenizer. Serving and training
+  must agree or the model is asked at serve time to do what it never trained for.
+- **Two-order averaging** for Choice and binary Noul under the state-first
+  layout: two suffix rows per question in the same batched forward, probabilities
+  averaged in canonical order. reflex's correction, for reflex's measured reason.
+  Not for Score or the rating scale: their order is the meaning, training never
+  reorders them, and reversing Score measured -2.4 points on helpsteer2.
+- **Binary Noul** (`A: yes / B: no`) as the readout when no adapter is loaded.
+  The 0-8 scale is the trained target and the only calibratable form, but a stock
+  checkpoint pins it (ADR-007). `LEV_SERVE_MODEL=Qwen/Qwen3.5-4B modal serve`
+  serves the instruct checkpoint frozen this way -- the zero-shot baseline every
+  trained run must now beat.
+- **Guard:** bare aliases match as segment sets; hwu64 is blocked under
+  `massive-en-US` for its schema.
+- **Eval export** skips sources whose question varies per row rather than
+  writing them under the first row's option set.
+
+### Decisions that do need retraining
+
+- **Instruction is no longer constant per source.** Every source carries
+  paraphrases; every Noul source carries negations that flip the target, so
+  "yes" is no longer always the good outcome. Applied to the train split only;
+  held-out splits keep the canonical wording, so exported eval files and fitted
+  temperatures describe what is served.
+- **Options vary per row.** Choice sets are subsampled (gold kept), shuffled,
+  and sometimes stripped of descriptions. Mode B sources keep >= 27 options so
+  they stay Mode B; everything else may go down to two. Score levels are never
+  reordered.
+- **Fourteen new sources**, all passing `assert_clean`: QA with per-row options
+  (race, commonsense_qa, sciq, openbookqa, arc_easy), NLI (snli, anli),
+  paraphrase (mrpc, qqp), safety in both polarities (toxic_chat, toxigen,
+  beavertails), a helpfulness rubric (ultrafeedback), and a small intent set
+  (snips). cosmos_qa, social_i_qa, strategy-qa and mtop were candidates and are
+  script-backed, which `datasets>=5` refuses.
+- **`4b-instruct` preset**: `Qwen/Qwen3.5-4B` at lr 5e-5. Zero-shot judgement
+  becomes the floor rather than zero. Reflex's forgetting result is the risk;
+  breadth in the mixture is the first mitigation, a KL anchor to the frozen
+  model the second if breadth is not enough.
+
+Not done, and named so it is not mistaken for done: multi-question training rows
+(the product serves N questions per state; training still shows one), a KL
+anchor, `torch.compile`/CUDA graphs on the engine, and calibration fitted on a
+held-out *task family* rather than held-out rows.
+
+**Reopen this if:** the frozen instruct baseline through our engine lands far
+from reflex's 0.719, which would put the gap in our prompts or engine rather
+than in training; or if massive-en-US under the cap -- the first real Mode B
+transfer number -- comes out near chance, which would mean the head memorised
+its two training taxonomies.
+
+---
+
+---
+
 ## Open questions
 
 | # | Question | How it gets settled |
@@ -640,7 +743,9 @@ worse than no table, because a reader takes the fourth decimal for a result.
 | **Q3** | Can a *state* cache persist across requests? | decider persists a **schema** cache; persisting state is unclaimed and is the genuinely novel direction |
 | **Q4** | Does Mode B cost accuracy under the ceiling? | Ablation: Mode B forced on small option sets vs Mode A |
 | **Q5** | How long does a 4B run actually take? | Measured once at 23 h before bucketing (ADR-017). Sequence length and padding are now both measured; kernel throughput is not. `modal run modal/app.py::smoke`, then extrapolate from measured steps/s. Note that 24 of the 32 layers run on a reference PyTorch path unless `flash-linear-attention` is installed, so the first measurement may not be the ceiling |
-| ~~Q6~~ | ~~Does an instruct checkpoint fix zero-shot Noul?~~ | **Closed by ADR-018.** Training fixed it: 0.292 untrained → 0.975/0.915. The instruct checkpoint was never needed |
+| ~~Q6~~ | ~~Does an instruct checkpoint fix zero-shot Noul?~~ | **Closed by ADR-018, reopened by ADR-020.** Training fixed it in-distribution (0.975/0.915) and broke it out of distribution (aegis2 0.312, below every constant predictor). The instruct checkpoint is now the recommended starting point, with a binary readout until the scale is trained |
 | **Q7** | Do nine public classification corpora transfer to support-triage states? | Train, then eval on both the generated set *and* the 24-item fixture. Agreement between them is the signal; the fixture alone cannot resolve it |
-| **Q9** | How does lev compare to Jev on S1Bench? | No harness exists. The thirteen subsets are blocked from training and untouched, so the comparison is available but unbuilt — see ADR-018 |
+| ~~Q9~~ | ~~How does lev compare to Jev on S1Bench?~~ | **Answered: 0.489 vs 0.754 macro** on identical task files, harness validated against Jev's own numbers. FINDINGS.md §12, ADR-020 |
+| ~~Q10~~ | ~~Does Mode B generalise to an unseen taxonomy?~~ | **Weakly: 0.166 on massive-en-US** under the cap, 10x chance and well calibrated (ECE 0.076), against Mode A's 0.291 and Jev's 0.814. Key format ruled out (0.140 = 0.140). Two training taxonomies were not enough; the rebuilt mixture is the fix. FINDINGS.md §12 |
+| **Q11** | Does the frozen instruct checkpoint match reflex's 0.719 through our engine? | `LEV_SERVE_MODEL=Qwen/Qwen3.5-4B modal serve`, same task files. Sets the floor and locates any residual gap in the engine rather than the training |
 | **Q8** | Is 25% the right Mode B share? | Ablation at 10% / 25% / 40%, read on banking77 and clinc_oos accuracy against Mode A sources' regression |

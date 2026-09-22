@@ -10,6 +10,8 @@ import json
 import sys
 from pathlib import Path
 
+from .labels import LABEL_OPTION_CAP
+
 
 def _measure_tokens(config, data_dir: str, sample: int = 1500) -> dict:
     """Tokenise real rendered prompts and report the length distribution.
@@ -135,8 +137,6 @@ def cmd_eval_parser(args: argparse.Namespace) -> None:
     print(f"\n  uv run levbench eval --backend lev --tasks {args.out}")
 
 
-def cmd_train(args: argparse.Namespace) -> None:
-    from .train.config import PRESETS
 def cmd_s1bench_export(args: argparse.Namespace) -> None:
     """Export the S1Bench evaluation subsets as levbench task files."""
     from .data.s1bench import export
@@ -152,6 +152,8 @@ def cmd_s1bench_export(args: argparse.Namespace) -> None:
     print(f"    uv run levbench eval --backend lev --tasks {args.out} --base-url $URL")
 
 
+def cmd_train(args: argparse.Namespace) -> None:
+    from .train.config import PRESETS
     from .train.loop import run_training
 
     config = PRESETS[args.preset]
@@ -173,7 +175,9 @@ def cmd_serve(args: argparse.Namespace) -> None:
     from .server import create_app
 
     uvicorn.run(
-        create_app(args.checkpoint, args.model_cache, args.calibration, args.model),
+        create_app(
+            args.checkpoint, args.model_cache, args.calibration, args.model, args.noul_readout
+        ),
         host=args.host,
         port=args.port,
     )
@@ -195,7 +199,12 @@ def main(argv: list[str] | None = None) -> None:
     route_parser = sub.add_parser("route", help="show the readout mode per question")
     route_parser.add_argument("request", help="path to a /v1/systemone request JSON")
     route_parser.add_argument("--model", default="Qwen/Qwen3.5-4B-Base")
-    route_parser.add_argument("--max-label-options", type=int, default=None)
+    route_parser.add_argument(
+        "--max-label-options",
+        type=int,
+        default=LABEL_OPTION_CAP,
+        help="Mode A above this many options routes to Mode B; the served default",
+    )
     route_parser.set_defaults(func=cmd_route)
 
     check_data_parser = sub.add_parser("check-data", help="contamination guard over a source list")
@@ -220,6 +229,12 @@ def main(argv: list[str] | None = None) -> None:
     serve_parser.set_defaults(func=cmd_serve)
 
     data_parser = sub.add_parser("data", help="build the training mixture and the eval set")
+    serve_parser.add_argument(
+        "--noul-readout",
+        choices=["rating", "binary"],
+        default=None,
+        help="default: rating with a checkpoint, binary without one",
+    )
     data_sub = data_parser.add_subparsers(dest="data_command", required=True)
 
     build_parser = data_sub.add_parser("build", help="download, split and write the mixture")
@@ -244,22 +259,6 @@ def main(argv: list[str] | None = None) -> None:
     eval_parser.add_argument("--limit-per-source", type=int, default=None)
     eval_parser.set_defaults(func=cmd_eval_parser)
 
-    train_parser = sub.add_parser("train", help="run the LoRA fine-tune")
-    train_parser.add_argument("--preset", default="4b", choices=_preset_names())
-    train_parser.add_argument("--data", default="data/mixture")
-    train_parser.add_argument("--output-dir", default=None)
-    train_parser.add_argument("--model-cache", default=None)
-    train_parser.add_argument(
-        "--max-steps", type=int, default=None, help="stop early; for smoke runs"
-    )
-    train_parser.set_defaults(func=cmd_train)
-
-    args = parser.parse_args(argv)
-    args.func(args)
-
-
-if __name__ == "__main__":
-    main()
     s1_parser = sub.add_parser(
         "s1bench", help="export the S1Bench evaluation subsets (evaluation only)"
     )

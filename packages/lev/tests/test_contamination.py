@@ -30,6 +30,13 @@ class TestResolution:
             ("google/civil_comments", "civil_comments"),
             ("qiaojin/PubMedQA", "pubmedqa"),
             ("mteb/summeval", "summeval-relevance"),
+            # Re-hosted copies that passed before segment matching covered aliases.
+            ("SetFit/amazon_massive_intent_en-US", "massive-en-US"),
+            ("SetFit/amazon_massive_scenario_en-US", "massive-en-US"),
+            ("nvidia/Aegis-AI-Content-Safety-Dataset-1.0", "aegis2"),
+            ("someone/my-squad-v2-mirror", "squad2"),
+            # Same intent schema as MASSIVE, via SLURP: blocked for the taxonomy.
+            ("DeepPavlov/hwu64", "massive-en-US"),
         ],
     )
     def test_aliases_and_variants_resolve(self, alias, expected):
@@ -37,7 +44,27 @@ class TestResolution:
 
     @pytest.mark.parametrize(
         "innocent",
-        ["PolyAI/banking77", "fancyzhx/ag_news", "SetFit/sst5", "my-org/internal-tickets"],
+        [
+            "PolyAI/banking77",
+            "fancyzhx/ag_news",
+            "SetFit/sst5",
+            "my-org/internal-tickets",
+            # New training sources: must stay clean under alias-segment matching.
+            "stanfordnlp/snli",
+            "facebook/anli",
+            "SetFit/qqp",
+            "SetFit/mrpc",
+            "lmsys/toxic-chat",
+            "toxigen/toxigen-data",
+            "PKU-Alignment/BeaverTails",
+            "openbmb/UltraFeedback",
+            "benayas/snips",
+            "ehovy/race",
+            "tau/commonsense_qa",
+            "allenai/sciq",
+            "allenai/openbookqa",
+            "allenai/ai2_arc",
+        ],
     )
     def test_innocent_datasets_pass(self, innocent):
         assert resolve(innocent) is None

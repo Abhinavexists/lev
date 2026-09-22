@@ -45,11 +45,10 @@ class RouteCache:
         self._routes: dict[tuple[str, str, int], object] = {}
 
     def route_for(self, example: Example):
-        # The option count is part of the key. Source and name alone suffice for
-        # the real mixture, where one source carries exactly one question -- but
-        # if that ever stops being true the cache would hand a 77-option question
-        # the route computed for a 4-option one, and the batch would be collated
-        # for the wrong readout entirely.
+        # The option count is part of the key because one source now carries
+        # many questions: subsampled option sets and per-row QA choices. The
+        # route depends only on the count, so this stays one entry per distinct
+        # size rather than one per row.
         key = (example.source, example.name, candidate_count(example.question))
         if key not in self._routes:
             self._routes[key] = route(example.question, self.tokenizer, self.max_label_options)

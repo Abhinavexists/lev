@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import pytest
-from lev.labels import NOUL_RATING_TOKENS, label_codes, noul_probability, single_token_codes
-from lev.prompt import ANSWER_CUE, Layout, build, render_state, schema_block
-from lev.router import Mode, route, route_all
+from lev.labels import (
+    LABEL_OPTION_CAP,
+    NOUL_RATING_TOKENS,
+    label_codes,
+    noul_probability,
+    single_token_codes,
+)
+from lev.model import average_orders
+from lev.prompt import ANSWER_CUE, Layout, build, render_question, render_state, schema_block
+from lev.router import BINARY_NOUL, Mode, route, route_all
 from lev.types import Choice, Noul, Score
 
 
@@ -136,3 +143,120 @@ class TestSchemaValidation:
         with pytest.raises(ValueError):
             Score(criteria=[str(i) for i in range(11)])
         assert len(Score(criteria=["a", "b"]).criteria) == 2
+
+
+class TestOptionCap:
+    def test_generous_tokenizer_still_routes_above_the_cap_to_mode_b(self):
+        """Qwen3.5 encodes every two-letter code up to `BP` as one token, so 60
+        options *are* expressible in Mode A. The cap, not the tokenizer, must
+        decide -- that regime was never trained and scored 0.291 on massive."""
+        from string import ascii_uppercase
+
+        from conftest import FakeTokenizer
+
+        pairs = {f" {a}{b}" for a in ascii_uppercase for b in ascii_uppercase}
+        generous = FakeTokenizer({f" {c}" for c in ascii_uppercase} | pairs)
+        sixty = Choice(criteria={f"o{i}": None for i in range(60)})
+        assert single_token_codes(generous, 60) is not None, "fixture must be generous"
+        assert (
+            route(sixty, generous, max_label_options=LABEL_OPTION_CAP).mode is Mode.CANDIDATE_PATH
+        )
+        at_cap = Choice(criteria={f"o{i}": None for i in range(LABEL_OPTION_CAP)})
+        assert route(at_cap, generous, max_label_options=LABEL_OPTION_CAP).mode is Mode.LABEL_TOKEN
+
+
+class TestBinaryNoul:
+    def test_binary_route_uses_two_lettered_codes(self, rich_tokenizer):
+        r = route(Noul(instructions="safe?"), rich_tokenizer, noul_binary=True)
+        assert r.mode is Mode.LABEL_TOKEN
+        assert r.codes == ["A", "B"]
+        assert r.reason == BINARY_NOUL
+
+    def test_default_route_is_still_the_rating_scale(self, rich_tokenizer):
+        r = route(Noul(instructions="safe?"), rich_tokenizer)
+        assert len(r.codes) == len(NOUL_RATING_TOKENS)
+
+    def test_binary_render_lists_yes_then_no(self):
+        text = render_question("q", Noul(instructions="Is it safe?"), ["A", "B"])
+        assert "A: yes" in text and "B: no" in text
+        assert "Rate 0-8" not in text
+
+    def test_reversed_order_puts_no_first(self):
+        text = render_question("q", Noul(instructions="Is it safe?"), ["A", "B"], order=[1, 0])
+        assert "A: no" in text and "B: yes" in text
+
+    def test_binary_render_carries_the_criteria(self):
+        q = Noul(instructions="Is it safe?", criteria={"true": "harmless", "false": "harmful"})
+        text = render_question("q", q, ["A", "B"])
+        assert "A: yes - harmless" in text and "B: no - harmful" in text
+
+
+class TestOrderAveraging:
+    def test_reversed_rendering_assigns_codes_by_position(self):
+        q = Choice(criteria={"refund": None, "replace": None, "info": None})
+        forward = render_question("q", q, ["A", "B", "C"])
+        backward = render_question("q", q, ["A", "B", "C"], order=[2, 1, 0])
+        assert "A: refund" in forward and "C: info" in forward
+        assert "A: info" in backward and "C: refund" in backward
+
+    def test_average_maps_reversed_row_back_to_canonical_slots(self):
+        forward = [0.7, 0.2, 0.1]
+        backward = [0.1, 0.2, 0.7]  # rendered reversed: position 0 showed candidate 2
+        merged = average_orders([forward, backward], [None, [2, 1, 0]])
+        assert merged == pytest.approx([0.7, 0.2, 0.1])
+
+    def test_average_cancels_a_first_position_bias(self):
+        """A model that always adds mass to whatever is listed first sees that
+        bonus land on different candidates in the two orders; averaging spreads
+        it back out."""
+        biased_forward = [0.6, 0.2, 0.2]  # candidate 0 first, gets the bonus
+        biased_backward = [0.6, 0.2, 0.2]  # candidate 2 first, gets the bonus
+        merged = average_orders([biased_forward, biased_backward], [None, [2, 1, 0]])
+        assert merged == pytest.approx([0.4, 0.2, 0.4])
+        assert sum(merged) == pytest.approx(1.0)
+
+    def test_single_order_is_identity(self):
+        assert average_orders([[0.25, 0.75]], [None]) == pytest.approx([0.25, 0.75])
+
+    def test_build_passes_order_through_state_first(self):
+        q = Choice(criteria={"a": None, "b": None})
+        r = build("state", "q", q, ["A", "B"], Layout.STATE_FIRST, order=[1, 0])
+        assert "A: b" in r.suffix and r.suffix.endswith(ANSWER_CUE)
+
+
+class TestWhichQuestionsGetTwoOrders:
+    def orders(self, question, tokenizer, **config):
+        from lev.model import DecisionEngine, EngineConfig
+
+        engine = DecisionEngine(model=None, tokenizer=tokenizer, config=EngineConfig(**config))
+        return engine._orders(
+            question, route(question, tokenizer, noul_binary=config.get("noul_readout") == "binary")
+        )
+
+    def test_choice_is_read_both_ways(self, rich_tokenizer):
+        assert self.orders(Choice(criteria={"a": None, "b": None, "c": None}), rich_tokenizer) == [
+            None,
+            [2, 1, 0],
+        ]
+
+    def test_binary_noul_is_read_both_ways(self, rich_tokenizer):
+        assert self.orders(Noul(instructions="?"), rich_tokenizer, noul_readout="binary") == [
+            None,
+            [1, 0],
+        ]
+
+    def test_score_keeps_its_level_order(self, rich_tokenizer):
+        """Levels run low to high and training never reorders them; a reversed
+        scale is a prompt the model has not seen (helpsteer2: -2.4 points)."""
+        assert self.orders(Score(criteria=["low", "mid", "high"]), rich_tokenizer) == [None]
+
+    def test_rating_noul_keeps_its_scale(self, rich_tokenizer):
+        assert self.orders(Noul(instructions="?"), rich_tokenizer) == [None]
+
+    def test_disabled_by_config(self, rich_tokenizer):
+        q = Choice(criteria={"a": None, "b": None})
+        assert self.orders(q, rich_tokenizer, order_average=False) == [None]
+
+    def test_schema_first_never_doubles_the_prefix(self, rich_tokenizer):
+        q = Choice(criteria={"a": None, "b": None})
+        assert self.orders(q, rich_tokenizer, layout=Layout.SCHEMA_FIRST) == [None]

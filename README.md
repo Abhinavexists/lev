@@ -183,23 +183,26 @@ transport with no key at all.
 | Contamination guard (all 13 eval subsets) | **done, tested** |
 | Training config + budget arithmetic | **done, verified** |
 | Benchmark harness | **done, tested** (offline) + run against live Jev |
-| Data pipeline — 9 sources, 3 splits, mixture | **done**, loads and splits verified |
+| Data pipeline — 23 sources, 3 splits, augmented mixture | **done**, loads and splits verified |
 | Held-out eval export (2,760 items, ±4 pts) | **done**, round-trips into levbench |
 | Collator, both readouts, objective | **done, tested** |
 | Training loop + checkpointing | **done** — 30 steps on Qwen3.5-0.8B-Base, both modes, losses finite |
 | Modal app, image, volumes | **image builds on Modal** |
 | Modal `download` / `build_data` / `smoke` | **run green on Modal** |
 | Modal `train` / `calibrate` / `evaluate` | **complete 4B run, calibrated and scored** ([ADR-018](docs/DECISIONS.md#adr-018--what-the-first-trained-checkpoint-actually-shows)) |
-| Modal `serve` | written, **not yet run remotely** |
-| Decision engine (prefill, fork, readout) | **runs on Qwen3.5-4B-Base**, Mode A verified |
-| Mode B head | **trains and serves**; untrained at scale |
+| Modal `serve` | **runs**; scored on S1Bench over HTTP |
+| S1Bench harness | **done**; validated against Jev's own per-subset numbers |
+| Decision engine (prefill, fork, readout) | **runs**; option cap, two-order averaging, binary Noul ([ADR-020](docs/DECISIONS.md#adr-020--the-trained-model-lost-to-the-frozen-one-what-changes-and-what-does-not)) |
+| Mode B head | **trains and serves**; unseen-taxonomy transfer untested |
 
-Every module that has not been executed says so in its own docstring. A 4B
-checkpoint has been trained, calibrated and scored: **0.856 accuracy, ECE 0.1162 →
-0.0529** on 1,800 held-out items. Those are in-distribution numbers on a held-out
-split of the training corpora and are **not comparable to Jev's 0.7751 / 0.0764** —
-S1Bench is thirteen different subsets, blocked from training and still unrun.
-[ADR-018.](docs/DECISIONS.md#adr-018--what-the-first-trained-checkpoint-actually-shows)
+A 4B checkpoint has been trained, calibrated and scored in-distribution (0.856,
+ECE 0.0529, [ADR-018](docs/DECISIONS.md#adr-018--what-the-first-trained-checkpoint-actually-shows))
+and then on **S1Bench, against Jev, through identical task files: 0.489 vs 0.754
+macro**. The frozen backbone scores 0.719 (reflex-4b), so the first fine-tune made
+the model worse. [FINDINGS §12](docs/FINDINGS.md) has the two failure modes and
+[ADR-020](docs/DECISIONS.md#adr-020--the-trained-model-lost-to-the-frozen-one-what-changes-and-what-does-not)
+what changed in response -- part of it live without retraining, the rest a new
+mixture and an instruct starting point that need a run.
 
 ---
 

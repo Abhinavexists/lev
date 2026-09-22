@@ -105,33 +105,50 @@ rather than warns.
 
 ### The sources
 
-Nine public classification corpora. A Jev-like model is not learning world
-knowledge, it is learning to put calibrated mass on a candidate set, so the
-supervision it needs is a gold label plus an explicit option set — which is
-exactly what a classification corpus is.
+Twenty-three public corpora, chosen so that the *question* carries information
+the state does not. The first mixture had nine sources with one fixed
+instruction each, and the model learned to ignore the instruction entirely --
+the state identified the answer set on its own. See ADR-020.
 
-| Source | Primitive | Options | Why it is in the mixture |
+| Source | Primitive | Options | What it adds |
 |---|---|---|---|
 | `fancyzhx/ag_news` | Choice | 4 | small, well-separated options |
-| `dair-ai/emotion` | Choice | 6 | overlapping options — harder to be confident |
+| `dair-ai/emotion` | Choice | 6 | overlapping options |
 | `fancyzhx/dbpedia_14` | Choice | 14 | mid-size option set |
-| `legacy-datasets/banking77` | Choice | **77** | **Mode B** — overflows single-token codes |
+| `ehovy/race` | Choice | 4 per row | passage + question; options differ every row |
+| `tau/commonsense_qa` | Choice | 5 per row | commonsense QA |
+| `allenai/sciq` | Choice | 4 per row | science QA with supporting context |
+| `allenai/openbookqa` | Choice | 4 per row | fact + question |
+| `allenai/ai2_arc` (Easy) | Choice | 3–5 per row | grade-school science |
+| `stanfordnlp/snli`, `facebook/anli` | Choice | 3 | NLI -- the answer is a relation between two fields |
+| `benayas/snips` | Choice | 7 | a second, small intent taxonomy |
+| `legacy-datasets/banking77` | Choice | **77** | **Mode B** |
 | `clinc/clinc_oos` | Choice | **151** | **Mode B** at the extreme |
-| `SetFit/sst5` | Score | 5 | genuinely ordered levels |
-| `Yelp/yelp_review_full` | Score | 5 | ordered, and a different domain |
-| `stanfordnlp/imdb` | Noul | 2 | long states |
-| `cornell-movie-review-data/rotten_tomatoes` | Noul | 2 | short states |
+| `SetFit/sst5`, `Yelp/yelp_review_full` | Score | 5 | ordered sentiment levels |
+| `openbmb/UltraFeedback` | Score | 5 | helpfulness rubric over instruction + response |
+| `stanfordnlp/imdb`, `cornell-movie-review-data/rotten_tomatoes` | Noul | 2 | sentiment, long and short states |
+| `SetFit/mrpc`, `SetFit/qqp` | Noul | 2 | paraphrase over sentence pairs |
+| `lmsys/toxic-chat`, `toxigen/toxigen-data` | Noul | 2 | **yes = toxic**: the bad outcome is the yes |
+| `PKU-Alignment/BeaverTails` | Noul | 2 | safety of a response; yes = safe, negated half the time |
 
-banking77 and clinc_oos are the **only** sources whose option sets cannot fit
-single-token label codes, so they are the only Mode B training signal. Weighting
-them by corpus size would give them a few percent and Mode B would not learn, so
-`default_weights()` gives the pair **25%** of the mixture deliberately. The
-remaining 75% splits evenly across the three primitives so no readout starves.
+Every source carries paraphrased instructions and every Noul source a negation
+that flips the target, so no polarity is constant. Choice option sets are
+subsampled, shuffled and sometimes stripped of descriptions in the train split.
+The held-out splits keep each source's canonical question, so the exported eval
+set and the fitted temperatures describe what is actually served.
 
-Three candidates were dropped: `CogComp/trec` and `takala/financial_phrasebank`
-are script-backed with no parquet mirror carrying their label names, and
-`datasets>=5` no longer runs dataset scripts; `PolyAI/banking77` is the same
-corpus as the `legacy-datasets` mirror we use, minus a loadable `ClassLabel`.
+banking77 and clinc_oos are the sources over the Mode A cap of 26 options
+(`labels.LABEL_OPTION_CAP`), so they are the Mode B training signal;
+`default_weights()` gives the pair **25%** of the mixture deliberately, and
+subsampling never takes them below 27 options. The remaining 75% splits evenly
+across the three primitives.
+
+Dropped, with reasons: `CogComp/trec`, `takala/financial_phrasebank`,
+`allenai/cosmos_qa`, `allenai/social_i_qa`, `wics/strategy-qa` and
+`mteb/mtop_intent` are script-backed and `datasets>=5` refuses them.
+`DeepPavlov/hwu64` loads, and is the 64-intent schema MASSIVE inherited via
+SLURP -- training on it would make massive-en-US a seen taxonomy, so the guard
+now blocks it.
 
 ### Two failure modes the pipeline is built to prevent
 
@@ -302,11 +319,15 @@ like a trained one until you read the Mode B numbers.
 |---|---|---|---|---|---|
 | `smoke` | Qwen3.5-0.8B-Base | LoRA r32 | 1.9 GB | 78.1 GB | minutes |
 | `2b` | Qwen3.5-2B-Base | full FT | 32.0 GB | 48.0 GB | 8 |
-| **`4b`** | **Qwen3.5-4B-Base** | **LoRA r32** | **8.3 GB** | **71.7 GB** | **16** |
+| `4b` | Qwen3.5-4B-Base | LoRA r32 | 8.3 GB | 71.7 GB | 16 |
+| **`4b-instruct`** | **Qwen3.5-4B** (instruct) | **LoRA r32, lr 5e-5** | **8.3 GB** | **71.7 GB** | **16** |
 | `9b` | Qwen3.5-9B-Base | LoRA r32 | 18.3 GB | 61.7 GB | 36 |
 
 A 16-hour run means you can afford about a dozen. **Budget the H100 for ablations, not
 one heroic run.**
+`4b-instruct` is the recommended start after ADR-020: frozen, the instruct
+checkpoint scores 0.719 on S1Bench (reflex-4b); the `4b` fine-tune scored 0.489.
+
 
 ---
 
@@ -386,16 +407,17 @@ Two bugs came out of running it that no test had caught:
 | Calibration fitting, ECE, profile I/O | **done, tested** |
 | Contamination guard (13 subsets) | **done, tested** |
 | Training config + budget arithmetic | **done, verified** |
-| Data loaders, splits, mixture | **done — 9 sources load, splits verified** |
+| Data loaders, splits, mixture | **done — 23 sources, augmentation on the train split** |
 | Held-out eval export | **done — 2,760 items, ±4pts** |
 | Collator, both readouts, loss | **done, exercised on a real backbone** |
 | Training loop, checkpointing | **done — runs, writes adapter + head** |
 | Modal app, image, volumes | **image builds on Modal** |
 | Modal `download` / `build_data` / `smoke` | **run green on Modal** |
 | Modal `train` / `calibrate` / `evaluate` | **complete 4B run, calibrated and scored** ([ADR-018](DECISIONS.md#adr-018--what-the-first-trained-checkpoint-actually-shows)) |
-| Modal `serve` | written, **not yet run remotely** |
-| Decision engine (prefill, fork, readout) | **runs on Qwen3.5-4B-Base**, Mode A verified |
-| Mode B head | **trains**, untrained at scale |
+| Modal `serve` | **runs**; scored on S1Bench over HTTP ([FINDINGS §12](FINDINGS.md)) |
+| Decision engine (prefill, fork, readout) | **runs**; two-order averaging, binary Noul, option cap (ADR-020) |
+| Mode B head | **trains and serves**; transfer to an unseen taxonomy untested (Q10) |
+| S1Bench harness (`lev s1bench export`) | **done, validated against Jev's own numbers** |
 
 Everything marked "not yet run" says so in its module docstring too. No trained
 checkpoint has been evaluated, so no accuracy or calibration number here comes from

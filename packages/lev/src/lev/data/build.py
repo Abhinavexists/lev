@@ -23,7 +23,7 @@ from pydantic import TypeAdapter
 from ..prompt import Layout
 from ..types import Question
 from .mixture import Example, MixtureSpec, build_mixture
-from .sources import REGISTRY, adjacency_map, default_weights, load_source
+from .sources import REGISTRY, adjacency_map, augmentation_map, default_weights, load_source
 from .splits import SPLIT_SALT, Split, check_coverage, split_examples
 
 _QUESTION = TypeAdapter(Question)
@@ -150,6 +150,11 @@ def build_dataset(
             # layout and abstain decisions in lockstep.
             seed=seed + list(Split).index(split),
             adjacent=adjacency_map(),
+            # Paraphrases, negations and option subsampling are training
+            # variation. The held-out splits keep every source's canonical
+            # question, so an exported eval file has one question per source
+            # and a calibration temperature is fitted on what is served.
+            augment=augmentation_map() if is_train else {},
         )
         # `name=name` binds the loop variable at definition time; without it every
         # loader would close over the last source in the dict.
@@ -176,6 +181,15 @@ def build_dataset(
         "raw_split_counts": {split.value: n for split, n in report.counts.items()},
         "schema_first_fraction": schema_first_fraction,
         "abstain_fraction": abstain_fraction,
+        "augmentation": {
+            "train_only": True,
+            "sources_with_negations": sorted(
+                n for n, a in augmentation_map().items() if a.negations
+            ),
+            "sources_with_paraphrases": sorted(
+                n for n, a in augmentation_map().items() if a.paraphrases
+            ),
+        },
         "seed": seed,
         "split_salt": SPLIT_SALT,
     }

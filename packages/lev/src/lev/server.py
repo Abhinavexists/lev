@@ -52,6 +52,7 @@ def create_app(
     model_cache: str | None = None,
     calibration: str | None = None,
     model_id: str = "Qwen/Qwen3.5-4B-Base",
+    noul_readout: str | None = None,
 ) -> Any:
     from fastapi import FastAPI, HTTPException
 
@@ -111,12 +112,17 @@ def create_app(
                 # benchmark measured at ECE 0.43.
                 print(f"WARNING: no calibration at {resolved_calibration}; serving raw softmax")
 
-        state["engine"] = DecisionEngine(
-            model, tokenizer, EngineConfig(model_id=model_id), profile, mode_b_head=head
-        )
+        # A stock checkpoint pins the 0-8 rating scale at one end regardless of
+        # content (ADR-007), so untrained serving reads Noul as two options.
+        readout = noul_readout or ("rating" if checkpoint else "binary")
+        config = EngineConfig(model_id=model_id, noul_readout=readout)
+        state["engine"] = DecisionEngine(model, tokenizer, config, profile, mode_b_head=head)
         state["calibrated"] = bool(profile.temperatures)
         state["checkpoint"] = str(checkpoint) if checkpoint else None
         state["mode_b"] = head is not None
+        state["noul_readout"] = readout
+        state["max_label_options"] = config.max_label_options
+        state["order_average"] = config.order_average
 
     @app.get("/health")
     def health() -> dict:
@@ -126,6 +132,9 @@ def create_app(
             "checkpoint": state.get("checkpoint"),
             "calibrated": state.get("calibrated", False),
             "mode_b": state.get("mode_b", False),
+            "noul_readout": state.get("noul_readout"),
+            "max_label_options": state.get("max_label_options"),
+            "order_average": state.get("order_average"),
         }
 
     @app.post("/v1/systemone", response_model=SystemOneResponse)
