@@ -128,6 +128,66 @@ def cmd_compare(args: argparse.Namespace) -> None:
 
 def cmd_confidence(args: argparse.Namespace) -> None:
     """Work out which statistic the server's `confidence` field really is."""
+def cmd_snake(args: argparse.Namespace) -> None:
+    """A decision model plays Snake over `/v1/systemone`; see `levbench.snake`."""
+    from contextlib import nullcontext
+
+    from .snake import PlannerClient, play
+    from .snake.ui import Keyboard, LiveDisplay, network_label, status_line
+
+    if args.backend == "planner":
+        client, model = PlannerClient(), "planner"
+    else:
+        _require_key(args.backend, args.base_url)
+        client, model = runner.build_client(args.backend, args.model, args.base_url, args.timeout)
+
+    live = not args.headless and LiveDisplay.available()
+    if not args.headless and not live:
+        print("no TTY (or rich missing: uv sync --extra demo); printing status lines", flush=True)
+    display = LiveDisplay(alt_screen=not args.no_alt_screen) if live else None
+    with display or nullcontext(), Keyboard() as keyboard:
+        summary = play(
+            client,
+            args.backend,
+            model,
+            width=args.width,
+            height=args.height,
+            seed=args.seed,
+            initial_length=args.initial_length,
+            steps=args.steps,
+            duration=args.duration,
+            fps=args.fps,
+            guarded=not args.unassisted,
+            prompt=args.prompt,
+            record=args.record,
+            network=network_label(args.backend, args.base_url),
+            display=display,
+            keys=keyboard.read if live else None,
+            on_step=None if live else (lambda g, d, st: print(status_line(g, d, st), flush=True)),
+        )
+    print("\n".join(summary.lines()))
+    if args.record:
+        print(f"recorded -> {args.record}   replay: uv run levbench replay {args.record}")
+
+
+def cmd_replay(args: argparse.Namespace) -> None:
+    """Play a recording back in the same display, at original speed."""
+    from .snake import load_record, replay
+    from .snake.ui import Keyboard, LiveDisplay
+
+    metadata, frames = load_record(args.recording)
+    if not LiveDisplay.available():
+        sys.exit("replay needs a TTY with rich installed (uv sync --extra demo)")
+    print(
+        f"{len(frames)} frames, {frames[-1]['at']:.0f}s of {metadata['backend']} / "
+        f"{metadata['model']}; Q quits",
+        flush=True,
+    )
+    with LiveDisplay(alt_screen=not args.no_alt_screen) as display, Keyboard() as keyboard:
+        shown = replay(args.recording, display, speed=args.speed, keys=keyboard.read)
+    print(f"replayed {shown}/{len(frames)} frames")
+
+
     _require_key("jev", args.base_url)
     items, questions = dataset()
     if args.limit:
@@ -202,3 +262,50 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
+    snake_parser = sub.add_parser("snake", help="a decision model plays Snake, one call per move")
+    snake_parser.add_argument(
+        "--backend",
+        choices=[*BACKENDS, "planner"],
+        default="lev",
+        help="`planner` plays from the safety planner alone: no server, the reference row",
+    )
+    snake_parser.add_argument("--model", default=None)
+    snake_parser.add_argument("--prompt", choices=("compact", "detailed"), default="compact")
+    snake_parser.add_argument("--width", type=int, default=24)
+    snake_parser.add_argument("--height", type=int, default=16)
+    snake_parser.add_argument("--seed", type=int, default=7)
+    snake_parser.add_argument("--initial-length", type=int, default=6)
+    snake_parser.add_argument("--steps", type=int, default=None, help="stop after this many moves")
+    snake_parser.add_argument("--duration", type=float, default=None, help="stop after N seconds")
+    snake_parser.add_argument(
+        "--fps", type=float, default=None, help="pace moves to a budget; default waits on inference"
+    )
+    snake_parser.add_argument(
+        "--unassisted",
+        action="store_true",
+        help="execute the model's raw first choice; no safety shield, deaths count",
+    )
+    snake_parser.add_argument("--headless", action="store_true", help="status lines, no display")
+    snake_parser.add_argument(
+        "--no-alt-screen",
+        action="store_true",
+        help="draw inline instead of on the alternate screen",
+    )
+    snake_parser.add_argument("--record", default=None, help="append a JSONL record of the run")
+    snake_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="per-call timeout in seconds; default 120 for --backend lev, the SDK's 10 otherwise",
+    )
+    _add_base_url(snake_parser)
+    snake_parser.set_defaults(func=cmd_snake)
+
+    replay_parser = sub.add_parser(
+        "replay", help="play a `snake --record` file back at original speed"
+    )
+    replay_parser.add_argument("recording")
+    replay_parser.add_argument("--speed", type=float, default=1.0, help="playback multiplier")
+    replay_parser.add_argument("--no-alt-screen", action="store_true")
+    replay_parser.set_defaults(func=cmd_replay)
+

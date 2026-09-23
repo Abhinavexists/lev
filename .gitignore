@@ -29,3 +29,7 @@ wandb/
 data/mixture/
 data/eval/
 data/s1bench/
+
+# Demo recordings and pulled weights (`make weights`)
+artifacts/
+weights/

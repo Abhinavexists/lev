@@ -9,6 +9,10 @@ dependencies = [
     "system-one-adapter[anthropic]>=0.2.0",
 ]
 
+[project.optional-dependencies]
+# The Snake demo's terminal display. Without it the demo prints status lines.
+demo = ["rich>=13"]
+
 [project.scripts]
 levbench = "levbench.cli:main"
 

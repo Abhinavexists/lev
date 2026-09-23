@@ -80,7 +80,18 @@ class EvalReport:
 DEFAULT_LOCAL_BASE_URL = "http://localhost:8000"
 
 
-def build_client(backend: str, model: str | None = None, base_url: str | None = None):
+# A self-hosted server may be scaling from zero: Modal's cold start for the 4B
+# model measured 20-55 s, against the SDK's 10 s default. The first move of a
+# demo, or the first item of an eval, must not fail on that.
+DEFAULT_LOCAL_TIMEOUT = 120.0
+
+
+def build_client(
+    backend: str,
+    model: str | None = None,
+    base_url: str | None = None,
+    timeout: float | None = None,
+):
     """Return `(client, model_name)` for `jev`, `lev` or `anthropic`.
 
     All three speak one of two client APIs, so the benchmark body is written once:
@@ -108,6 +119,10 @@ def build_client(backend: str, model: str | None = None, base_url: str | None = 
         # benchmark whatever the default is while labelling it `resolved`.
         kwargs: dict[str, Any] = {"model": resolved}
         if base_url:
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        elif backend == "lev":
+            kwargs["timeout"] = DEFAULT_LOCAL_TIMEOUT
             kwargs["base_url"] = base_url
             # Never forward the real Jev credential to a non-default host. The
             # SDK always sends `Authorization: Bearer <key>`, so reusing

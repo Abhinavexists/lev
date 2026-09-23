@@ -18,6 +18,7 @@ dependencies = [
 train = ["lev[train]"]
 serve = ["lev[serve]"]
 modal = ["lev[modal]"]
+demo = ["levbench[demo]"]
 
 [dependency-groups]
 dev = [

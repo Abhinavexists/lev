@@ -12,7 +12,7 @@ URL    ?= http://localhost:8000
 
 .PHONY: help setup setup-train setup-serve setup-modal test lint fmt check \
         bench bench-local sweep plan check-data data eval-set s1bench smoke smoke-local \
-        train calibrate serve clean
+        train calibrate serve snake clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -83,6 +83,9 @@ calibrate: ## Modal: fit per-bucket temperatures after training
 
 serve: ## Modal: serve /v1/systemone on an H100
 	modal serve modal/app.py
+
+snake: ## The decision model plays Snake over /v1/systemone (URL=server; --record in artifacts/)
+	uv run levbench snake --backend lev --base-url $(URL) --record artifacts/snake/run.jsonl
 
 clean: ## Remove caches and build artefacts
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +

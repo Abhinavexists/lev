@@ -1003,6 +1003,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+demo = [
+    { name = "levbench", extra = ["demo"] },
+]
 modal = [
     { name = "lev", extra = ["modal"] },
 ]
@@ -1026,9 +1029,10 @@ requires-dist = [
     { name = "lev", extras = ["serve"], marker = "extra == 'serve'", editable = "packages/lev" },
     { name = "lev", extras = ["train"], marker = "extra == 'train'", editable = "packages/lev" },
     { name = "levbench", editable = "packages/levbench" },
+    { name = "levbench", extras = ["demo"], marker = "extra == 'demo'", editable = "packages/levbench" },
     { name = "python-dotenv", specifier = ">=1.2.3" },
 ]
-provides-extras = ["train", "serve", "modal"]
+provides-extras = ["train", "serve", "modal", "demo"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1045,11 +1049,18 @@ dependencies = [
     { name = "typesafe-sdk" },
 ]
 
+[package.optional-dependencies]
+demo = [
+    { name = "rich" },
+]
+
 [package.metadata]
 requires-dist = [
+    { name = "rich", marker = "extra == 'demo'", specifier = ">=13" },
     { name = "system-one-adapter", extras = ["anthropic"], specifier = ">=0.2.0" },
     { name = "typesafe-sdk", specifier = ">=0.7.0" },
 ]
+provides-extras = ["demo"]
 
 [[package]]
 name = "markdown-it-py"

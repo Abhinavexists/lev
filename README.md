@@ -174,6 +174,32 @@ transport with no key at all.
 
 ---
 
+## Watch it decide
+
+The model plays Snake, one `/v1/systemone` call per move -- laya-mlx's demo,
+ported so it runs against any System One server through the same client the
+benchmark uses:
+
+```bash
+uv sync --extra demo
+uv run levbench snake --backend planner                        # no server: the planner plays, see the display
+make snake URL=https://<your-serve-url>                        # lev
+uv run levbench snake --backend jev --steps 200 --record artifacts/snake/jev.jsonl
+uv run levbench replay artifacts/snake/jev.jsonl              # play it back at original speed
+```
+
+The display is laya's: the board, big-digit score/length/best, the four
+direction probabilities with the model's pick marked and unsafe moves flagged,
+`EXECUTING` with `SHIELD` when the planner had to overrule an unsafe first
+choice, the model's dead-end-risk and food-reachability estimates beside the
+planner's ground truth, inference time, decisions/second, and a running score
+of both Noul questions against that truth. SPACE pauses, +/- change the pace,
+R resets, Q quits. `--unassisted` removes the shield so deaths end the run;
+with it on, a finished board rolls into the next round. `--record` writes a
+JSONL that `levbench replay` plays back. In the compact prompt the state text
+*states* the Noul answers, so the running Noul score is the cheapest test there
+is of whether a model reads its question.
+
 ## Status
 
 | | |
