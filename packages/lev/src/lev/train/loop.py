@@ -18,6 +18,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from ..prompt import Style
 from .checkpoints import latest_checkpoint, load_checkpoint, load_training_state, save_checkpoint
 from .collate import DecisionCollator, ModeBatcher, RouteCache
 from .config import TrainConfig
@@ -312,7 +313,7 @@ def run_training(
 
     # One cache, so a question is routed once for the whole run rather than
     # once for the batcher and again for the collator.
-    routes = RouteCache(tokenizer, config.max_label_options)
+    routes = RouteCache(tokenizer, config.max_label_options, Style(config.prompt_style))
     collator = DecisionCollator(tokenizer, max_seq_len=config.max_seq_len, routes=routes)
     batcher = ModeBatcher(
         tokenizer,

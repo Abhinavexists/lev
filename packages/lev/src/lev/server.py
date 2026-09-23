@@ -56,6 +56,7 @@ def create_app(
     noul_readout: str | None = None,
     compile: bool = False,
     max_label_options: int | None = None,
+    prompt_style: str | None = None,
 ) -> Any:
     from fastapi import FastAPI, HTTPException
 
@@ -64,7 +65,7 @@ def create_app(
 
     @app.on_event("startup")
     def _load() -> None:
-        nonlocal model_id
+        nonlocal model_id, prompt_style
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -81,6 +82,8 @@ def create_app(
             manifest_file = checkpoint / "lev_release.json"
             if manifest_file.is_file():
                 manifest = json.loads(manifest_file.read_text())
+                # The prompt style is a property of the weights too.
+                prompt_style = manifest.get("prompt_style", prompt_style)
                 if manifest["base_model"] != model_id:
                     print(
                         f"release manifest names base {manifest['base_model']!r}; "
@@ -132,7 +135,12 @@ def create_app(
         # A stock checkpoint pins the 0-8 rating scale at one end regardless of
         # content (ADR-007), so untrained serving reads Noul as two options.
         readout = noul_readout or ("rating" if checkpoint else "binary")
-        config = EngineConfig(model_id=model_id, noul_readout=readout, compile=compile)
+        config = EngineConfig(
+            model_id=model_id,
+            noul_readout=readout,
+            compile=compile,
+            prompt_style=prompt_style or "plain",
+        )
         if max_label_options is not None:
             # A serving-side experiment knob (ADR-025): the trained policy is the
             # EngineConfig default, and /health reports whatever is in effect.
@@ -151,6 +159,7 @@ def create_app(
         state["order_average"] = config.order_average
         state["prefix_mode"] = config.prefix_mode
         state["compiled"] = config.compile
+        state["prompt_style"] = config.prompt_style
 
     @app.get("/health")
     def health() -> dict:
@@ -165,6 +174,7 @@ def create_app(
             "order_average": state.get("order_average"),
             "prefix_mode": state.get("prefix_mode"),
             "compiled": state.get("compiled"),
+            "prompt_style": state.get("prompt_style"),
         }
 
     @app.post("/v1/systemone", response_model=SystemOneResponse)

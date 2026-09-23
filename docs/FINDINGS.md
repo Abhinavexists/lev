@@ -751,6 +751,49 @@ learned the shortcut the benchmark was designed to punish. Adversarial
 negatives (swapped-word pairs from the existing positives) are the training
 fix; PAWS itself and PAWS-X are blocked.
 
+### The frozen backbone through our engine (Q11)
+
+`Qwen/Qwen3.5-4B` with no adapter -- binary Noul, Mode A to the tokenizer
+limit, two-order averaging, no calibration -- on the same files:
+
+| subset | frozen, our prompts | frozen, reflex | LoRA | LoRA − frozen |
+|---|---|---|---|---|
+| vitaminc-dev | 0.715 | 0.75 | 0.751 | +3.6 |
+| massive-en-US | 0.657 | 0.83 | 0.746 | +8.9 |
+| boolq | 0.843 | 0.82 | 0.863 | +2.0 |
+| aegis2 | 0.708 | 0.82 | 0.832 | +12.4 |
+| paws | 0.752 | 0.77 | 0.612 | −14.0 |
+| helpsteer2 | 0.244 | 0.33 | 0.380 | +13.6 |
+| **macro** | **0.653** | **0.719** | **0.697** | |
+
+Two things this separates. The LoRA adds 2–14 points on five subsets and
+costs 14 on paws, which is the shortcut §15 describes and ADR-026 targets.
+And the same frozen weights score 0.653 through our prompts against 0.719
+through reflex's -- 6.6 points, 17 on massive alone, that are prompt and
+readout design rather than weights.
+
+Most of that is the dressing. Rendering the same request as the ChatML turns
+the instruct model was trained on -- system prompt, `# Evidence` /
+`# Criterion` / `# Options`, `A. option` lines, "respond with only the letter",
+an empty think block opening the assistant turn -- and reading the bare letter
+that follows:
+
+| subset | frozen, plain | frozen, chat | Δ | ECE plain → chat |
+|---|---|---|---|---|
+| vitaminc-dev | 0.715 | 0.733 | +1.8 | 0.444 → 0.164 |
+| massive-en-US | 0.657 | 0.734 | +7.7 | 0.494 → 0.116 |
+| boolq | 0.843 | 0.860 | +1.7 | 0.058 → 0.051 |
+| aegis2 | 0.708 | 0.776 | +6.8 | 0.045 → 0.064 |
+| paws | 0.752 | 0.756 | +0.4 | 0.026 → 0.057 |
+| helpsteer2 | 0.244 | 0.400 | +15.6 | 0.152 → 0.155 |
+| **macro** | **0.653** | **0.710** | +5.7 | |
+
+Same weights, same items. The frozen backbone in its own format already beats
+the trained plain-style LoRA (0.697), and its zero-shot calibration on the
+two hardest subsets improves fourfold. The instruct preset trains in this
+style from here (ADR-027); prompts are rendered at training time, so the
+mixture did not change.
+
 Calibration: Jev is better on five of six; we are better on helpsteer2, where
 Jev is confidently wrong at 0.29. The temperatures were fitted on the training
 mixture's held-out split and these subsets are out of distribution for it;

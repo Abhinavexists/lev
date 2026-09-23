@@ -11,7 +11,17 @@ from lev.labels import (
     single_token_codes,
 )
 from lev.model import average_orders
-from lev.prompt import ANSWER_CUE, Layout, build, render_question, render_state, schema_block
+from lev.prompt import (
+    ANSWER_CUE,
+    CHAT_TAIL,
+    Layout,
+    Style,
+    build,
+    label_prefix,
+    render_question,
+    render_state,
+    schema_block,
+)
 from lev.router import BINARY_NOUL, Mode, route, route_all
 from lev.types import Choice, Noul, Score
 
@@ -272,3 +282,60 @@ class TestShapeBuckets:
         from lev.model import pow2
 
         assert [pow2(n) for n in (1, 2, 3, 5, 8, 9)] == [1, 2, 4, 8, 8, 16]
+
+
+class TestChatStyle:
+    def test_state_first_wraps_evidence_in_the_user_turn_and_opens_the_assistant(self):
+        q = Choice(instructions="Which team?", criteria={"billing": "money", "tech": None})
+        r = build("the ticket", "q", q, ["A", "B"], Layout.STATE_FIRST, style=Style.CHAT)
+        assert r.prefix.startswith("<|im_start|>system\n")
+        assert "<|im_start|>user\n# Evidence\nthe ticket\n\n" in r.prefix
+        assert "# Criterion\nWhich team?" in r.suffix
+        assert "A. billing: money" in r.suffix and "B. tech" in r.suffix
+        assert "Respond with only the letter of the best option." in r.suffix
+        assert r.suffix.endswith(CHAT_TAIL) and r.full.count("<|im_end|>") == 2
+
+    def test_schema_first_prefix_is_state_independent_in_chat_too(self):
+        q = Choice(instructions="Which team?", criteria={"a": None, "b": None})
+        a = build("s1", "q", q, ["A", "B"], Layout.SCHEMA_FIRST, style=Style.CHAT)
+        b = build("s2", "q", q, ["A", "B"], Layout.SCHEMA_FIRST, style=Style.CHAT)
+        assert a.prefix == b.prefix and a.suffix != b.suffix
+        assert a.suffix.startswith("# Evidence\ns1") and a.suffix.endswith(CHAT_TAIL)
+
+    def test_score_levels_are_numbered_and_noul_binary_is_a_lettered_pair(self):
+        s = render_question(
+            "s", Score(criteria=["low", "mid", "high"]), ["A", "B", "C"], style=Style.CHAT
+        )
+        assert "A. (level 0 of 2) low" in s and "C. (level 2 of 2) high" in s
+        n = render_question(
+            "n",
+            Noul(instructions="Safe?", criteria={"true": "harmless"}),
+            ["A", "B"],
+            style=Style.CHAT,
+        )
+        assert "A. yes: harmless" in n and "B. no: the statement is false" in n
+        rating = render_question(
+            "n", Noul(instructions="Safe?"), [str(i) for i in range(9)], style=Style.CHAT
+        )
+        assert "# Scale" in rating and "Respond with only a digit from 0 to 8." in rating
+
+    def test_reversed_order_applies_in_chat_style(self):
+        q = Choice(criteria={"x": None, "y": None, "z": None})
+        text = render_question("q", q, ["A", "B", "C"], order=[2, 1, 0], style=Style.CHAT)
+        assert "A. z" in text and "C. x" in text
+
+    def test_label_prefix_is_bare_for_chat_and_space_for_plain(
+        self, rich_tokenizer, chat_tokenizer
+    ):
+        assert label_prefix(Style.PLAIN) == " " and label_prefix(Style.CHAT) == ""
+        q = Choice(criteria={"a": None, "b": None, "c": None})
+        assert route(q, chat_tokenizer, label_prefix="").codes == ["A", "B", "C"]
+        # A tokenizer with only space-prefixed letters cannot express bare codes:
+        # the chat style falls through to Mode B there rather than misreading.
+        assert route(q, rich_tokenizer, label_prefix="").mode is Mode.CANDIDATE_PATH
+
+    def test_plain_style_is_unchanged(self):
+        q = Choice(instructions="Which team?", criteria={"a": None, "b": None})
+        r = build("state", "q", q, ["A", "B"])
+        assert r.prefix == "Context:\nstate\n\n" and r.suffix.endswith(ANSWER_CUE)
+        assert "<|im_start|>" not in r.full

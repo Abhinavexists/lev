@@ -36,6 +36,7 @@ def build_release(
     calibration: str | Path | None = None,
     name: str | None = None,
     metrics: dict | None = None,
+    prompt_style: str = "plain",
 ) -> dict:
     """Copy a `step-N` checkpoint into a self-describing release directory.
 
@@ -75,6 +76,7 @@ def build_release(
         # tokenizer's single-token limit regardless (ADR-025).
         "train_max_label_options": LABEL_OPTION_CAP,
         "noul_readout": "rating",
+        "prompt_style": prompt_style,
         "files": copied,
         "metrics": metrics or {},
         "created": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -120,7 +122,8 @@ uv run lev serve --checkpoint <this directory or its Hub id>
 uv run levbench eval --backend lev --tasks data/s1bench --base-url http://localhost:8000
 ```
 
-The server reads `lev_release.json` for the base model. Questions route to
+The server reads `lev_release.json` for the base model and the prompt style
+(`{manifest["prompt_style"]}`) the adapter trained under. Questions route to
 label-token readout (Mode A) while the tokenizer can express the option codes
 in single tokens, and to the candidate-path head (Mode B) above that; Mode B
 was trained on sets of {manifest["train_max_label_options"] + 1}+ options.

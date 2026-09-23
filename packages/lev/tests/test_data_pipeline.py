@@ -545,13 +545,14 @@ class TestReaderSources:
             if spec.primitive == "noul":
                 assert spec.negations, f"{name} has no negated question"
 
-    def test_augmentation_map_keeps_mode_b_sources_above_the_cap(self):
-        from lev.data.sources import augmentation_map
+    def test_large_taxonomy_sources_keep_full_sets_half_the_time_and_cut_deep(self):
+        from lev.data.sources import LARGE_SET_MIN_OPTIONS, augmentation_map
 
         aug = augmentation_map()
         for name in MODE_B_SOURCES:
-            assert aug[name].min_options == SINGLE_TOKEN_CODE_CEILING + 1
-        assert aug["ag_news"].min_options == 2
+            assert aug[name].min_options == LARGE_SET_MIN_OPTIONS
+            assert aug[name].keep_full_fraction == 0.5
+        assert aug["ag_news"].min_options == 2 and aug["ag_news"].keep_full_fraction == 0.0
 
 
 class TestAugmentation:
@@ -654,3 +655,100 @@ class TestAugmentation:
         spec = MixtureSpec(sources={"c": 1.0}, n_examples=100)
         out = list(build_mixture(spec, {"c": lambda: pool}))
         assert all(e.question is pool[0].question for e in out)
+
+
+class TestNewReaders:
+    def test_nli_fever_uses_the_string_label_not_the_integer(self):
+        import random
+
+        from lev.data.sources import FEVER_LABELS, _read_nli_fever
+
+        row = {
+            "premise": "claim",
+            "hypothesis": "evidence",
+            "fever_gold_label": "REFUTES",
+            "label": 2,
+        }
+        state, options, target = _read_nli_fever(row, random.Random(0))
+        assert state == {"claim": "claim", "evidence": "evidence"}
+        assert options is None and FEVER_LABELS[target] == "REFUTES"
+        assert _read_nli_fever({**row, "fever_gold_label": "weird"}, random.Random(0)) is None
+
+    def test_parade_binary_label_is_the_paraphrase_flag(self):
+        import random
+
+        from lev.data.sources import _read_parade
+
+        row = {"Definition1": "a", "Definition2": "b", "Binary labels": 1, "Four-class labels": 3}
+        assert _read_parade(row, random.Random(0))[2] == 1
+
+    def test_strategyqa_state_carries_the_facts(self):
+        import random
+
+        from lev.data.sources import _read_strategyqa
+
+        row = {"question": "q?", "facts": "f.", "answer": False}
+        state, _, target = _read_strategyqa(row, random.Random(0))
+        assert state == {"question": "q?", "facts": "f."} and target == 0
+
+    def test_swapping_two_words_keeps_every_token_and_changes_the_order(self):
+        import random
+
+        from lev.data.sources import swap_two_words
+
+        text = "the quick brown foxes jumped over lazy river dogs"
+        swapped = swap_two_words(text, random.Random(3))
+        assert swapped is not None and swapped != text
+        assert sorted(swapped.split()) == sorted(text.split())
+        assert swap_two_words("no swap", random.Random(0)) is None
+
+    def test_adversarial_pairs_add_a_negative_for_positives_only(self):
+        import random
+
+        from lev.data.sources import _read_pair
+
+        reader = _read_pair("text1", "text2", adversarial=1.0)
+        positive = {
+            "text1": "alpha beta gamma delta",
+            "text2": "alpha beta gamma delta epsilon",
+            "label": 1,
+        }
+        rows = reader(positive, random.Random(0))
+        assert [r[2] for r in rows] == [1, 0]
+        assert rows[1][0]["sentence1"] == positive["text1"]
+        assert sorted(rows[1][0]["sentence2"].split()) == sorted(positive["text2"].split())
+        negative = {**positive, "label": 0}
+        assert [r[2] for r in reader(negative, random.Random(0))] == [0]
+
+    def test_yes_no_wrapper_emits_one_true_and_one_false_per_row(self):
+        import random
+
+        from lev.data.sources import _read_race, yes_no_from_choices
+
+        row = {"article": "A.", "question": "Q?", "options": ["w", "x", "y", "z"], "answer": "C"}
+        rows = yes_no_from_choices(_read_race)(row, random.Random(0))
+        assert [r[2] for r in rows] == [1, 0]
+        assert rows[0][0]["proposed_answer"] == "y" and rows[1][0]["proposed_answer"] != "y"
+        assert rows[0][0]["passage"] == "A." and rows[0][1] is None
+
+
+class TestKeepFull:
+    def test_large_taxonomy_rows_split_between_full_and_cut_sets(self):
+        from lev.data.mixture import Augment
+
+        q = Choice(instructions="c", criteria={f"o{i}": None for i in range(40)})
+        pool = [an_example(q, target=i % 40, source="big", state=f"s{i}") for i in range(40)]
+        spec = MixtureSpec(
+            sources={"big": 1.0},
+            n_examples=400,
+            subsample_fraction=1.0,
+            augment={"big": Augment(min_options=15, keep_full_fraction=0.5)},
+        )
+        sizes = [len(e.question.criteria) for e in build_mixture(spec, {"big": lambda: pool})]
+        full = sum(s == 40 for s in sizes)
+        assert 120 < full < 280, f"about half should keep the full set, got {full}/400"
+        assert (
+            min(sizes) >= 15
+            and any(15 <= s <= 26 for s in sizes)
+            and any(27 <= s < 40 for s in sizes)
+        )

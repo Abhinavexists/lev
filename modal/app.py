@@ -162,6 +162,7 @@ def _serve_overrides() -> list:
             "LEV_SERVE_MODEL",
             "LEV_SERVE_COMPILE",
             "LEV_SERVE_MAX_LABEL_OPTIONS",
+            "LEV_SERVE_PROMPT",
         )
         if (value := os.environ.get(key))
     }
@@ -251,7 +252,14 @@ def build_data(limit_per_source: int = 20_000, n_examples: int = 200_000) -> dic
     """
     from lev.data.build import build_dataset
 
-    manifest = build_dataset(DATA_DIR, limit_per_source=limit_per_source, n_examples=n_examples)
+    # The HF download cache on the volume, not in the container: the first
+    # build downloads ~25 corpora, and without this every rebuild does too.
+    manifest = build_dataset(
+        DATA_DIR,
+        limit_per_source=limit_per_source,
+        n_examples=n_examples,
+        cache_dir=f"{DATA_DIR}/hf-cache",
+    )
     datasets_vol.commit()
     return manifest
 
@@ -401,6 +409,9 @@ def serve():
     # lower cap, e.g. 26 to reproduce the ADR-020 policy.
     cap_env = os.environ.get("LEV_SERVE_MAX_LABEL_OPTIONS")
     max_label_options = int(cap_env) if cap_env else None
+    # The style the adapter trained under, from its preset; LEV_SERVE_PROMPT
+    # overrides -- for a frozen model, which trained under neither.
+    prompt_style = os.environ.get("LEV_SERVE_PROMPT") or config.prompt_style
     frozen = os.environ.get("LEV_SERVE_MODEL")
     if frozen:
         print(f"serving {frozen} frozen: no adapter, binary Noul, raw softmax")
@@ -410,6 +421,7 @@ def serve():
             model_id=frozen,
             compile=compile,
             max_label_options=max_label_options,
+            prompt_style=prompt_style,
         )
 
     if not trained:
@@ -421,6 +433,7 @@ def serve():
         model_id=config.model_id,
         compile=compile,
         max_label_options=max_label_options,
+        prompt_style=prompt_style,
     )
 
 
@@ -443,9 +456,14 @@ def export_checkpoint(preset: str = "4b", name: str | None = None) -> dict:
     a manifest naming the base model and serving policy.
     """
     from lev.release import build_release
+    from lev.train.config import PRESETS
 
     manifest = build_release(
-        f"{CKPT_DIR}/{preset}", f"{RELEASES_DIR}/{name or preset}", preset=preset, name=name
+        f"{CKPT_DIR}/{preset}",
+        f"{RELEASES_DIR}/{name or preset}",
+        preset=preset,
+        name=name,
+        prompt_style=PRESETS[preset].prompt_style,
     )
     checkpoints.commit()
     target = name or preset

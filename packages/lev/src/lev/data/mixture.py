@@ -53,6 +53,9 @@ class Augment:
     paraphrases: tuple[str, ...] = ()
     negations: tuple[str, ...] = ()
     min_options: int = 2
+    # Fraction of Choice rows that keep their full option set (shuffle only).
+    # For a large taxonomy this is the candidate-path head's training data.
+    keep_full_fraction: float = 0.0
 
 
 @dataclass
@@ -183,7 +186,12 @@ def _vary(
 
     options = list(question.criteria.items())
     gold = options[target]
-    if len(options) > augment.min_options and rng.random() < spec.subsample_fraction:
+    keep_full = rng.random() < augment.keep_full_fraction
+    if (
+        not keep_full
+        and len(options) > augment.min_options
+        and rng.random() < spec.subsample_fraction
+    ):
         k = rng.randint(augment.min_options, len(options) - 1)
         others = [o for i, o in enumerate(options) if i != target]
         options = [gold] + rng.sample(others, k - 1)

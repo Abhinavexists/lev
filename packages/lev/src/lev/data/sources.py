@@ -175,11 +175,102 @@ def _read_nli(row: dict, rng: random.Random) -> Row | None:
     return {"premise": row["premise"], "hypothesis": row["hypothesis"]}, None, label
 
 
-def _read_pair(first: str, second: str) -> Reader:
-    def reader(row: dict, rng: random.Random) -> Row | None:
-        return {"sentence1": row[first], "sentence2": row[second]}, None, int(row["label"])
+def swap_two_words(text: str, rng: random.Random) -> str | None:
+    """Exchange two distinct content words. The result keeps every token of the
+    original -- maximal lexical overlap -- and no longer means the same thing.
+    None when the sentence has too few candidates to swap."""
+    words = text.split()
+    slots = [i for i, w in enumerate(words) if len(w) > 3 and w.isalpha()]
+    if len(slots) < 2:
+        return None
+    for _ in range(8):
+        i, j = rng.sample(slots, 2)
+        if words[i].lower() != words[j].lower():
+            swapped = list(words)
+            swapped[i], swapped[j] = words[j], words[i]
+            return " ".join(swapped)
+    return None
+
+
+def _read_pair(first: str, second: str, adversarial: float = 0.0) -> Reader:
+    """Sentence pairs with a 0/1 paraphrase label.
+
+    With `adversarial` > 0, that fraction of positive pairs also yields a
+    negative: the second sentence with two words exchanged. mrpc and qqp
+    reward lexical overlap; PAWS is built from exactly these word-swapped,
+    high-overlap non-paraphrases, and the first model learned the shortcut
+    (S1Bench paws 0.612). PAWS itself is evaluation data and blocked.
+    """
+
+    def reader(row: dict, rng: random.Random) -> list[Row] | None:
+        a, b = row[first], row[second]
+        label = int(row["label"])
+        out: list[Row] = [({"sentence1": a, "sentence2": b}, None, label)]
+        adversary = label == 1 and adversarial and rng.random() < adversarial
+        if adversary and (swapped := swap_two_words(b, rng)) is not None:
+            out.append(({"sentence1": a, "sentence2": swapped}, None, 0))
+        return out
 
     return reader
+
+
+FEVER_LABELS = ("SUPPORTS", "REFUTES", "NOT ENOUGH INFO")
+FEVER_DESCRIPTIONS = {
+    "SUPPORTS": "the evidence supports the claim",
+    "REFUTES": "the evidence contradicts the claim",
+    "NOT ENOUGH INFO": "the evidence neither supports nor contradicts the claim",
+}
+
+
+def _read_nli_fever(row: dict, rng: random.Random) -> Row | None:
+    """FEVER as claim/evidence/verdict. The dataset's `premise` is the claim
+    and its `hypothesis` the evidence sentence; the string label is used, not
+    the integer, whose order differs from FEVER's own."""
+    label = row.get("fever_gold_label")
+    if label not in FEVER_LABELS:
+        return None
+    return {"claim": row["premise"], "evidence": row["hypothesis"]}, None, FEVER_LABELS.index(label)
+
+
+def _read_parade(row: dict, rng: random.Random) -> Row | None:
+    """Two definitions of one term; binary label 1 when they are paraphrases.
+    Overlap is high either way, which is the point."""
+    return (
+        {"sentence1": row["Definition1"], "sentence2": row["Definition2"]},
+        None,
+        int(row["Binary labels"]),
+    )
+
+
+def _read_strategyqa(row: dict, rng: random.Random) -> Row | None:
+    """A yes/no question whose answer needs the facts given; answers are balanced."""
+    return {"question": row["question"], "facts": row["facts"]}, None, int(bool(row["answer"]))
+
+
+def yes_no_from_choices(reader: Reader) -> Reader:
+    """Turn a multiple-choice reader into a yes/no one.
+
+    Each MC row yields two Noul rows: the gold option proposed ("yes") and one
+    wrong option proposed ("no"). This is passage-grounded yes/no supervision
+    without any new corpus, and it puts "yes" on a factual axis rather than a
+    sentiment one -- the polarity the first model never learned.
+    """
+
+    def wrapped(row: dict, rng: random.Random) -> list[Row] | None:
+        produced = reader(row, rng)
+        if produced is None:
+            return None
+        out: list[Row] = []
+        for state, options, target in produced if isinstance(produced, list) else [produced]:
+            if not options or len(options) < 2:
+                continue
+            base = state if isinstance(state, dict) else {"question": state}
+            wrong = rng.choice([o for i, o in enumerate(options) if i != target])
+            out.append(({**base, "proposed_answer": options[target]}, None, 1))
+            out.append(({**base, "proposed_answer": wrong}, None, 0))
+        return out or None
+
+    return wrapped
 
 
 def _read_toxic_chat(row: dict, rng: random.Random) -> Row | None:
@@ -358,6 +449,19 @@ REGISTRY: dict[str, SourceSpec] = {
         descriptions=NLI_DESCRIPTIONS,
         reader=_read_nli,
     ),
+    "nli_fever": SourceSpec(
+        name="nli_fever",
+        hf_id="pietrolesci/nli_fever",
+        primitive="choice",
+        instructions="Does the evidence support or refute the claim?",
+        paraphrases=(
+            "Given the evidence, is the claim supported, refuted, or undetermined?",
+            "What verdict does the evidence give on the claim?",
+        ),
+        label_names=FEVER_LABELS,
+        descriptions=FEVER_DESCRIPTIONS,
+        reader=_read_nli_fever,
+    ),
     "snips": SourceSpec(
         name="snips",
         hf_id="benayas/snips",
@@ -447,6 +551,7 @@ REGISTRY: dict[str, SourceSpec] = {
         paraphrases=("Did the critic like it?", "Is the sentiment favourable?"),
         negations=("Is this review negative?", "Did the critic pan it?"),
     ),
+    # Paraphrase, with word-swapped negatives so overlap is not the answer.
     "mrpc": SourceSpec(
         name="mrpc",
         hf_id="SetFit/mrpc",
@@ -455,7 +560,7 @@ REGISTRY: dict[str, SourceSpec] = {
         paraphrases=("Are these sentences paraphrases of each other?",),
         negations=("Do these sentences differ in meaning?",),
         label_names=YES_NO,
-        reader=_read_pair("text1", "text2"),
+        reader=_read_pair("text1", "text2", adversarial=0.6),
     ),
     "qqp": SourceSpec(
         name="qqp",
@@ -465,7 +570,60 @@ REGISTRY: dict[str, SourceSpec] = {
         paraphrases=("Are these questions duplicates?",),
         negations=("Are these two questions asking different things?",),
         label_names=YES_NO,
-        reader=_read_pair("text1", "text2"),
+        reader=_read_pair("text1", "text2", adversarial=0.6),
+    ),
+    "parade": SourceSpec(
+        name="parade",
+        hf_id="tasksource/parade",
+        primitive="noul",
+        instructions="Do these two definitions describe the same thing?",
+        paraphrases=("Are these two definitions equivalent?",),
+        negations=("Do these two definitions describe different things?",),
+        label_names=YES_NO,
+        reader=_read_parade,
+    ),
+    # Yes/no on a factual axis: a proposed answer to a grounded question.
+    "strategyqa": SourceSpec(
+        name="strategyqa",
+        hf_id="ChilleD/StrategyQA",
+        primitive="noul",
+        instructions="Given the facts, is the answer to the question yes?",
+        paraphrases=("Using the facts, answer the question.",),
+        negations=("Given the facts, is the answer to the question no?",),
+        label_names=YES_NO,
+        reader=_read_strategyqa,
+    ),
+    "race_yesno": SourceSpec(
+        name="race_yesno",
+        hf_id="ehovy/race",
+        hf_config="all",
+        primitive="noul",
+        instructions="Is the proposed answer to the question correct, according to the passage?",
+        paraphrases=("Does the passage support the proposed answer?",),
+        negations=("Is the proposed answer wrong, according to the passage?",),
+        label_names=YES_NO,
+        reader=yes_no_from_choices(_read_race),
+    ),
+    "sciq_yesno": SourceSpec(
+        name="sciq_yesno",
+        hf_id="allenai/sciq",
+        primitive="noul",
+        instructions="Is the proposed answer to the science question correct?",
+        paraphrases=("Is this the right answer?",),
+        negations=("Is the proposed answer incorrect?",),
+        label_names=YES_NO,
+        reader=yes_no_from_choices(_read_sciq),
+    ),
+    "openbookqa_yesno": SourceSpec(
+        name="openbookqa_yesno",
+        hf_id="allenai/openbookqa",
+        hf_config="additional",
+        primitive="noul",
+        instructions="Given the fact, is the proposed answer correct?",
+        paraphrases=("Does the fact make the proposed answer right?",),
+        negations=("Given the fact, is the proposed answer wrong?",),
+        label_names=YES_NO,
+        reader=yes_no_from_choices(_read_keyed_choices("question_stem", context_field="fact1")),
     ),
     "toxic_chat": SourceSpec(
         name="toxic_chat",
@@ -518,10 +676,22 @@ ADJACENT: tuple[frozenset[str], ...] = (
     frozenset({"imdb", "rotten_tomatoes", "sst5", "yelp_review_full", "emotion"}),
     frozenset({"banking77", "clinc_oos", "snips"}),
     frozenset({"ag_news", "dbpedia_14"}),
-    frozenset({"snli", "anli"}),
-    frozenset({"mrpc", "qqp"}),
+    frozenset({"snli", "anli", "nli_fever"}),
+    frozenset({"mrpc", "qqp", "parade"}),
     frozenset({"toxic_chat", "toxigen", "beavertails"}),
-    frozenset({"race", "commonsense_qa", "sciq", "openbookqa", "arc_easy"}),
+    frozenset(
+        {
+            "race",
+            "commonsense_qa",
+            "sciq",
+            "openbookqa",
+            "arc_easy",
+            "race_yesno",
+            "sciq_yesno",
+            "openbookqa_yesno",
+            "strategyqa",
+        }
+    ),
 )
 
 
@@ -671,18 +841,27 @@ def _blank(state) -> bool:
     return not any(str(v).strip() for v in state.values())
 
 
+# The smallest option set a large-taxonomy source is cut down to. Between this
+# and the tokenizer's single-token limit the rows train Mode A on sets far
+# larger than any small source offers -- the regime massive-en-US lives in,
+# where the first instruct model trailed the frozen backbone by 8 points.
+LARGE_SET_MIN_OPTIONS = 15
+
+
 def augmentation_map() -> dict[str, Augment]:
     """Per-source training augmentation, read off the registry.
 
-    Mode B sources keep at least `LABEL_OPTION_CAP + 1` options when subsampled,
-    so they stay Mode B and the head keeps its share of the mixture; everything
-    else may be cut down to two.
+    Large-taxonomy sources keep their full option set half the time -- that is
+    the Mode B head's training data -- and are otherwise cut down to anywhere
+    from `LARGE_SET_MIN_OPTIONS` up, so the label-token readout also learns
+    large lettered sets. Everything else may be cut down to two. ADR-026.
     """
     return {
         name: Augment(
             paraphrases=spec.paraphrases,
             negations=spec.negations,
-            min_options=(LABEL_OPTION_CAP + 1) if spec.is_mode_b else 2,
+            min_options=LARGE_SET_MIN_OPTIONS if spec.is_mode_b else 2,
+            keep_full_fraction=0.5 if spec.is_mode_b else 0.0,
         )
         for name, spec in REGISTRY.items()
     }

@@ -932,9 +932,9 @@ banking77 0.922) and weak on one it has not seen; the backbone's zero-shot
 label-token reading survives the LoRA well enough to be worth 51 points on
 an unseen one. So serving now routes Mode A whenever the tokenizer expresses
 the codes (`EngineConfig.max_label_options = None`; 76 for this tokenizer),
-and Mode B above that. Training keeps `LABEL_OPTION_CAP = 26`: it decides how
-much data the head sees, not what the server does, and lowering Mode B's share
-would cost the in-distribution results above. `LEV_SERVE_MAX_LABEL_OPTIONS`
+and Mode B above that. Training kept `LABEL_OPTION_CAP = 26` at the time this
+was written; ADR-026 moves training to the same tokenizer-limit routing and
+feeds the head from the large sources' full option sets instead. `LEV_SERVE_MAX_LABEL_OPTIONS`
 reproduces any other policy; `/health` reports the one in effect.
 
 Two costs, stated. The LoRA gave back ~8 points against the frozen backbone
@@ -947,6 +947,74 @@ the 60% of items it puts above 0.5). A temperature bucket keyed on option
 count needs held-out rows in that range, which the mixture does not yet have.
 
 Macro on the six S1Bench subsets with this policy: **0.697**, from 0.612.
+
+---
+
+## ADR-026 — The third run: data for the four remaining gaps
+
+**Accepted.** Every point still short of Jev after ADR-025 is data (FINDINGS
+§15), so this run changes the mixture and nothing about the model.
+
+| gap | source of the error | change |
+|---|---|---|
+| paws −20.8 | paraphrase training rewarded lexical overlap | mrpc/qqp positives also yield a word-swapped negative (60%); `tasksource/parade` |
+| vitaminc −9.5 | no fact-verification data | `pietrolesci/nli_fever`, FEVER's own labels |
+| massive −6.8 vs Jev, −8 vs frozen | Mode A never trained above 14 options | large-taxonomy sources cut to 15+ options half the time; routing by tokenizer in training too |
+| boolq −4.7 | little passage-grounded yes/no | race / sciq / openbookqa recast as "is the proposed answer correct?"; `ChilleD/StrategyQA` |
+
+Three consequences follow. `TrainConfig.max_label_options` is None: a training
+row routes to Mode A whenever the tokenizer expresses its codes, as the server
+does, so the model trains on every set size it serves; Mode B's data is the
+large sources' full sets, kept half the time. The calibration split now varies
+option *sets* (never wording), so temperatures can be fitted per option-count
+band -- `choice:{mode}:{small|mid|large}` at 8 and 26 options -- with the
+unbanded bucket as fallback; the 60-option under-confidence of §15 was one
+scalar fitted on 3-14 options. And the yes/no recasts put "yes" on a factual
+axis in four more sources, so polarity is spread across sentiment, safety,
+paraphrase and fact.
+
+The mixture must be rebuilt (`modal run modal/app.py::build_data`); the
+sources changed. Expected on the six S1Bench subsets: past the frozen backbone
+(0.719) and at Jev's level on four of six.
+
+---
+
+## ADR-027 — The prompt is dressed in the backbone's own format
+
+**Accepted.** Closes Q11 with a mechanism, not just a number.
+
+The frozen instruct backbone scored 0.653 on S1Bench through our prompts and
+0.719 through reflex's (FINDINGS §15). reflex's difference is not wording
+alone: it wraps every request in ChatML -- the system/user/assistant turns
+the instruct model was trained on -- with headed sections, `A. option` lines,
+an explicit "respond with only the letter", and Qwen's empty `<think>` block
+opening the assistant turn. Ours was `Context: ... Question: ... Answer:`.
+
+`prompt.Style` now offers both. Measured on the same frozen weights, same
+1,999 items, the style changed and nothing else:
+
+    plain  0.653     chat  0.710     (reflex 0.719; our trained plain LoRA 0.697)
+
+Every subset rose; helpsteer2 by 15.6 points to 0.400, above Jev. Zero-shot
+calibration changed more than accuracy did: ECE 0.49 → 0.12 on massive-en-US,
+0.44 → 0.16 on vitaminc. A backbone answering in its native format is also a
+backbone that knows how sure it is.
+
+Consequences. The style is a property of the weights: `TrainConfig.prompt_style`
+sets it, the release manifest records it, the server reads it from the
+manifest and `/health` reports it, and training and serving cannot disagree
+by accident. The label token changes with the style -- a space-prefixed letter
+after `Answer:`, a bare letter at the start of an assistant turn -- so the
+router, collator and readout take the prefix from the style rather than
+assuming one. The `4b-instruct` preset trains in `chat`; the Base presets stay
+`plain`, which is all a base checkpoint knows. The first measurement of this
+was a false negative -- the override never reached the container and the
+"chat" deployment served `plain`, bit for bit -- so the A/B now refuses to run
+unless `/health` confirms the style it was asked for.
+
+**Expected for the ADR-026 run:** the adapter starts from 0.710 rather than
+0.653 and trains in the format it will be served in, which is the most likely
+cure for the 8 points it gave back against the frozen backbone on massive.
 
 ---
 
@@ -963,5 +1031,5 @@ Macro on the six S1Bench subsets with this policy: **0.697**, from 0.612.
 | **Q7** | Do nine public classification corpora transfer to support-triage states? | Train, then eval on both the generated set *and* the 24-item fixture. Agreement between them is the signal; the fixture alone cannot resolve it |
 | ~~Q9~~ | ~~How does lev compare to Jev on S1Bench?~~ | **Answered: 0.489 vs 0.754 macro** on identical task files, harness validated against Jev's own numbers. FINDINGS.md §12, ADR-020 |
 | ~~Q10~~ | ~~Does Mode B generalise to an unseen taxonomy?~~ | **Weakly: 0.166 on massive-en-US** under the cap, 10x chance and well calibrated (ECE 0.076), against Mode A's 0.291 and Jev's 0.814. Key format ruled out (0.140 = 0.140). Two training taxonomies were not enough; the rebuilt mixture is the fix. FINDINGS.md §12 |
-| **Q11** | Does the frozen instruct checkpoint match reflex's 0.719 through our engine? | `LEV_SERVE_MODEL=Qwen/Qwen3.5-4B modal serve`, same task files. Sets the floor and locates any residual gap in the engine rather than the training |
+| ~~Q11~~ | ~~Does the frozen instruct checkpoint match reflex's 0.719 through our engine?~~ | **No: 0.653.** Same weights, our prompts; reflex's prompts get 0.719. Six points of prompt/readout design, 17 on massive. FINDINGS.md §15 |
 | **Q8** | Is 25% the right Mode B share? | Ablation at 10% / 25% / 40%, read on banking77 and clinc_oos accuracy against Mode A sources' regression |

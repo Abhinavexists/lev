@@ -101,6 +101,23 @@ def score(
     )
 
 
+def score_mixed(
+    rows: Sequence[tuple[list[float], int, float]],
+) -> tuple[float, float, float, float]:
+    """`score` for rows that each carry their own temperature."""
+    probs = [softmax(logits, t) for logits, _, t in rows]
+    truths = [truth for _, truth, _ in rows]
+    correct = sum(
+        max(range(len(p)), key=p.__getitem__) == t for p, t in zip(probs, truths, strict=True)
+    )
+    return (
+        correct / len(probs),
+        expected_calibration_error(probs, truths),
+        sum(brier(p, t) for p, t in zip(probs, truths, strict=True)) / len(probs),
+        sum(log_loss(p, t) for p, t in zip(probs, truths, strict=True)) / len(probs),
+    )
+
+
 def evaluate_split(
     checkpoint_dir: str,
     data_dir: str,
@@ -120,6 +137,7 @@ def evaluate_split(
 
     from ..data.build import load_split
     from ..data.splits import Split
+    from ..prompt import Style
     from .checkpoints import load_checkpoint, resolve_checkpoint
     from .collate import DecisionCollator, ModeBatcher, RouteCache
     from .config import PRESETS
@@ -145,7 +163,7 @@ def evaluate_split(
                 kept.append(row)
         rows = kept
 
-    routes = RouteCache(tokenizer, config.max_label_options)
+    routes = RouteCache(tokenizer, config.max_label_options, Style(config.prompt_style))
     collator = DecisionCollator(tokenizer, max_seq_len=config.max_seq_len, routes=routes)
     # Bucketed like training: every row is scored exactly once whatever the
     # batch order, so the 4.4x padding saving is free here.
@@ -162,19 +180,39 @@ def evaluate_split(
             logits = candidate_logits(model, batch, head)
             for i, example in enumerate(group):
                 width = int((~batch.candidate_mask[i]).sum())
-                key = (example.source, example.question.type, batch.mode.value)
+                key = (example.source, example.question.type, batch.mode.value, width)
                 collected.setdefault(key, []).append((logits[i, :width].tolist(), example.target))
 
     resolved = str(resolve_checkpoint(checkpoint_dir))
     plain = EvalReport(split=split, checkpoint=resolved, calibrated=False)
     tuned = EvalReport(split=split, checkpoint=resolved, calibrated=True)
-    for (source, qtype, mode), samples in sorted(collected.items()):
-        temperature = profile.temperature(qtype, mode)
-        for report, t in ((plain, 1.0), (tuned, temperature)):
-            accuracy, ece, mean_brier, mean_ll = score(samples, t)
+    # Rows of one source may carry different option counts (the calibration
+    # split varies them), and the temperature depends on the count; score each
+    # group at its own temperature, then report per source.
+    per_source: dict[tuple[str, str, str], list[tuple[list[float], int, float]]] = {}
+    for (source, qtype, mode, width), samples in collected.items():
+        t = profile.temperature(qtype, mode, width)
+        per_source.setdefault((source, qtype, mode), []).extend((lg, y, t) for lg, y in samples)
+    for (source, qtype, mode), rows_t in sorted(per_source.items()):
+        samples = [(lg, y) for lg, y, _ in rows_t]
+        temperatures = {t for _, _, t in rows_t}
+        shown_t = temperatures.pop() if len(temperatures) == 1 else float("nan")
+        for report, calibrated in ((plain, False), (tuned, True)):
+            if calibrated and len({t for _, _, t in rows_t}) > 1:
+                accuracy, ece, mean_brier, mean_ll = score_mixed(rows_t)
+            else:
+                accuracy, ece, mean_brier, mean_ll = score(samples, shown_t if calibrated else 1.0)
             report.per_source.append(
                 SourceScore(
-                    source, qtype, mode, len(samples), accuracy, ece, mean_brier, mean_ll, t
+                    source,
+                    qtype,
+                    mode,
+                    len(samples),
+                    accuracy,
+                    ece,
+                    mean_brier,
+                    mean_ll,
+                    shown_t if calibrated else 1.0,
                 )
             )
     return plain, tuned

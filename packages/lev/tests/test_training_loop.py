@@ -33,7 +33,12 @@ def make_batching_tokenizer():
 
     from conftest import BatchingTokenizer
 
-    return BatchingTokenizer({f" {c}" for c in ascii_uppercase} | {f" {i}" for i in range(9)})
+    return BatchingTokenizer(
+        set(ascii_uppercase)
+        | {f" {c}" for c in ascii_uppercase}
+        | {str(i) for i in range(9)}
+        | {f" {i}" for i in range(9)}
+    )
 
 
 class TestCheckpointCadence:

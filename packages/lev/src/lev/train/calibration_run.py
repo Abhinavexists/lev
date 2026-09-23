@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from ..calibrate import fit
+from ..calibrate import CalibrationProfile, fit
 
 
 def fit_profile(
@@ -62,6 +62,7 @@ def collect_logits(
 
     from ..data.build import load_split
     from ..data.splits import Split
+    from ..prompt import Style
     from ..train.checkpoints import load_checkpoint
     from ..train.collate import DecisionCollator, ModeBatcher, RouteCache
     from ..train.config import PRESETS
@@ -79,7 +80,7 @@ def collect_logits(
     if limit:
         rows = rows[:limit]
 
-    routes = RouteCache(tokenizer, config.max_label_options)
+    routes = RouteCache(tokenizer, config.max_label_options, Style(config.prompt_style))
     collator = DecisionCollator(tokenizer, max_seq_len=config.max_seq_len, routes=routes)
     batcher = ModeBatcher(tokenizer, batch_size=batch_size, routes=routes)
     device = device_of(model)
@@ -91,6 +92,12 @@ def collect_logits(
             logits = candidate_logits(model, batch, head)
             for i, example in enumerate(group):
                 width = int((~batch.candidate_mask[i]).sum())
-                key = f"{example.question.type}:{batch.mode.value}"
-                buckets.setdefault(key, []).append((logits[i, :width].tolist(), example.target))
+                sample = (logits[i, :width].tolist(), example.target)
+                # Banded and unbanded both: the banded bucket is what serving
+                # reads; the unbanded one is the fallback for bands too thin to fit.
+                for key in {
+                    CalibrationProfile.key(example.question.type, batch.mode.value, width),
+                    CalibrationProfile.key(example.question.type, batch.mode.value),
+                }:
+                    buckets.setdefault(key, []).append(sample)
     return buckets

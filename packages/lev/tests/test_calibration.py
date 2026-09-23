@@ -129,3 +129,22 @@ class TestProfile:
         assert profile.fitted_on == "calib-split"
         assert profile.n_samples["choice:A"] == 200
         assert not math.isclose(profile.temperatures["choice:A"], 1.0, abs_tol=0.05)
+
+
+class TestOptionBands:
+    def test_choice_keys_carry_a_band_and_other_types_do_not(self):
+        from lev.calibrate import CalibrationProfile
+
+        assert CalibrationProfile.key("choice", "A", 4) == "choice:A:small"
+        assert CalibrationProfile.key("choice", "A", 20) == "choice:A:mid"
+        assert CalibrationProfile.key("choice", "A", 60) == "choice:A:large"
+        assert CalibrationProfile.key("choice", "A") == "choice:A"
+        assert CalibrationProfile.key("noul", "A", 9) == "noul:A"
+
+    def test_banded_temperature_falls_back_to_the_unbanded_bucket(self):
+        from lev.calibrate import CalibrationProfile
+
+        profile = CalibrationProfile(temperatures={"choice:A": 2.0, "choice:A:large": 1.2})
+        assert profile.temperature("choice", "A", 60) == 1.2
+        assert profile.temperature("choice", "A", 5) == 2.0, "small band unfitted -> old bucket"
+        assert profile.temperature("score", "A", 5) == 1.0

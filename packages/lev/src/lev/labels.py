@@ -14,13 +14,10 @@ from __future__ import annotations
 from itertools import product
 from string import ascii_uppercase
 
-# Policy cap on Mode A, applied identically in training and serving. The
-# tokenizer limit is not the right boundary: Qwen3.5 encodes every two-letter
-# code up to `BP` as one token, so 60 options are *expressible* in Mode A --
-# and were served that way, in a regime the model had trained on at most 14
-# options in, with codes it had never seen. massive-en-US scored 0.291 there
-# while the Mode B head sat idle. Above single letters, route to the head that
-# was trained for large sets; see ADR-020.
+# The single-letter boundary. Once the routing cap for Mode A (ADR-020); since
+# ADR-025/026 routing follows the tokenizer on both sides, and this is the
+# threshold the registry uses to call a source "large-taxonomy" (its full set
+# is the Mode B head's data) and the edge of the mid/large calibration bands.
 LABEL_OPTION_CAP = len(ascii_uppercase)
 
 

@@ -36,6 +36,43 @@ class Layout(StrEnum):
     SCHEMA_FIRST = "schema_first"
 
 
+class Style(StrEnum):
+    """How the text is dressed for the model.
+
+    `plain`: `Context: ... Question: ... Options: ... Answer:` -- what the first
+    two models trained on. `chat`: the ChatML turns an instruct checkpoint was
+    trained on, with a system prompt, headed sections, `A. option` lines, an
+    explicit "respond with only the letter" and Qwen's empty think block --
+    reflex's layout. Measured on the same frozen weights, reflex's prompts
+    score 0.719 on S1Bench against 0.653 for `plain` (FINDINGS §15), so the
+    style is a model property: recorded in the release manifest, applied
+    identically in training and serving.
+    """
+
+    PLAIN = "plain"
+    CHAT = "chat"
+
+
+def label_prefix(style: Style) -> str:
+    """The character before a label token as the model emits it: a space after
+    `Answer:`, nothing at the start of an assistant turn. Verifying the wrong
+    variant passes while the scored token differs."""
+    return " " if style is Style.PLAIN else ""
+
+
+CHAT_SYSTEM_PROMPT = (
+    "You are a System One decision model. You read the Evidence and answer each "
+    "Criterion by choosing exactly one of the listed options. You never explain. "
+    "You answer with the single option label only."
+)
+CHAT_TAIL = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+CHAT_ASK = {
+    "choice": "Respond with only the letter of the best option.",
+    "score": "Respond with only the letter of the level that best matches.",
+    "noul": "Respond with only a digit from 0 to 8.",
+}
+
+
 @dataclass(frozen=True)
 class Rendered:
     """A prompt split at the point the cache is taken.
@@ -68,7 +105,11 @@ def _ordered(items: list, order: list[int] | None) -> list:
 
 
 def render_question(
-    name: str, question: Question, codes: list[str] | None, order: list[int] | None = None
+    name: str,
+    question: Question,
+    codes: list[str] | None,
+    order: list[int] | None = None,
+    style: Style = Style.PLAIN,
 ) -> str:
     """Render one question. `codes` are Mode A label codes; None means Mode B.
 
@@ -82,6 +123,8 @@ def render_question(
     trained adapter exists: a stock checkpoint cannot rate 0-8 (ADR-007) but can
     pick between two lettered options.
     """
+    if style is Style.CHAT:
+        return _render_question_chat(name, question, codes, order)
     lines = [f"Question: {question.instructions or name}"]
 
     if isinstance(question, Choice):
@@ -121,6 +164,55 @@ def render_question(
     return "\n".join(lines)
 
 
+def _render_question_chat(
+    name: str, question: Question, codes: list[str] | None, order: list[int] | None
+) -> str:
+    """reflex's headed layout: `# Criterion`, `# Options` with `A. text` lines,
+    and an explicit ask. Codes are positional, as in the plain style."""
+    lines = [f"# Criterion\n{question.instructions or name}\n"]
+
+    if isinstance(question, Choice):
+        if codes:
+            lines.append("# Options")
+            for code, (key, desc) in zip(
+                codes, _ordered(list(question.criteria.items()), order), strict=False
+            ):
+                lines.append(f"{code}. {key}" + (f": {render_content(desc)}" if desc else ""))
+            lines.append(f"\n{CHAT_ASK['choice']}")
+        else:
+            lines.append(f"Choose the best of the {len(question.criteria)} candidates given.")
+    elif isinstance(question, Score):
+        top = len(question.criteria) - 1
+        if codes:
+            lines.append("# Options")
+            for code, (level, desc) in zip(
+                codes, _ordered(list(enumerate(question.criteria)), order), strict=False
+            ):
+                lines.append(f"{code}. (level {level} of {top}) {render_content(desc)}")
+            lines.append(f"\n{CHAT_ASK['score']}")
+        else:
+            lines.append(f"Choose the best of the {len(question.criteria)} levels given.")
+    elif isinstance(question, Noul):
+        criteria = question.criteria or {}
+        if codes and len(codes) == len(BINARY_NOUL_OPTIONS):
+            yes = render_content(criteria.get("true") or "the statement is true")
+            no = render_content(criteria.get("false") or "the statement is false")
+            pair = [("yes", yes), ("no", no)]
+            lines.append("# Options")
+            for code, (option, desc) in zip(codes, _ordered(pair, order), strict=True):
+                lines.append(f"{code}. {option}: {desc}")
+            lines.append(f"\n{CHAT_ASK['choice']}")
+        else:
+            lines.append("# Scale")
+            lines.append("0 = certainly no ... 8 = certainly yes")
+            for key, label in (("true", "yes"), ("false", "no")):
+                if (desc := criteria.get(key)) is not None:
+                    lines.append(f"{label}: {render_content(desc)}")
+            lines.append(f"\n{CHAT_ASK['noul']}")
+
+    return "\n".join(lines)
+
+
 def render_content(value: JSONContent) -> str:
     """A `JSONContent` field as prompt text. Objects are dumped with sorted keys
     so an identical value always renders identically, as `render_state` does."""
@@ -149,8 +241,11 @@ def build(
     layout: Layout = Layout.STATE_FIRST,
     cached_schema: str | None = None,
     order: list[int] | None = None,
+    style: Style = Style.PLAIN,
 ) -> Rendered:
     """Render one question against one state, cut for the chosen layout."""
+    if style is Style.CHAT:
+        return _build_chat(state, name, question, codes, layout, cached_schema, order)
     state_block = f"Context:\n{render_state(state)}\n\n"
     question_block = render_question(name, question, codes, order)
 
@@ -164,6 +259,25 @@ def build(
     return Rendered(prefix=prefix, suffix=f"{state_block}{ANSWER_CUE}")
 
 
-def schema_block(questions: dict[str, Question], codes: dict[str, list[str] | None]) -> str:
+def _build_chat(state, name, question, codes, layout, cached_schema, order) -> Rendered:
+    """ChatML: system turn, then a user turn holding evidence and criterion in
+    either order, then the opened assistant turn the label token is read from.
+    The scored position is the final `\\n\\n` after the empty think block."""
+    head = f"<|im_start|>system\n{CHAT_SYSTEM_PROMPT}<|im_end|>\n<|im_start|>user\n"
+    evidence = f"# Evidence\n{render_state(state)}\n\n"
+    criterion = render_question(name, question, codes, order, Style.CHAT)
+    if layout is Layout.STATE_FIRST:
+        return Rendered(prefix=head + evidence, suffix=f"{criterion}\n{CHAT_TAIL}")
+    catalogue = cached_schema if cached_schema is not None else criterion
+    return Rendered(prefix=f"{head}{catalogue}\n\n", suffix=f"{evidence.rstrip()}\n{CHAT_TAIL}")
+
+
+def schema_block(
+    questions: dict[str, Question],
+    codes: dict[str, list[str] | None],
+    style: Style = Style.PLAIN,
+) -> str:
     """The full question catalogue, for schema-first caching across states."""
-    return "\n\n".join(render_question(n, q, codes.get(n)) for n, q in questions.items())
+    return "\n\n".join(
+        render_question(n, q, codes.get(n), style=style) for n, q in questions.items()
+    )

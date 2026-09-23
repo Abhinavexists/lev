@@ -176,6 +176,7 @@ def cmd_train(args: argparse.Namespace) -> None:
 
 def cmd_release_build(args: argparse.Namespace) -> None:
     from .release import build_release
+    from .train.config import PRESETS
 
     manifest = build_release(
         args.checkpoint,
@@ -183,6 +184,7 @@ def cmd_release_build(args: argparse.Namespace) -> None:
         preset=args.preset,
         calibration=args.calibration,
         name=args.name,
+        prompt_style=PRESETS[args.preset].prompt_style,
     )
     print(f"release {manifest['name']} -> {args.out}")
     print(
@@ -215,6 +217,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
             args.model,
             args.noul_readout,
             compile=args.compile,
+            prompt_style=args.prompt_style,
         ),
         host=args.host,
         port=args.port,
@@ -270,6 +273,12 @@ def main(argv: list[str] | None = None) -> None:
     )
     serve_parser.add_argument(
         "--compile", action="store_true", help="torch.compile + CUDA graphs; warms up at startup"
+    )
+    serve_parser.add_argument(
+        "--prompt-style",
+        choices=["plain", "chat"],
+        default=None,
+        help="default: the release manifest's, else plain",
     )
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8000)

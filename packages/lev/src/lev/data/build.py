@@ -182,10 +182,21 @@ def build_dataset(
             seed=seed + list(Split).index(split),
             adjacent=adjacency_map(),
             # Paraphrases, negations and option subsampling are training
-            # variation. The held-out splits keep every source's canonical
-            # question, so an exported eval file has one question per source
-            # and a calibration temperature is fitted on what is served.
-            augment=augmentation_map() if is_train else {},
+            # variation. The test split keeps every source's canonical question,
+            # so an exported eval file has one question per source. The
+            # calibration split varies option *sets* only -- no rewording -- so
+            # temperatures can be fitted per option-count band on rows the
+            # canonical questions never produce (ADR-026).
+            augment=augmentation_map() if split is not Split.TEST else {},
+            **(
+                {}
+                if is_train
+                else {
+                    "paraphrase_fraction": 0.0,
+                    "negate_fraction": 0.0,
+                    "description_dropout": 0.0,
+                }
+            ),
         )
         # `name=name` binds the loop variable at definition time; without it every
         # loader would close over the last source in the dict.

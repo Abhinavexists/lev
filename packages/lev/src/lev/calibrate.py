@@ -99,25 +99,48 @@ def expected_calibration_error(
     return total_weighted_gap / len(probs)
 
 
+# Choice temperatures are fitted per option-count band. One `choice:A` scalar
+# fitted on 3-14 options left a 60-option question under-confident (ECE 0.20
+# on massive-en-US at accuracy 0.95 above p=0.5): the softmax over many more
+# candidates spreads mass differently, and one temperature cannot serve both.
+CHOICE_BANDS = ((8, "small"), (26, "mid"))
+
+
+def option_band(n_options: int | None) -> str | None:
+    if n_options is None:
+        return None
+    for upper, name in CHOICE_BANDS:
+        if n_options <= upper:
+            return name
+    return "large"
+
+
 @dataclass
 class CalibrationProfile:
-    """Fitted temperatures keyed by `"{question_type}:{mode}"`."""
+    """Fitted temperatures keyed by `"{question_type}:{mode}"`, and for Choice
+    by `"choice:{mode}:{band}"` as well."""
 
     temperatures: dict[str, float] = field(default_factory=dict)
     fitted_on: str = ""
     n_samples: dict[str, int] = field(default_factory=dict)
 
     @staticmethod
-    def key(question_type: str, mode: str) -> str:
-        return f"{question_type}:{mode}"
+    def key(question_type: str, mode: str, n_options: int | None = None) -> str:
+        band = option_band(n_options) if question_type == "choice" else None
+        return f"{question_type}:{mode}" + (f":{band}" if band else "")
 
-    def temperature(self, question_type: str, mode: str) -> float:
-        # 1.0 is the identity, so an unfitted bucket degrades to raw softmax
-        # rather than to a wrong temperature borrowed from another bucket.
-        return self.temperatures.get(self.key(question_type, mode), 1.0)
+    def temperature(self, question_type: str, mode: str, n_options: int | None = None) -> float:
+        # Banded first, then the unbanded bucket a profile fitted before bands
+        # existed carries; 1.0 -- the identity -- when neither was fitted, so an
+        # unknown bucket degrades to raw softmax rather than to a borrowed scalar.
+        banded = self.key(question_type, mode, n_options)
+        plain = self.key(question_type, mode)
+        return self.temperatures.get(banded, self.temperatures.get(plain, 1.0))
 
-    def apply(self, logits: Logits, question_type: str, mode: str) -> list[float]:
-        return softmax(logits, self.temperature(question_type, mode))
+    def apply(
+        self, logits: Logits, question_type: str, mode: str, n_options: int | None = None
+    ) -> list[float]:
+        return softmax(logits, self.temperature(question_type, mode, n_options))
 
     def save(self, path: str | Path) -> None:
         Path(path).write_text(

@@ -24,8 +24,8 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
 from ..data.mixture import Example
+from ..prompt import Style, candidate_texts, label_prefix
 from ..prompt import build as build_prompt
-from ..prompt import candidate_texts
 from ..router import Mode, candidate_count, route
 
 IGNORE_INDEX = -100
@@ -39,9 +39,10 @@ class RouteCache:
     the collator need the route, so they share one of these.
     """
 
-    def __init__(self, tokenizer, max_label_options: int | None = None):
+    def __init__(self, tokenizer, max_label_options: int | None = None, style: Style = Style.PLAIN):
         self.tokenizer = tokenizer
         self.max_label_options = max_label_options
+        self.style = style
         self._routes: dict[tuple[str, str, int], object] = {}
 
     def route_for(self, example: Example):
@@ -51,7 +52,12 @@ class RouteCache:
         # size rather than one per row.
         key = (example.source, example.name, candidate_count(example.question))
         if key not in self._routes:
-            self._routes[key] = route(example.question, self.tokenizer, self.max_label_options)
+            self._routes[key] = route(
+                example.question,
+                self.tokenizer,
+                self.max_label_options,
+                label_prefix=label_prefix(self.style),
+            )
         return self._routes[key]
 
 
@@ -82,13 +88,14 @@ class Batch:
         return int(self.input_ids.shape[0])
 
 
-def render(example: Example, codes: list[str] | None) -> str:
+def render(example: Example, codes: list[str] | None, style: Style = Style.PLAIN) -> str:
     rendered = build_prompt(
         example.state,
         example.name,
         example.question,
         codes,
         layout=example.layout,
+        style=style,
     )
     return rendered.full
 
@@ -131,6 +138,7 @@ class ModeBatcher:
         self.bucket_window = bucket_window
         self.seed = seed
         self.routes = routes or RouteCache(tokenizer, max_label_options)
+        self.style = self.routes.style
 
     def route_for(self, example: Example):
         return self.routes.route_for(example)
@@ -181,13 +189,12 @@ class DecisionCollator:
         tokenizer,
         max_seq_len: int = 4096,
         max_label_options: int | None = None,
-        label_prefix: str = " ",
         routes: RouteCache | None = None,
     ):
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
-        self.label_prefix = label_prefix
         self.routes = routes or RouteCache(tokenizer, max_label_options)
+        self.style = self.routes.style
 
     def __call__(self, examples: list[Example]) -> Batch:
         import torch
@@ -200,7 +207,7 @@ class DecisionCollator:
             raise ValueError(f"batch mixes readout modes: {sorted(m.value for m in modes)}")
         mode = modes.pop()
 
-        prompts = [render(e, r.codes) for e, r in zip(examples, routes, strict=True)]
+        prompts = [render(e, r.codes, self.style) for e, r in zip(examples, routes, strict=True)]
         encoded = self._encode(prompts)
 
         n_candidates = [len(candidate_texts(e.question)) for e in examples]
@@ -275,7 +282,7 @@ class DecisionCollator:
 
         from ..readout.mode_a import LabelTokenReadout
 
-        readout = LabelTokenReadout(self.tokenizer, prefix=self.label_prefix)
+        readout = LabelTokenReadout(self.tokenizer, prefix=label_prefix(self.style))
         ids = torch.zeros(len(routes), k_max, dtype=torch.long)
         for i, route_ in enumerate(routes):
             row = readout.candidate_ids(route_.codes)

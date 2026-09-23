@@ -42,6 +42,16 @@ def rich_tokenizer() -> FakeTokenizer:
 
 
 @pytest.fixture
+def chat_tokenizer() -> FakeTokenizer:
+    """Bare A-Z and 0-8 are single tokens too -- what follows an assistant turn."""
+    from string import ascii_uppercase
+
+    letters = set(ascii_uppercase) | {f" {c}" for c in ascii_uppercase}
+    digits = {str(i) for i in range(9)} | {f" {i}" for i in range(9)}
+    return FakeTokenizer(letters | digits)
+
+
+@pytest.fixture
 def poor_tokenizer() -> FakeTokenizer:
     """Only the first four letters are single tokens — forces Mode B quickly."""
     return FakeTokenizer({" A", " B", " C", " D"} | {f" {i}" for i in range(9)})

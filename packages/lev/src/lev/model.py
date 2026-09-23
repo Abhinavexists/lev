@@ -35,7 +35,7 @@ from typing import Any, Literal
 
 from .calibrate import CalibrationProfile
 from .labels import noul_probability
-from .prompt import Layout, Rendered, build, candidate_texts, schema_block
+from .prompt import Layout, Rendered, Style, build, candidate_texts, label_prefix, schema_block
 from .router import BINARY_NOUL, Mode, Route, route_all
 from .types import (
     Choice,
@@ -61,6 +61,9 @@ class EngineConfig:
     # the head, which learns the taxonomies it was shown. ADR-025.
     max_label_options: int | None = None
     layout: Layout = Layout.STATE_FIRST
+    # Must match the style the adapter trained under (`TrainConfig.prompt_style`,
+    # recorded in the release manifest). See `prompt.Style`.
+    prompt_style: Literal["plain", "chat"] = "plain"
     device: str = "auto"
     dtype: str = "bfloat16"
     # "rating" is the trained 0-8 scale; "binary" is two lettered options for a
@@ -203,6 +206,7 @@ class DecisionEngine:
             self.tokenizer,
             self.config.max_label_options,
             noul_binary=self.config.noul_readout == "binary",
+            label_prefix=label_prefix(Style(self.config.prompt_style)),
         )
 
         unsupported = [
@@ -229,7 +233,9 @@ class DecisionEngine:
         for row, variant in enumerate(variants):
             question, route = questions[variant.name], routes[variant.name]
             scores = self._scores(logits, last_positions, row, route, question, hidden)
-            probs = self.calibration.apply(scores, _bucket_type(question, route), route.mode.value)
+            probs = self.calibration.apply(
+                scores, _bucket_type(question, route), route.mode.value, n_options=len(scores)
+            )
             probs_by_question[variant.name].append(probs)
             orders_by_question[variant.name].append(variant.order)
 
@@ -278,15 +284,27 @@ class DecisionEngine:
     def _render(
         self, state, questions: dict[str, Question], routes: dict[str, Route]
     ) -> tuple[str, list[Variant]]:
+        style = Style(self.config.prompt_style)
         codes = {name: route.codes for name, route in routes.items()}
         cached_schema = (
-            schema_block(questions, codes) if self.config.layout is Layout.SCHEMA_FIRST else None
+            schema_block(questions, codes, style)
+            if self.config.layout is Layout.SCHEMA_FIRST
+            else None
         )
         rendered: list[tuple[str, list[int] | None, Rendered]] = [
             (
                 name,
                 order,
-                build(state, name, question, codes[name], self.config.layout, cached_schema, order),
+                build(
+                    state,
+                    name,
+                    question,
+                    codes[name],
+                    self.config.layout,
+                    cached_schema,
+                    order,
+                    style,
+                ),
             )
             for name, question in questions.items()
             for order in self._orders(question, routes[name])
@@ -397,7 +415,10 @@ class DecisionEngine:
     def _label_token_scores(self, logits, last_positions, row: int, route: Route) -> list[float]:
         from .readout.mode_a import LabelTokenReadout
 
-        candidate_ids = LabelTokenReadout(self.tokenizer).candidate_ids(route.codes)
+        readout = LabelTokenReadout(
+            self.tokenizer, prefix=label_prefix(Style(self.config.prompt_style))
+        )
+        candidate_ids = readout.candidate_ids(route.codes)
         return logits[row, int(last_positions[row]), candidate_ids].float().tolist()
 
     def _candidate_path_scores(

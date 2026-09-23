@@ -254,7 +254,7 @@ for a packaged release, and `GET /health` reports what it loaded. On Modal,
 | Contamination guard (all 13 eval subsets) | **done, tested** |
 | Training config + budget arithmetic | **done, verified** |
 | Benchmark harness | **done, tested** (offline) + run against live Jev |
-| Data pipeline — 23 sources, 3 splits, augmented mixture | **done**, loads and splits verified |
+| Data pipeline — 29 sources, 3 splits, augmented mixture | **done**, loads and splits verified |
 | Held-out eval export (2,760 items, ±4 pts) | **done**, round-trips into levbench |
 | Collator, both readouts, objective | **done, tested** |
 | Training loop + checkpointing | **done** — 30 steps on Qwen3.5-0.8B-Base, both modes, losses finite |

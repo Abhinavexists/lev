@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..labels import LABEL_OPTION_CAP
-
 # Effective bf16 throughput on one H100 with gradient checkpointing. Peak is
 # ~990 TFLOP/s; 400 is a realistic sustained figure and the number §5.8 quotes.
 H100_EFFECTIVE_FLOPS = 4.0e14
@@ -53,10 +51,16 @@ class TrainConfig:
     # LoRA freezing the backbone. This was the non-obvious part of choosing LoRA.
     train_mode_b_head: bool = True
     mode_b_proj_dim: int = 512
-    # Mode A above this many options routes to Mode B. Must match the serving
-    # engine's `EngineConfig.max_label_options`, or the model is asked at serve
-    # time to do something it was never trained for. See `labels.LABEL_OPTION_CAP`.
-    max_label_options: int | None = LABEL_OPTION_CAP
+    # None: a question routes to Mode A whenever the tokenizer expresses its
+    # option codes in single tokens, exactly as the server routes (ADR-025), so
+    # Mode A trains on every set size it will serve. Mode B's data comes from
+    # the large-taxonomy sources' full option sets, which stay above the limit
+    # (`sources.augmentation_map`). ADR-026.
+    max_label_options: int | None = None
+    # `prompt.Style`: "plain" (Context/Question/Answer) or "chat" (ChatML with a
+    # system prompt, the instruct backbone's native format). A model property:
+    # serving must use the same style, so the release manifest records it.
+    prompt_style: str = "plain"
 
     # Data.
     n_examples: int = 200_000
@@ -164,10 +168,12 @@ class TrainConfig:
 
     def summary(self) -> str:
         adaptation = f"LoRA r{self.lora_rank}" if self.use_lora else "full fine-tune"
+        prompt = f"{self.prompt_style} prompts, Mode A to the tokenizer limit"
         return "\n".join(
             [
                 f"model            {self.model_id}  ({self.params_b}B, {self.dtype})",
                 f"adaptation       {adaptation}",
+                f"prompt           {prompt}\n"
                 f"data             {self.n_examples:,} examples x "
                 f"{self.avg_tokens_per_example} tok x {self.epochs} epochs"
                 f"  = {self.total_tokens / 1e9:.2f}B tokens",
@@ -206,6 +212,9 @@ PRESETS: dict[str, TrainConfig] = {
     "4b-instruct": TrainConfig(
         model_id="Qwen/Qwen3.5-4B",
         learning_rate=5e-5,
+        # The format the instruct backbone was trained on. Frozen, it scores
+        # 0.710 on S1Bench in this style against 0.653 in `plain` (ADR-027).
+        prompt_style="chat",
         output_dir="checkpoints/lev-4b-instruct",
     ),
     "2b": TrainConfig(

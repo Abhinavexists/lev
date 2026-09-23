@@ -53,6 +53,7 @@ def route(
     tokenizer,
     max_label_options: int | None = None,
     noul_binary: bool = False,
+    label_prefix: str = " ",
 ) -> Route:
     """Pick a mode for one question.
 
@@ -72,18 +73,18 @@ def route(
         return Route(Mode.CANDIDATE_PATH, None, f"{n} options over policy cap {max_label_options}")
 
     if isinstance(question, Noul) and noul_binary:
-        codes = single_token_codes(tokenizer, 2)
+        codes = single_token_codes(tokenizer, 2, prefix=label_prefix)
         if codes is not None:
             return Route(Mode.LABEL_TOKEN, codes, BINARY_NOUL)
 
     if isinstance(question, Noul):
         # Noul's candidates are the fixed rating scale, not user-supplied.
-        codes = single_token_codes(tokenizer, n, prefix=" ")
+        codes = single_token_codes(tokenizer, n, prefix=label_prefix)
         if codes is None:
             return Route(Mode.CANDIDATE_PATH, None, "rating tokens are not single tokens")
         return Route(Mode.LABEL_TOKEN, codes, "rating scale")
 
-    codes = single_token_codes(tokenizer, n)
+    codes = single_token_codes(tokenizer, n, prefix=label_prefix)
     if codes is None:
         return Route(Mode.CANDIDATE_PATH, None, f"{n} options exceed single-token codes")
     return Route(Mode.LABEL_TOKEN, codes, f"{n} options fit single-token codes")
@@ -94,7 +95,9 @@ def route_all(
     tokenizer,
     max_label_options: int | None = None,
     noul_binary: bool = False,
+    label_prefix: str = " ",
 ) -> dict[str, Route]:
     return {
-        name: route(q, tokenizer, max_label_options, noul_binary) for name, q in questions.items()
+        name: route(q, tokenizer, max_label_options, noul_binary, label_prefix)
+        for name, q in questions.items()
     }

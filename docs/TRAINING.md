@@ -105,7 +105,7 @@ rather than warns.
 
 ### The sources
 
-Twenty-three public corpora, chosen so that the *question* carries information
+Twenty-nine sources over twenty-five public corpora, chosen so that the *question* carries information
 the state does not. The first mixture had nine sources with one fixed
 instruction each, and the model learned to ignore the instruction entirely --
 the state identified the answer set on its own. See ADR-020.
@@ -121,13 +121,17 @@ the state identified the answer set on its own. See ADR-020.
 | `allenai/openbookqa` | Choice | 4 per row | fact + question |
 | `allenai/ai2_arc` (Easy) | Choice | 3–5 per row | grade-school science |
 | `stanfordnlp/snli`, `facebook/anli` | Choice | 3 | NLI -- the answer is a relation between two fields |
+| `pietrolesci/nli_fever` | Choice | 3 | claim + evidence → SUPPORTS / REFUTES / NOT ENOUGH INFO |
 | `benayas/snips` | Choice | 7 | a second, small intent taxonomy |
 | `legacy-datasets/banking77` | Choice | **77** | **Mode B** |
 | `clinc/clinc_oos` | Choice | **151** | **Mode B** at the extreme |
 | `SetFit/sst5`, `Yelp/yelp_review_full` | Score | 5 | ordered sentiment levels |
 | `openbmb/UltraFeedback` | Score | 5 | helpfulness rubric over instruction + response |
 | `stanfordnlp/imdb`, `cornell-movie-review-data/rotten_tomatoes` | Noul | 2 | sentiment, long and short states |
-| `SetFit/mrpc`, `SetFit/qqp` | Noul | 2 | paraphrase over sentence pairs |
+| `SetFit/mrpc`, `SetFit/qqp` | Noul | 2 | paraphrase, plus word-swapped negatives so overlap is not the answer |
+| `tasksource/parade` | Noul | 2 | paraphrase between high-overlap definitions |
+| `ChilleD/StrategyQA` | Noul | 2 | yes/no needing the given facts |
+| race / sciq / openbookqa as yes/no | Noul | 2 | "is the proposed answer correct?" -- yes on a factual axis |
 | `lmsys/toxic-chat`, `toxigen/toxigen-data` | Noul | 2 | **yes = toxic**: the bad outcome is the yes |
 | `PKU-Alignment/BeaverTails` | Noul | 2 | safety of a response; yes = safe, negated half the time |
 
@@ -137,11 +141,13 @@ subsampled, shuffled and sometimes stripped of descriptions in the train split.
 The held-out splits keep each source's canonical question, so the exported eval
 set and the fitted temperatures describe what is actually served.
 
-banking77 and clinc_oos are the sources over the Mode A cap of 26 options
-(`labels.LABEL_OPTION_CAP`), so they are the Mode B training signal;
-`default_weights()` gives the pair **25%** of the mixture deliberately, and
-subsampling never takes them below 27 options. The remaining 75% splits evenly
-across the three primitives.
+banking77 and clinc_oos are the large-taxonomy sources (over 26 options,
+`labels.LABEL_OPTION_CAP`); `default_weights()` gives the pair **25%** of the
+mixture. Half their rows keep the full option set -- that is the Mode B head's
+training data -- and the other half are cut to anywhere from 15 options up, so
+the label-token readout also trains on large lettered sets. Routing follows
+the tokenizer in training as in serving (ADR-025/026). The remaining 75%
+splits evenly across the three primitives.
 
 Dropped, with reasons: `CogComp/trec`, `takala/financial_phrasebank`,
 `allenai/cosmos_qa`, `allenai/social_i_qa`, `wics/strategy-qa` and
@@ -327,11 +333,15 @@ skip the very steps it exists to exercise.
 | `smoke` | Qwen3.5-0.8B-Base | LoRA r32 | 1.9 GB | 78.1 GB | minutes |
 | `2b` | Qwen3.5-2B-Base | full FT | 32.0 GB | 48.0 GB | 8 |
 | `4b` | Qwen3.5-4B-Base | LoRA r32 | 8.3 GB | 71.7 GB | 16 |
-| **`4b-instruct`** | **Qwen3.5-4B** (instruct) | **LoRA r32, lr 5e-5** | **8.3 GB** | **71.7 GB** | **16** |
+| **`4b-instruct`** | **Qwen3.5-4B** (instruct), **chat prompts** | **LoRA r32, lr 5e-5** | **8.3 GB** | **71.7 GB** | **16** |
 | `9b` | Qwen3.5-9B-Base | LoRA r32 | 18.3 GB | 61.7 GB | 36 |
 
 `4b-instruct` is the recommended start after ADR-020: frozen, the instruct
 checkpoint scores 0.719 on S1Bench (reflex-4b); the `4b` fine-tune scored 0.489.
+It trains in the `chat` prompt style -- the ChatML turns the backbone was
+trained on, worth 5.7 points frozen over `plain` (ADR-027). The style is
+recorded in the release manifest and applied by the server; the Base presets
+stay `plain`.
 
 A 16-hour run means you can afford about a dozen. **Budget the H100 for ablations, not
 one heroic run.**

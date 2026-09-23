@@ -49,7 +49,14 @@ class TestBuildRelease:
         assert manifest["step"] == 18750 and manifest["preset"] == "4b"
         assert manifest["calibrated"] and manifest["mode_b_head"]
         assert manifest["train_max_label_options"] == 26
+        assert manifest["prompt_style"] == "plain"
         assert json.loads((release / RELEASE_MANIFEST).read_text()) == manifest
+
+    def test_prompt_style_is_recorded_in_manifest_and_card(self, tmp_path):
+        out = fake_checkpoint(tmp_path)
+        manifest = build_release(out, tmp_path / "release", preset="4b", prompt_style="chat")
+        assert manifest["prompt_style"] == "chat"
+        assert "(`chat`)" in (tmp_path / "release" / MODEL_CARD).read_text()
 
     def test_missing_calibration_is_recorded_not_hidden(self, tmp_path):
         out = fake_checkpoint(tmp_path, calibrated=False)
