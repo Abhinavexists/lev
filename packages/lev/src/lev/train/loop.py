@@ -296,6 +296,11 @@ def run_training(
     if resume_from is None and not fresh and (found := latest_checkpoint(output)) is not None:
         resume_from = str(found)
         print(f"resuming from {found} (pass --fresh to start over)", flush=True)
+    # A fresh run must not leave the previous run's artefacts where the next
+    # preemption's auto-resume -- which takes the highest step -- or `serve`'s
+    # calibration lookup would find them. Moved, not deleted.
+    if fresh and (moved := set_aside_previous_run(output)) is not None:
+        print(f"previous run moved to {moved}", flush=True)
 
     model, tokenizer = build_model(config, model_cache)
     head = build_head(config, model) if config.train_mode_b_head else None
@@ -457,6 +462,21 @@ def run_training(
         flush=True,
     )
     return summary
+
+
+def set_aside_previous_run(output: Path) -> Path | None:
+    """Move `step-*`, `history.json` and `calibration.json` into a sibling
+    `superseded-<utc>` directory. Returns it, or None if there was nothing."""
+    stale = list(output.glob("step-*")) + [
+        output / name for name in ("history.json", "calibration.json") if (output / name).exists()
+    ]
+    if not stale:
+        return None
+    target = output / f"superseded-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+    target.mkdir()
+    for path in stale:
+        path.rename(target / path.name)
+    return target
 
 
 def _read_history(output: Path) -> list[dict]:

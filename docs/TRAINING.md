@@ -308,6 +308,11 @@ batches it had not yet seen, on the learning rate it had reached, and
 `history.json` extends rather than restarts. A preemption costs at most
 `checkpoint_every` steps -- 2,000, about half an hour on the 4B preset.
 
+`FRESH=1` also moves the previous run's `step-*`, `history.json` and
+`calibration.json` into a `superseded-<utc>` directory beside them: left in
+place, a preemption's auto-resume would take the stale highest step, and
+`serve` would pick up the old temperatures for the new weights.
+
 A checkpoint written before this existed carries weights only; resuming one
 restores the adapter and head and starts the optimiser and schedule fresh,
 which is what every resume did before ([ADR-021](DECISIONS.md#adr-021--a-checkpoint-carries-the-training-state-and-a-run-resumes-by-default)).

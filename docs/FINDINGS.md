@@ -544,3 +544,55 @@ to three decimals, as expected: nothing in the rating-scale Noul path changed.
 Calibration was fitted on lev's own mixture, and all six subsets are
 out-of-distribution for it, so the ECE figures from this run are not comparable
 to the 0.0529 measured on the held-out split.
+
+---
+
+## 14. The instruct run, and why its clinc_oos number is a bug and not a result
+
+`4b-instruct` (ADR-020 mixture, 18,750 steps) on the held-out split,
+calibrated: weighted 0.706 ±0.005, ECE 0.2135 → 0.1133. Not comparable to the
+first run's 0.856 -- the mixture is 23 sources and deliberately harder -- and
+the per-source picture is what matters:
+
+| learned (new sources) | | regressed | |
+|---|---|---|---|
+| sciq 0.975, arc_easy 0.927, openbookqa 0.917 | QA with per-row options | clinc_oos **0.055** (was 0.865) | Mode B, 151 options |
+| snli 0.852, anli 0.758 | NLI | emotion **0.605** (was ≥0.865) | 6 options |
+| toxic_chat 0.976, toxigen 0.871, beavertails 0.818 | safety, both polarities | | |
+| mrpc 0.896, qqp 0.864 | paraphrase | | |
+| banking77 0.906 (was 0.870) | Mode B, 77 options | | |
+
+The two regressions are the sources with the most option shuffling and the
+highest rate of identical option *sets* across rows. Checking the training
+rows against the source datasets: 35–45% of shuffled Choice rows had `target`
+pointing at a wrong option *as read by the training loop*, while the same
+rows on disk were 100% correct. The reader's question cache was keyed on a
+sorted payload and merged differently-ordered questions (ADR-024). Reading
+the same file with the fixed reader: 646/646, 682/682, 116/116 correct.
+
+So the instruct run is a mixed measurement: everything Noul, Score and
+per-row-QA learned from correct labels and those numbers stand; every shuffled
+Choice row of a fixed-option-set source trained on a corrupted label, and
+clinc_oos and emotion are the visible damage. Calibration came out
+under-confident on Choice (T=0.74 / 0.80) -- plausibly the same cause, a model
+that learned to hedge because its labels disagreed with its inputs. The run
+has to be repeated on the fixed reader before its S1Bench number means
+anything; the mixture itself does not need rebuilding.
+
+**Retrained on the fixed reader** (same mixture, same preset, 18,750 steps):
+loss 5.06 → 0.23 overall; over the last 300 steps Mode A averaged 0.495 and
+Mode B **0.531** -- against ~2.3 for Mode B in the corrupted run and 0.81 in
+the first run on the narrow mixture. The head learned the moment its labels
+stopped disagreeing with its inputs.
+
+Held-out, calibrated: **weighted 0.836 ±0.004, ECE 0.1273 → 0.0459** -- on a
+23-source mixture, against 0.856 / 0.0529 for the first model on nine. The two
+regressions the bug produced are gone: clinc_oos **0.976** (corrupted 0.055;
+first model 0.865), emotion 0.860 (corrupted 0.605). banking77 0.922, snips
+0.976, dbpedia 0.998; the new families hold -- snli 0.896, anli 0.845, arc_easy
+0.946, sciq 0.973, openbookqa 0.922, race 0.823, toxic_chat 0.973, toxigen
+0.873, mrpc 0.888, qqp 0.873, beavertails 0.806. Score stays the weak
+primitive (sst5 0.581, yelp 0.666, ultrafeedback 0.547). The fitted
+temperatures are ordinary again -- choice:A 2.04, choice:B 1.34, noul 2.42,
+score 2.91 -- so the under-confidence of the corrupted run was the bug as
+well. The S1Bench comparison for this checkpoint follows in §15.

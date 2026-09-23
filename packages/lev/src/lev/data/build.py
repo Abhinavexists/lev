@@ -48,11 +48,15 @@ def to_json(example: Example) -> dict:
 def _question_from(payload: dict, cache: dict[str, Question]) -> Question:
     """Validate a question once per distinct schema, not once per row.
 
-    The mixture has nine distinct questions and 200,000 rows. Building a
-    pydantic model per row costs both the validation time and a live object for
-    each -- hundreds of MB resident before training starts, for nine values.
+    Distinct means *order included*. The key must not sort the payload: two
+    rows whose option sets are equal but ordered differently are different
+    questions, because `target` indexes the order. Keyed with `sort_keys=True`,
+    every shuffled row of a source resolved to the first-seen order and its
+    target pointed at a wrong option -- 35-45% of shuffled Choice rows in the
+    ADR-020 mixture trained on wrong labels, and clinc_oos fell to 0.055. The
+    written row was correct; the reader merged it. ADR-024.
     """
-    key = json.dumps(payload, sort_keys=True)
+    key = json.dumps(payload, sort_keys=False)
     if key not in cache:
         cache[key] = _QUESTION.validate_python(payload)
     return cache[key]
@@ -88,6 +92,33 @@ def read_jsonl(path: Path) -> list[Example]:
     cache: dict[str, Question] = {}
     with path.open(encoding="utf-8") as handle:
         return [from_json(json.loads(line), cache) for line in handle if line.strip()]
+
+
+def verify_round_trip(path: Path, sample: int = 1000) -> int:
+    """Re-read a written split and check each sampled row comes back as written.
+
+    Order-sensitive on purpose: `target` indexes the option order, so a reader
+    that returns the right *set* of options in a different order has moved the
+    label. A guard this cheap would have caught ADR-024 at build time instead
+    of after a six-hour run. Returns the number of rows checked.
+    """
+    rows = read_jsonl(path)
+    step = max(1, len(rows) // sample)
+    with path.open(encoding="utf-8") as handle:
+        for i, line in enumerate(handle):
+            if i % step or not line.strip():
+                continue
+            written = json.loads(line)
+            reread = to_json(rows[i])
+            # Compared as text, not as dicts: dict equality ignores key order,
+            # and key order is exactly what a merged question loses.
+            if json.dumps(reread, ensure_ascii=False) != json.dumps(written, ensure_ascii=False):
+                raise ValueError(
+                    f"{path} row {i} did not survive the round trip: written "
+                    f"{written['question']!r} target {written['target']}, read back "
+                    f"{reread['question']!r} target {reread['target']}"
+                )
+    return len(range(0, len(rows), step))
 
 
 def build_dataset(
@@ -162,6 +193,7 @@ def build_dataset(
             name: (lambda name=name, split=split: by_source[split][name]) for name in available
         }
         counts[split.value] = write_jsonl(out / SPLIT_FILES[split], build_mixture(mixture, loaders))
+        verify_round_trip(out / SPLIT_FILES[split])
 
     unique_train = sum(len(rows) for rows in by_source[Split.TRAIN].values())
     manifest = {

@@ -209,3 +209,34 @@ class TestResume:
         _, seen, summary = self.run(tmp_path, monkeypatch, max_steps=36)
         assert summary["steps"] == 36
         assert seen == full[33:36]
+
+
+class TestFreshSetsAsideThePreviousRun:
+    def test_stale_checkpoints_and_calibration_are_moved_not_deleted(self, tmp_path):
+        from lev.train.loop import set_aside_previous_run
+
+        out = tmp_path / "out"
+        (out / "step-18750").mkdir(parents=True)
+        (out / "step-18750" / "adapter_model.safetensors").write_bytes(b"old")
+        (out / "calibration.json").write_text("{}")
+        (out / "history.json").write_text("{}")
+
+        moved = set_aside_previous_run(out)
+        assert moved is not None and moved.parent == out and moved.name.startswith("superseded-")
+        assert not (out / "step-18750").exists() and not (out / "calibration.json").exists()
+        assert (moved / "step-18750" / "adapter_model.safetensors").read_bytes() == b"old"
+        assert (moved / "calibration.json").is_file()
+        assert set_aside_previous_run(out) is None
+
+    def test_fresh_run_does_not_resume_from_a_higher_stale_step(self, tmp_path, monkeypatch):
+        """The hazard: a fresh run writes step-3, step-6 beside a stale step-18750;
+        a preemption's auto-resume would take the stale one. `--fresh` moves it."""
+        from lev.train.checkpoints import latest_checkpoint
+
+        runner = TestResume()
+        stale = tmp_path / "out" / "step-18750"
+        stale.mkdir(parents=True)
+        (stale / "adapter_model.safetensors").write_bytes(b"corrupted run")
+        saved, _, summary = runner.run(tmp_path, monkeypatch, max_steps=6, fresh=True)
+        assert saved == [3, 6] and summary["history"][0]["step"] == 0
+        assert latest_checkpoint(tmp_path / "out").name == "step-6"

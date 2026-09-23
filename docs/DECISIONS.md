@@ -805,6 +805,50 @@ or the first item of an eval must not fail on a container scaling from zero.
 
 ---
 
+## ADR-024 — The mixture reader merged shuffled questions, and the instruct run trained on it
+
+**Accepted.** A bug report as much as a decision; recorded because it decides
+what the `4b-instruct` numbers mean.
+
+`read_jsonl` validates each row's question once per distinct payload and
+shares the object, to avoid building 200,000 pydantic models. The cache key
+was `json.dumps(payload, sort_keys=True)`. Sorting the payload sorts the
+`criteria` map, so two rows with the same options in different orders hashed
+to the same key and the second row received the first row's question object
+-- while its `target`, an index into *its own* order, was left alone. Every
+shuffled Choice row of a source therefore trained on a label chosen by the
+first-seen order: measured on the local mixture, 224 of 646 clinc_oos rows,
+282 of 682 banking77 rows and 54 of 116 emotion rows pointed at a wrong option.
+The file on disk was correct in every case; only the reader was wrong.
+
+Before ADR-020 no source shuffled its options, so no two rows ever collided
+and the bug had no effect. The augmentation that fixed the "ignores its
+question" failure exposed it. Held-out splits keep canonical order, so
+calibration and evaluation read correctly; per-row QA sources have distinct
+option sets, so they were untouched; Noul and Score have no order to lose.
+
+**What it did to the run.** `4b-instruct` (18,750 steps, 5h53) trained on
+those labels. Its evaluation: weighted 0.706, ECE 0.2135 → 0.1133; the new
+sources learned (sciq 0.975, arc_easy 0.927, snli 0.852, toxic_chat 0.976,
+mrpc 0.896); banking77 0.906; but clinc_oos 0.055 and emotion 0.605, the two
+sources with the highest collision rates, against 0.865 and >= 0.865 before.
+Those two numbers are the bug, not the model, and the Mode B training loss of
+~2.3 against 0.8 in the first run is the same thing seen from the other side.
+
+**Decisions.** The key preserves order (`sort_keys=False`; the payload comes
+from an ordered dump). `verify_round_trip` re-reads every written split at
+build time and refuses a file whose rows do not come back exactly as written
+-- a check that costs seconds and would have failed this build before the run
+started. The test suite re-introduces the bug and asserts the guard catches it.
+
+**Consequence.** The mixture on the volume is correct and did not need
+rebuilding. The run was repeated with the fixed reader (`FRESH=1`, which now
+also moves the superseded run aside): Mode B loss 0.531 over the last 300
+steps against ~2.3, held-out weighted 0.836 with ECE 0.0459, clinc_oos 0.976.
+FINDINGS.md §14.
+
+---
+
 ## Open questions
 
 | # | Question | How it gets settled |
