@@ -9,10 +9,12 @@ S1     ?= data/s1bench
 LIMIT  ?= 20000
 STEPS  ?= 20
 URL    ?= http://localhost:8000
+RELEASE ?= $(PRESET)
+REPO   ?=
 
 .PHONY: help setup setup-train setup-serve setup-modal test lint fmt check \
         bench bench-local sweep plan check-data data eval-set s1bench smoke smoke-local \
-        train calibrate serve snake clean
+        train calibrate serve deploy release weights publish snake clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -81,8 +83,20 @@ train: ## Modal: the real run; resumes the newest checkpoint (FRESH=1 to start o
 calibrate: ## Modal: fit per-bucket temperatures after training
 	modal run modal/app.py::calibrate --preset $(PRESET)
 
-serve: ## Modal: serve /v1/systemone on an H100
-	modal serve modal/app.py
+serve: ## Modal: dev server on an H100 (ephemeral; any `modal run` on this app steals its URL)
+	LEV_SERVE_PRESET=$(PRESET) modal serve modal/app.py
+
+deploy: ## Modal: deploy /v1/systemone with a stable URL (PRESET selects the checkpoint)
+	LEV_SERVE_PRESET=$(PRESET) modal deploy modal/app.py
+
+release: ## Modal: package the newest PRESET checkpoint into a release dir on the volume
+	modal run modal/app.py::export_checkpoint --preset $(PRESET) $(if $(NAME),--name $(NAME),)
+
+weights: ## Pull a packaged release to weights/RELEASE (RELEASE=name, default PRESET)
+	modal volume get --force lev-checkpoints releases/$(RELEASE) weights/$(RELEASE)
+
+publish: ## Upload weights/RELEASE to the Hub (REPO=org/name; needs HF_TOKEN)
+	uv run lev release publish weights/$(RELEASE) --repo $(REPO)
 
 snake: ## The decision model plays Snake over /v1/systemone (URL=server; --record in artifacts/)
 	uv run levbench snake --backend lev --base-url $(URL) --record artifacts/snake/run.jsonl

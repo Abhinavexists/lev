@@ -71,7 +71,18 @@ def create_app(
         if checkpoint_dir:
             from .train.checkpoints import resolve_checkpoint
 
-            checkpoint = resolve_checkpoint(checkpoint_dir)
+            checkpoint = resolve_checkpoint(checkpoint_dir, model_cache)
+            # A packaged release names the base its adapter was trained on. The
+            # weights are tied to it, so the manifest wins over the argument.
+            manifest_file = checkpoint / "lev_release.json"
+            if manifest_file.is_file():
+                manifest = json.loads(manifest_file.read_text())
+                if manifest["base_model"] != model_id:
+                    print(
+                        f"release manifest names base {manifest['base_model']!r}; "
+                        f"using it instead of {model_id!r}"
+                    )
+                    model_id = manifest["base_model"]
 
         # Tokenizer from the checkpoint when it saved one: the label-token
         # readout depends on which ids a code encodes to, so a mismatch produces
@@ -99,10 +110,12 @@ def create_app(
         model = model.eval()
 
         profile = CalibrationProfile()
-        # Default to the profile sitting beside the weights it was fitted for.
-        resolved_calibration = calibration or (
-            str(checkpoint.parent / "calibration.json") if checkpoint else None
-        )
+        # Default to the profile sitting beside the weights it was fitted for:
+        # inside a flat release directory, or one level up in a training tree.
+        resolved_calibration = calibration
+        if resolved_calibration is None and checkpoint:
+            candidates = [checkpoint / "calibration.json", checkpoint.parent / "calibration.json"]
+            resolved_calibration = str(next((c for c in candidates if c.is_file()), candidates[-1]))
         if resolved_calibration:
             try:
                 profile = CalibrationProfile.load(resolved_calibration)

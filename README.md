@@ -200,6 +200,26 @@ JSONL that `levbench replay` plays back. In the compact prompt the state text
 *states* the Noul answers, so the running Noul score is the cheapest test there
 is of whether a model reads its question.
 
+## Weights
+
+A release is one flat directory -- adapter, Mode B head, tokenizer, fitted
+temperatures, and a `lev_release.json` naming the base model and the option
+cap the weights were trained under -- that `lev serve` loads as-is from disk
+or from the Hub.
+
+```bash
+make release PRESET=4b-instruct          # package the newest checkpoint on the Modal volume
+make weights RELEASE=4b-instruct         # pull it to weights/4b-instruct
+make publish RELEASE=4b-instruct REPO=org/lev-4b-instruct   # needs HF_TOKEN
+
+uv run lev serve --checkpoint weights/4b-instruct            # from disk
+uv run lev serve --checkpoint org/lev-4b-instruct            # from the Hub
+```
+
+The server reads the manifest for the base model, so `--model` is not needed
+for a packaged release, and `GET /health` reports what it loaded. On Modal,
+`make deploy PRESET=4b-instruct` serves that preset's newest checkpoint.
+
 ## Status
 
 | | |

@@ -174,6 +174,34 @@ def cmd_train(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_release_build(args: argparse.Namespace) -> None:
+    from .release import build_release
+
+    manifest = build_release(
+        args.checkpoint,
+        args.out,
+        preset=args.preset,
+        calibration=args.calibration,
+        name=args.name,
+    )
+    print(f"release {manifest['name']} -> {args.out}")
+    print(
+        f"  base {manifest['base_model']}  step {manifest['step']}  files {len(manifest['files'])}"
+    )
+    if not manifest["calibrated"]:
+        print("  WARNING: no calibration.json; the release serves raw softmax")
+    print(f"\n  uv run lev serve --checkpoint {args.out}")
+    print(f"  uv run lev release publish {args.out} --repo <org/name>")
+
+
+def cmd_release_publish(args: argparse.Namespace) -> None:
+    from .release import publish
+
+    url = publish(args.release, args.repo, private=args.private)
+    print(f"published -> {url}")
+    print(f"\n  uv run lev serve --checkpoint {args.repo}")
+
+
 def cmd_serve(args: argparse.Namespace) -> None:
     import uvicorn
 
@@ -289,6 +317,25 @@ def main(argv: list[str] | None = None) -> None:
     train_parser.add_argument(
         "--max-steps", type=int, default=None, help="stop early; for smoke runs"
     )
+    release_parser = sub.add_parser("release", help="package a checkpoint; publish it to the Hub")
+    release_sub = release_parser.add_subparsers(dest="release_command", required=True)
+    build_release_parser = release_sub.add_parser(
+        "build", help="copy adapter, head, tokenizer and calibration into one release dir"
+    )
+    build_release_parser.add_argument(
+        "--checkpoint", required=True, help="a step-N dir or its parent"
+    )
+    build_release_parser.add_argument("--out", required=True)
+    build_release_parser.add_argument("--preset", default="4b", choices=_preset_names())
+    build_release_parser.add_argument("--calibration", default=None)
+    build_release_parser.add_argument("--name", default=None)
+    build_release_parser.set_defaults(func=cmd_release_build)
+    publish_parser = release_sub.add_parser("publish", help="upload a release dir to the Hub")
+    publish_parser.add_argument("release", help="a directory written by `lev release build`")
+    publish_parser.add_argument("--repo", required=True, help="Hub id, e.g. org/lev-4b")
+    publish_parser.add_argument("--private", action="store_true")
+    publish_parser.set_defaults(func=cmd_release_publish)
+
     train_parser.add_argument(
         "--resume", default=None, help="a step-N directory; default: newest in --output-dir"
     )

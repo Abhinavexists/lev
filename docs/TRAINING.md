@@ -341,15 +341,40 @@ uv run levbench eval --backend lev --tasks data/eval
 ```
 
 `--checkpoint` takes the output directory and resolves the newest `step-N`
-inside it. It loads the base model, applies the LoRA adapter on top, picks up
-`mode_b_head.pt` if it is there, and uses the `calibration.json` sitting beside
-the weights unless `--calibration` overrides it. `GET /health` reports which
-checkpoint was resolved, whether a Mode B head loaded, and whether the profile
-is calibrated — check it before reading any number off an eval.
+inside it, a flat release directory, or a Hub id. It loads the base model,
+applies the LoRA adapter on top, picks up `mode_b_head.pt` if it is there, and
+uses the `calibration.json` beside the weights unless `--calibration`
+overrides it. `GET /health` reports which checkpoint was resolved, whether a
+Mode B head loaded, whether the profile is calibrated, the Noul readout and the
+option cap — check it before reading any number off an eval.
 
 A checkpoint directory is an *adapter*, not a model. Pointing
-`AutoModelForCausalLM` at one does not work, which is why `--model` still names
-the base.
+`AutoModelForCausalLM` at one does not work, which is why `--model` names the
+base — except for a packaged release, whose `lev_release.json` names it.
+
+### Releasing the weights
+
+```bash
+make release PRESET=4b-instruct                 # -> /checkpoints/releases/4b-instruct on the volume
+make weights RELEASE=4b-instruct                # -> weights/4b-instruct locally
+make publish RELEASE=4b-instruct REPO=org/name  # -> huggingface.co/org/name (HF_TOKEN)
+```
+
+`lev release build` copies adapter, head, tokenizer and calibration into one
+directory with a manifest and a model card; the optimiser state is left
+behind. `lev serve --checkpoint org/name` downloads and serves it.
+
+### On Modal: which checkpoint, and `serve` vs `deploy`
+
+`make deploy PRESET=4b-instruct` serves that preset's newest checkpoint; the
+preset travels to the container as `LEV_SERVE_PRESET`. `LEV_SERVE_MODEL=Qwen/Qwen3.5-4B make deploy`
+serves that model frozen — no adapter, binary Noul — the zero-shot baseline.
+
+`modal serve` is an ephemeral dev server. So is every `modal run` of this app
+file, and each one registers the `serve` web function under the same `-dev`
+label — so running an export or a diagnostic while the dev server is up steals
+its URL, and the URL returns 404 when the run exits. `make deploy` gives the
+server a stable URL that runs cannot take.
 
 ---
 

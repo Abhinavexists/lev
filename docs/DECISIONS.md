@@ -764,6 +764,47 @@ degrades to weights-only rather than to a corrupt state.
 
 ---
 
+## ADR-022 — A release is one flat directory, and the demo is a client
+
+**Accepted.**
+
+**Releases.** Weights leave the training tree as a single directory: adapter,
+Mode B head, tokenizer, `calibration.json`, `lev_release.json`, model card.
+The manifest names the base model, the step and preset, and the serving
+policy the weights were trained under (option cap, Noul readout). A LoRA
+adapter is meaningless without its base, the head without its adapter, the
+temperatures without their readout, and the cap without the training that
+assumed it; shipping them apart is how a "model" on the Hub stops matching the
+numbers in the paper. `lev serve` reads the manifest, so a release serves from
+disk or from a Hub id with no other argument, and `/health` says what loaded.
+The optimiser state stays behind: it is for resuming, not serving.
+
+**The Snake demo lives in levbench, not lev.** It is a client of
+`/v1/systemone` and nothing else, so the same game runs against lev, Jev, or a
+frozen baseline through the client `levbench eval` uses, and its latency
+includes the network the benchmark's does. laya-mlx's rules, planner and
+prompt wording are kept verbatim (Apache-2.0) so runs are comparable to
+theirs, and its display, loop (rounds, keyboard, pacing) and recording format
+are laya's too, so a recording replays in either. Two additions: the planner
+knows the true answer to both Noul questions, so the demo scores them live —
+in the compact prompt the state text states the answers, which makes this the
+cheapest possible probe of the "ignores its question" failure that cost lev 52
+points on aegis2 — and `--backend planner` plays from the planner alone, the
+reference row every model is measured against and a way to see the display
+with no server up.
+
+**Deploy, don't serve, for anything you point a run at.** Every ephemeral app
+of `modal/app.py` — `modal serve` and every `modal run` — registers the same
+`lev-serve-dev` web label; a run steals it from a live dev server and the URL
+404s when the run exits. Measured the hard way: an export run took the URL
+out from under a benchmark. `make deploy` owns a stable label.
+
+**Self-hosted servers get a 120 s client timeout.** The SDK's default is 10 s;
+Modal's cold start for the 4B model measured 20–55 s. The first move of a demo
+or the first item of an eval must not fail on a container scaling from zero.
+
+---
+
 ## Open questions
 
 | # | Question | How it gets settled |

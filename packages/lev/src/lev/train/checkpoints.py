@@ -34,15 +34,34 @@ def latest_checkpoint(output: str | Path) -> Path | None:
     return steps[-1] if steps else None
 
 
-def resolve_checkpoint(path: str | Path) -> Path:
-    """Accept either a `step-N` directory or the parent holding several.
+def fetch_checkpoint(spec: str | Path, cache_dir: str | None = None) -> Path:
+    """A local directory as-is; a Hub id (`hf://org/name` or `org/name`) downloaded.
+
+    Anything that exists on disk is local. Otherwise a string with exactly one
+    slash and no path separators beyond it is treated as a Hub repo, so a typo
+    in a local path fails as a missing repo rather than being silently created.
+    """
+    local = Path(spec)
+    if local.exists():
+        return local
+    repo = str(spec).removeprefix("hf://")
+    if repo.count("/") != 1 or repo.startswith("/") or repo.startswith("."):
+        raise FileNotFoundError(f"{spec!r} is neither a local path nor a Hub id like org/name")
+    from huggingface_hub import snapshot_download
+
+    return Path(snapshot_download(repo, repo_type="model", cache_dir=cache_dir))
+
+
+def resolve_checkpoint(path: str | Path, cache_dir: str | None = None) -> Path:
+    """Accept a `step-N` directory, the parent holding several, a flat release
+    directory, or a Hub id for one.
 
     `save_checkpoint` writes `<output_dir>/step-<n>`, but every caller naturally
     names `<output_dir>` -- the preset's output directory is what appears in the
     config, in the Modal volume layout and in the docs. Resolving the newest
     step here means one spelling works everywhere.
     """
-    source = Path(path)
+    source = fetch_checkpoint(path, cache_dir)
     if (source / "adapter_model.safetensors").is_file():
         return source
     latest = latest_checkpoint(source)

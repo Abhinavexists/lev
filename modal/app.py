@@ -431,6 +431,32 @@ def diagnose_candidates(model_id: str = "Qwen/Qwen3.5-4B-Base") -> dict:
 
     def reprs(batch, side="right"):
         tok.padding_side = side
+RELEASES_DIR = f"{CKPT_DIR}/releases"
+
+
+@app.function(volumes={CKPT_DIR: checkpoints}, secrets=SECRETS, timeout=30 * 60)
+def export_checkpoint(preset: str = "4b", name: str | None = None) -> dict:
+    """Package the newest checkpoint of a preset into `/checkpoints/releases/<name>`.
+
+    No GPU: this copies files. The result is what `make weights` pulls and
+    `lev release publish` uploads -- adapter, head, tokenizer, calibration and
+    a manifest naming the base model and serving policy.
+    """
+    from lev.release import build_release
+
+    manifest = build_release(
+        f"{CKPT_DIR}/{preset}", f"{RELEASES_DIR}/{name or preset}", preset=preset, name=name
+    )
+    checkpoints.commit()
+    target = name or preset
+    print(
+        f"release {manifest['name']} -> {RELEASES_DIR}/{target}  ({len(manifest['files'])} files)"
+    )
+    print(f"  pull it:    make weights RELEASE={target}")
+    print(f"  publish it: make publish RELEASE={target} REPO=<org/name>")
+    return manifest
+
+
         enc = tok(batch, return_tensors="pt", padding=True, add_special_tokens=False).to("cuda")
         with torch.no_grad():
             hs = model(**enc, output_hidden_states=True, use_cache=False).hidden_states[-1]
