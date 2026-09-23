@@ -266,14 +266,21 @@ for a packaged release, and `GET /health` reports what it loaded. On Modal,
 | Decision engine (prefill, fork, readout) | **runs**; option cap, two-order averaging, binary Noul ([ADR-020](docs/DECISIONS.md#adr-020--the-trained-model-lost-to-the-frozen-one-what-changes-and-what-does-not)) |
 | Mode B head | **trains and serves**; unseen-taxonomy transfer untested |
 
-A 4B checkpoint has been trained, calibrated and scored in-distribution (0.856,
-ECE 0.0529, [ADR-018](docs/DECISIONS.md#adr-018--what-the-first-trained-checkpoint-actually-shows))
-and then on **S1Bench, against Jev, through identical task files: 0.489 vs 0.754
-macro**. The frozen backbone scores 0.719 (reflex-4b), so the first fine-tune made
-the model worse. [FINDINGS §12](docs/FINDINGS.md) has the two failure modes and
-[ADR-020](docs/DECISIONS.md#adr-020--the-trained-model-lost-to-the-frozen-one-what-changes-and-what-does-not)
-what changed in response -- part of it live without retraining, the rest a new
-mixture and an instruct starting point that need a run.
+Two checkpoints have been trained, calibrated and scored on **S1Bench against
+Jev through identical task files**. The first, on nine classification corpora,
+scored 0.489 macro against Jev's 0.754 and the frozen backbone's 0.719
+([FINDINGS §12](docs/FINDINGS.md), [ADR-020](docs/DECISIONS.md#adr-020--the-trained-model-lost-to-the-frozen-one-what-changes-and-what-does-not)).
+The second, from the instruct checkpoint on 23 sources with paraphrased and
+negated questions and varied option sets, scores **0.697** -- equal to Jev on
+aegis2, above it on helpsteer2, three points under the frozen backbone -- with
+held-out 0.836 / ECE 0.046 ([FINDINGS §15](docs/FINDINGS.md)). Getting there
+included a serving decision worth 51 points on one subset: route Mode A up to
+the tokenizer's single-token limit rather than the training cap
+([ADR-025](docs/DECISIONS.md#adr-025--serving-routes-mode-a-up-to-the-tokenizer-limit-training-keeps-its-cap)).
+The remaining gap is paws, where paraphrase training taught the lexical-overlap
+shortcut PAWS exists to punish, and calibration on option sets larger than the
+mixture contains. A reader bug that corrupted the labels of one
+intermediate run is recorded in [ADR-024](docs/DECISIONS.md#adr-024--the-mixture-reader-merged-shuffled-questions-and-the-instruct-run-trained-on-it).
 
 ---
 

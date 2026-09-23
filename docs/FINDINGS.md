@@ -701,3 +701,58 @@ primitive (sst5 0.581, yelp 0.666, ultrafeedback 0.547). The fitted
 temperatures are ordinary again -- choice:A 2.04, choice:B 1.34, noul 2.42,
 score 2.91 -- so the under-confidence of the corrupted run was the bug as
 well. The S1Bench comparison for this checkpoint follows in §15.
+
+---
+
+## 15. Second head-to-head: the retrained instruct model on S1Bench
+
+Same 1,999 task files, same harness, run 2026-09-23 against the deployed
+`4b-instruct/step-18750` at concurrency 4 (321 s wall for the whole pass).
+
+| subset | first 4b | **instruct** | Δ | frozen 4B | Jev | ECE instruct | ECE Jev |
+|---|---|---|---|---|---|---|---|
+| aegis2 | 0.312 | **0.832** | +52.0 | 0.82 | 0.832 | 0.093 | 0.031 |
+| helpsteer2 | 0.216 | **0.380** | +16.4 | 0.33 | 0.304 | 0.150 | 0.293 |
+| vitaminc-dev | 0.588 | 0.751 | +16.3 | 0.75 | 0.846 | 0.129 | 0.069 |
+| boolq | 0.803 | 0.863 | +6.0 | 0.82 | 0.910 | 0.050 | 0.028 |
+| massive-en-US | 0.166 | 0.231 | +6.5 | 0.83 | 0.814 | 0.227 | 0.082 |
+| paws | 0.712 | 0.612 | −10.0 | 0.77 | 0.820 | 0.349 | 0.038 |
+| **macro** | 0.489 | **0.612** | +12.3 | 0.719 | 0.754 | | |
+| massive-en-US, serving cap at the tokenizer limit (ADR-025) | 0.166 | **0.746** | +58.0 | 0.83 | 0.814 | 0.201 | 0.082 |
+| **macro with that policy** | 0.489 | **0.697** | +20.8 | 0.719 | 0.754 | | |
+
+Each of the three mixture changes built for a specific failure can be read
+off its subset. Negation-trained Noul: aegis2 from below-chance to **equal to
+Jev**, and the polarity probe of §12 no longer applies -- the model reads the
+question. A helpfulness rubric in training: helpsteer2 **above Jev** and above
+the frozen model, on the subset nobody handles. NLI and yes/no QA in training:
+vitaminc up 16 points to the frozen model's level, boolq past it.
+
+Two subsets carry the remaining gap to the frozen backbone, and they are
+different kinds of problem.
+
+**massive-en-US is a serving policy, not a training result.** The frozen
+instruct backbone scores 0.83 on it -- in Mode A, with 60 lettered options,
+which its tokenizer expresses in single tokens. Our cap of 26 (ADR-020) sends
+the same question to the Mode B head, which is now excellent on the taxonomies
+it trained on (clinc_oos 0.976, banking77 0.922) and still weak on one it has
+not seen. The cap was set when the Base model collapsed above 14 options; the
+instruct model evidently does not. Measured, one redeploy later, same items:
+**cap 26 → 0.231; cap 76 → 0.746.** The serving default is now the tokenizer
+limit (ADR-025), the macro is **0.697**, and the 8 points still short of the
+frozen backbone's 0.83 mark the regime Mode A was under-trained in, not one it
+cannot do.
+
+**paws regressed, and confidently (ECE 0.35).** The mixture gained paraphrase
+supervision from mrpc and qqp, and the model learned it (held-out 0.888 /
+0.873) -- but those corpora reward lexical overlap, and PAWS is built from
+word-swapped pairs with *high* overlap and label "not a paraphrase". The model
+learned the shortcut the benchmark was designed to punish. Adversarial
+negatives (swapped-word pairs from the existing positives) are the training
+fix; PAWS itself and PAWS-X are blocked.
+
+Calibration: Jev is better on five of six; we are better on helpsteer2, where
+Jev is confidently wrong at 0.29. The temperatures were fitted on the training
+mixture's held-out split and these subsets are out of distribution for it;
+fitting on a held-out *task family* remains open (ADR-020).
+
