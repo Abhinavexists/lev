@@ -27,12 +27,14 @@ The cache fork was the one part that could not be reasoned about -- see `_fork`.
 from __future__ import annotations
 
 import copy
+import threading
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from .calibrate import CalibrationProfile
-from .labels import LABEL_OPTION_CAP, noul_probability
+from .labels import noul_probability
 from .prompt import Layout, Rendered, build, candidate_texts, schema_block
 from .router import BINARY_NOUL, Mode, Route, route_all
 from .types import (
@@ -51,9 +53,13 @@ from .types import (
 @dataclass
 class EngineConfig:
     model_id: str = "Qwen/Qwen3.5-4B-Base"
-    # Same cap as training (`TrainConfig.max_label_options`), for the same
-    # reason: above it the model is in a regime it was never trained for.
-    max_label_options: int | None = LABEL_OPTION_CAP
+    # None: Mode A whenever the tokenizer can express the codes, Mode B above
+    # that. Training caps Mode A at `LABEL_OPTION_CAP` so Mode B keeps its
+    # data; serving does not share the cap. ADR-020 set them equal after the
+    # Base model collapsed at 60 lettered options; measured on the instruct
+    # LoRA, Mode A at 60 scores 0.746 on an unseen taxonomy against 0.231 for
+    # the head, which learns the taxonomies it was shown. ADR-025.
+    max_label_options: int | None = None
     layout: Layout = Layout.STATE_FIRST
     device: str = "auto"
     dtype: str = "bfloat16"
@@ -65,6 +71,34 @@ class EngineConfig:
     # agreement 0.15 between two orders of the same 60 options). Two suffix rows
     # instead of one, in the same batched forward -- no extra prefill.
     order_average: bool = True
+    # How the shared prefix is computed. "fork": prefill once, fork the cache,
+    # run the suffixes -- two forwards, no repeated prefix FLOPs. "single": one
+    # batched forward over prefix+suffix per row -- repeats the prefix per row
+    # but launches half as many kernels. Measured on an H100 with the 4B
+    # checkpoint (`profile_engine`): fork 159-169 ms, single 73-84 ms, flat in
+    # the number of questions either way. The forward is launch-bound at these
+    # sizes, so the fork's saved FLOPs buy nothing and its second forward costs
+    # double. Fork remains for long states with many questions, where the
+    # repeated prefix would dominate. ADR-023.
+    prefix_mode: Literal["fork", "single"] = "single"
+    # `torch.compile(mode="reduce-overhead")`: CUDA graphs replay the ~200
+    # kernel launches of a forward as one, which is the remaining order of
+    # magnitude in a launch-bound regime. Graphs are recorded per input shape,
+    # so shapes are padded to buckets (`pad_to` tokens, power-of-two rows) to
+    # keep the set small. Numerically the same forward; only the launch path
+    # changes. Off by default until `warmup()` has run: the first call per
+    # bucket pays the record, and a server does that at startup, not on a user.
+    compile: bool = False
+    pad_to: int = 32
+
+
+def bucket(n: int, multiple: int) -> int:
+    """`n` rounded up to a multiple; a stable set of shapes for graph capture."""
+    return max(multiple, ((n + multiple - 1) // multiple) * multiple)
+
+
+def pow2(n: int) -> int:
+    return 1 << max(0, (n - 1).bit_length())
 
 
 @dataclass(frozen=True)
@@ -110,6 +144,58 @@ class DecisionEngine:
         self.calibration = calibration or CalibrationProfile()
         self.mode_b_head = mode_b_head
         self._candidate_cache: dict[tuple[str, ...], Any] = {}
+        # Read once: a compiled module proxies attributes, but not reliably.
+        self._device = getattr(model, "device", None)
+        # One forward at a time. CUDA-graph replay is not thread-safe, and a
+        # server that accepts concurrent requests overlaps everything else
+        # (parsing, tokenising, the network) around this.
+        self._lock = threading.Lock()
+        self._eager_model = model
+        if self.config.compile:
+            import torch
+
+            self.model = torch.compile(model, mode="reduce-overhead", dynamic=True)
+
+    def warmup(
+        self,
+        shapes: tuple[tuple[int, int], ...] = (
+            (2, 64),
+            (2, 128),
+            (4, 128),
+            (8, 128),
+            (2, 256),
+            (2, 512),
+        ),
+    ) -> float:
+        """Run one forward per shape bucket so compile and graph capture happen
+        now rather than on the first request. Returns seconds spent. If the
+        compiled path fails, falls back to eager and says so -- a slow server
+        beats a dead one.
+        """
+        import torch
+
+        started = time.perf_counter()
+        pad = self.tokenizer.pad_token_id or 0
+        try:
+            for rows, width in shapes:
+                ids = torch.full((rows, width), pad, dtype=torch.long, device=self._device)
+                mask = torch.ones_like(ids)
+                with torch.no_grad(), self._lock:
+                    self.model(input_ids=ids, attention_mask=mask, use_cache=False)
+                    if self.mode_b_head is not None:
+                        self.model(
+                            input_ids=ids,
+                            attention_mask=mask,
+                            use_cache=False,
+                            output_hidden_states=True,
+                        )
+        except Exception as error:  # noqa: BLE001 -- any compile failure means eager
+            print(
+                f"WARNING: compiled forward failed ({type(error).__name__}: {error}); serving eager"
+            )
+            self.model = self._eager_model
+            self.config.compile = False
+        return time.perf_counter() - started
 
     def system_one(self, state, questions: dict[str, Question]) -> SystemOneResponse:
         routes = route_all(
@@ -216,13 +302,53 @@ class DecisionEngine:
         ]
 
     def _forward(self, prefix: str, suffixes: list[list[int]], want_hidden: bool = False):
+        """Logits (and hidden states) at each suffix's last token, one of two ways."""
+        prefix_ids = self.tokenizer.encode(prefix, add_special_tokens=True)
+        if self.config.prefix_mode == "single":
+            return self._forward_single(prefix_ids, suffixes, want_hidden)
+        return self._forward_forked(prefix_ids, suffixes, want_hidden)
+
+    def _forward_single(self, prefix_ids: list[int], suffixes: list[list[int]], want_hidden: bool):
+        """One right-padded batch of prefix+suffix rows; no cache, no fork.
+
+        Under `compile`, the batch is padded to a shape bucket -- rows to a
+        power of two (duplicating the first row), width to `pad_to` -- so the
+        set of recorded graphs stays small. Padding rows and tokens change no
+        real row's logits: right padding is masked, and rows are independent.
+        """
+        import torch
+
+        device = self._device
+        rows = [prefix_ids + s for s in suffixes]
+        n_real = len(rows)
+        width = max(len(r) for r in rows)
+        if self.config.compile:
+            width = bucket(width, self.config.pad_to)
+            rows = rows + [rows[0]] * (pow2(n_real) - n_real)
+        pad = self.tokenizer.pad_token_id or 0
+        batch = torch.tensor([r + [pad] * (width - len(r)) for r in rows], device=device)
+        attention = torch.tensor(
+            [[1] * len(r) + [0] * (width - len(r)) for r in rows], device=device
+        )
+        with torch.no_grad(), self._lock:
+            out = self.model(
+                input_ids=batch,
+                attention_mask=attention,
+                use_cache=False,
+                output_hidden_states=want_hidden,
+            )
+        last_positions = torch.tensor([len(r) - 1 for r in rows[:n_real]], device=device)
+        logits = out.logits[:n_real]
+        hidden = out.hidden_states[-1][:n_real] if want_hidden else None
+        return prefix_ids, logits, last_positions, hidden
+
+    def _forward_forked(self, prefix_ids: list[int], suffixes: list[list[int]], want_hidden: bool):
         """Prefill the prefix once, then run all suffixes against forked caches."""
         import torch
 
-        prefix_ids = self.tokenizer.encode(prefix, add_special_tokens=True)
-        device = self.model.device
+        device = self._device
 
-        with torch.no_grad():
+        with torch.no_grad(), self._lock:
             prefilled = self.model(
                 input_ids=torch.tensor([prefix_ids], device=device), use_cache=True
             )
@@ -319,10 +445,10 @@ class DecisionEngine:
             max_length=64,
             add_special_tokens=False,
         )
-        device = self.model.device
+        device = self._device
         ids = encoded["input_ids"].to(device)
         mask = encoded["attention_mask"].to(device)
-        with torch.no_grad():
+        with torch.no_grad(), self._lock:
             states = self.model(
                 input_ids=ids, attention_mask=mask, output_hidden_states=True, use_cache=False
             ).hidden_states[-1]

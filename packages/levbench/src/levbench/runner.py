@@ -43,6 +43,7 @@ class EvalReport:
     calls: list[CallResult] = field(default_factory=list)
     per_question: dict[str, metrics.Calibration] = field(default_factory=dict)
     records: dict[str, list] = field(default_factory=dict)
+    wall_seconds: float = 0.0
 
     @property
     def total_cost(self) -> float:
@@ -118,11 +119,11 @@ def build_client(
         # which makes the server pick, so omitting it here would silently
         # benchmark whatever the default is while labelling it `resolved`.
         kwargs: dict[str, Any] = {"model": resolved}
-        if base_url:
         if timeout is not None:
             kwargs["timeout"] = timeout
         elif backend == "lev":
             kwargs["timeout"] = DEFAULT_LOCAL_TIMEOUT
+        if base_url:
             kwargs["base_url"] = base_url
             # Never forward the real Jev credential to a non-default host. The
             # SDK always sends `Authorization: Bearer <key>`, so reusing
@@ -207,12 +208,28 @@ def run_eval(
     model: str,
     items: list[Item],
     questions: dict[str, Any],
+    concurrency: int = 1,
 ) -> EvalReport:
+    """Score every item. `concurrency` > 1 sends that many requests at once.
+
+    Per-call latency is unchanged by concurrency -- each `CallResult` still
+    times its own round trip -- but wall time falls, which is what a server
+    accepting concurrent inputs is for. Results keep item order.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
     report = EvalReport(backend=backend, model=model)
     records: dict[str, list] = {name: [] for name in questions}
+    started = time.perf_counter()
 
-    for item in items:
-        result = call_once(client, item.state, questions)
+    if concurrency > 1:
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            results = list(pool.map(lambda it: call_once(client, it.state, questions), items))
+    else:
+        results = [call_once(client, item.state, questions) for item in items]
+    report.wall_seconds = time.perf_counter() - started
+
+    for item, result in zip(items, results, strict=True):
         report.calls.append(result)
         for name, answer in result.answers.items():
             truth = item.labels[name]
@@ -244,6 +261,11 @@ def _format_summary(report: EvalReport) -> list[str]:
     lines: list[str] = []
     n = len(report.calls)
     lines.append(f"=== {report.backend} / {report.model} ===")
+    if report.wall_seconds:
+        lines.append(
+            f"{'wall time':<18} {report.wall_seconds:.1f}s  "
+            f"({len(report.calls) / report.wall_seconds:.2f} items/s)"
+        )
     lines.append(f"calls              {n}")
     if n:
         lines.append(f"latency p50        {report.pct(0.5):.3f}s")

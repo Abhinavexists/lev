@@ -411,3 +411,31 @@ def test_detect_precision_reads_the_quantisation_off_the_data() -> None:
     assert confidence_id.detect_precision([0.25, 0.5, 0.75]) == pytest.approx(0.01)
     assert confidence_id.detect_precision([0.125, 0.5]) == pytest.approx(0.001)
     assert confidence_id.detect_precision([0.1234567]) == 0.0
+
+
+class TestConcurrentEval:
+    def test_parallel_requests_keep_item_order_and_report_wall_time(self):
+        import time
+        from types import SimpleNamespace
+
+        from levbench.runner import run_eval
+        from levbench.tasks import FileItem
+        from typesafe_sdk import Noul
+
+        class SlowStub:
+            def system_one(self, state, questions):
+                time.sleep(0.05)
+                return SimpleNamespace(
+                    answers={
+                        "q": SimpleNamespace(type="noul", noul=0.9 if state.endswith("1") else 0.1)
+                    },
+                    usage=SimpleNamespace(input_tokens=3, output_tokens=0),
+                    model="stub",
+                )
+
+        items = [FileItem(f"state {i % 2}", {"q": i % 2 == 1}) for i in range(8)]
+        questions = {"q": Noul(instructions="one?")}
+        report = run_eval(SlowStub(), "lev", "stub", items, questions, concurrency=4)
+        assert len(report.calls) == 8 and report.wall_seconds < 0.3
+        preds = [rec[1] for rec in report.records["q"]]
+        assert preds == [i % 2 == 1 for i in range(8)], "results must stay in item order"

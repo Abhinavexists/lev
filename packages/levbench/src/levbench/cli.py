@@ -67,14 +67,16 @@ def _task_files(path: str | None) -> list[Path | None]:
 
 def cmd_eval(args: argparse.Namespace) -> None:
     _require_key(args.backend, args.base_url)
-    client, model = runner.build_client(args.backend, args.model, args.base_url)
+    client, model = runner.build_client(args.backend, args.model, args.base_url, args.timeout)
     for task_file in _task_files(args.tasks):
         items, questions = dataset(task_file)
         if args.limit:
             items = items[: args.limit]
         if task_file is not None:
             print(f"\n=== {task_file.stem}  ({len(items)} items) ===")
-        report = runner.run_eval(client, args.backend, model, items, questions)
+        report = runner.run_eval(
+            client, args.backend, model, items, questions, concurrency=args.concurrency
+        )
         print(runner.format_report(report))
 
 
@@ -126,8 +128,6 @@ def cmd_compare(args: argparse.Namespace) -> None:
     )
 
 
-def cmd_confidence(args: argparse.Namespace) -> None:
-    """Work out which statistic the server's `confidence` field really is."""
 def cmd_snake(args: argparse.Namespace) -> None:
     """A decision model plays Snake over `/v1/systemone`; see `levbench.snake`."""
     from contextlib import nullcontext
@@ -188,6 +188,8 @@ def cmd_replay(args: argparse.Namespace) -> None:
     print(f"replayed {shown}/{len(frames)} frames")
 
 
+def cmd_confidence(args: argparse.Namespace) -> None:
+    """Work out which statistic the server's `confidence` field really is."""
     _require_key("jev", args.base_url)
     items, questions = dataset()
     if args.limit:
@@ -231,6 +233,13 @@ def main(argv: list[str] | None = None) -> None:
             "+/-16 accuracy points. Generate a real one with `lev data eval`."
         ),
     )
+    eval_parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="requests in flight at once; the lev server accepts several per container",
+    )
+    eval_parser.add_argument("--timeout", type=float, default=None, help="per-call seconds")
     _add_base_url(eval_parser)
     eval_parser.set_defaults(func=cmd_eval)
 
@@ -256,12 +265,6 @@ def main(argv: list[str] | None = None) -> None:
     _add_base_url(confidence_parser)
     confidence_parser.set_defaults(func=cmd_confidence)
 
-    args = parser.parse_args(argv)
-    args.func(args)
-
-
-if __name__ == "__main__":
-    main()
     snake_parser = sub.add_parser("snake", help="a decision model plays Snake, one call per move")
     snake_parser.add_argument(
         "--backend",
@@ -309,3 +312,9 @@ if __name__ == "__main__":
     replay_parser.add_argument("--no-alt-screen", action="store_true")
     replay_parser.set_defaults(func=cmd_replay)
 
+    args = parser.parse_args(argv)
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

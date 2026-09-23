@@ -547,6 +547,111 @@ to the 0.0529 measured on the held-out split.
 
 ---
 
+## 13. Runtime: the serving path is correct, and where the time actually goes
+
+Measured 2026-09-23 against the deployed `4b/step-18750`, with the engine
+profiled inside its container and the same requests timed from the client.
+
+### The predictions are right; the gap is generalisation
+
+The hypothesis was that an inference-side error -- a prompt or readout
+mismatch between training and serving -- was costing accuracy on top of what
+the mixture failed to teach. The test: in-distribution test-split rows, scored
+through the deployed HTTP path, against the in-container `evaluate` numbers
+(ADR-018), which go through the training collator. n=25 per source.
+
+| source | HTTP | evaluate | | source | HTTP | evaluate |
+|---|---|---|---|---|---|---|
+| banking77 (Mode B) | 0.920 | 0.870 | | imdb | 0.960 | 0.975 |
+| clinc_oos (Mode B) | 0.880 | 0.865 | | rotten_tomatoes | 1.000 | 0.915 |
+| sst5 | 0.760 | 0.545 | | yelp_review_full | 0.680 | 0.680 |
+| ag_news / emotion / dbpedia_14 | 0.92 / 1.00 / 1.00 | >= 0.865 | | | | |
+
+Every source lands at or above its `evaluate` figure, within the noise n=25
+allows. Both readouts, both modes, the calibration, the option cap and
+two-order averaging all reach the model intact over HTTP. There is no serving
+bug to find: the S1Bench numbers are what the model knows. On sources the old
+checkpoint never trained on, the same run shows the shape of that: snli 0.44,
+race 0.80, toxic_chat 1.00.
+
+### Where a call's 1.2 s goes
+
+Client side, fresh connection, from this machine:
+
+    dns 0.003   tcp connect 0.28   tls done 0.58   first byte 0.91-1.27   (health, no model)
+    real 1-Noul call: first byte 1.17-1.27
+
+A 280 ms TCP round trip means the container is a continent away; TLS is two
+more of them. With the SDK's persistent connection the benchmark still saw
+~0.9-1.2 s per call, so roughly 0.3-0.4 s of Modal ingress remains per request
+on top of the compute.
+
+Inside the container, CUDA-synchronised medians over 20 calls:
+
+    fork (prefill + cache fork + suffix forward)   159-169 ms   flat: 1 noul = 8 nouls = 60-option Mode B
+      of which cache fork (deepcopy)                  4.5 ms
+      render + tokenise                               0.2-0.9 ms
+    single batched forward over prefix+suffix       73-84 ms   also flat
+
+Flat in the number of questions is the diagnosis: the forward is launch-bound
+-- ~200 kernel launches per pass through 32 layers, twice per call -- not
+FLOP-bound. The prefill-and-fork design saves prefix FLOPs that cost nothing
+to recompute and pays for them with a second full forward. One batched
+forward halves the compute at every shape measured, so it is now the default
+(ADR-023); the fork stays available for long states with many questions.
+
+Two further measurements. `causal_conv1d` was never installed -- every
+training and serving log said so -- and the image now builds it from a CUDA
+13.0 devel base (no wheel exists for `torch 2.14.0+cu130`): fork 159 → 143 ms,
+single 73 → 65 ms, about 10% each, which confirms the launch-bound diagnosis
+from a second angle. `torch.compile(mode="reduce-overhead", dynamic=True)`
+with shape buckets was then tried on the same container: 103–137 ms against
+86–94 ms eager, a 104 s warmup, dynamo's recompile limit hit on the
+linear-attention layers, and a CUDA-graphs buffer overwrite on the Mode B
+shape. Rejected (ADR-023). decider's 8 ms comes from a static-shape engine
+built for its model; that is the remaining order of magnitude, and it is not
+a flag.
+
+### After the fixes, from the client
+
+Deployed with the single forward and the conv kernel (`prefix_mode: single`,
+`compiled: false` in `/health`), timed from the same laptop over the SDK's
+persistent connection -- the path the benchmark uses:
+
+    1 noul                  p50 464 ms   min 399 ms
+    8 nouls, shared state   p50 457 ms   min 416 ms
+    60-option Mode B        p50 489 ms   min 447 ms
+
+Against 930-1,270 ms p50 in the S1Bench runs on the old path: about 2x
+end to end, with the compute share now ~75 ms of it and the rest the route.
+The three shapes still cost the same -- eight questions remain free.
+
+The same subset through the benchmark, paws (250 items), same checkpoint:
+
+    old path, sequential          p50 928 ms   ~232 s wall
+    new path, --concurrency 1     p50 417 ms    112 s wall   2.23 items/s
+    new path, --concurrency 4     p50 604 ms     39 s wall   6.36 items/s
+
+accuracy 0.712, log-loss 0.7535, ECE 0.1787 in all three -- identical to four
+decimals, which is the point: nothing here touched a probability. Under
+concurrency the per-call latency rises because forwards are serialised on the
+one GPU; wall time falls 2.85x because everything else overlaps. The full
+1,999-item S1Bench pass now takes about five minutes instead of thirty.
+
+### Why laya and reflex look so much faster
+
+Two of the three reasons are not engineering. laya is a 421M-parameter
+*encoder* -- ten times fewer parameters than this model, one forward for every
+question, options scored at mask tokens -- and it runs in-process on the
+machine that reports the number, as does reflex (4B, 138 ms on a CPU) and
+every local target on the S1Bench board. Their latency contains no network.
+Ours is 86% network on the benchmark's path. Like for like, our in-container
+compute (73 ms single-forward, before the conv kernel) is already under
+reflex's 138 ms on the same class of model; what remains is the ingress route
+and the engineering the fast decoders did.
+
+---
+
 ## 14. The instruct run, and why its clinc_oos number is a bug and not a result
 
 `4b-instruct` (ADR-020 mixture, 18,750 steps) on the held-out split,

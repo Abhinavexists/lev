@@ -260,3 +260,15 @@ class TestWhichQuestionsGetTwoOrders:
     def test_schema_first_never_doubles_the_prefix(self, rich_tokenizer):
         q = Choice(criteria={"a": None, "b": None})
         assert self.orders(q, rich_tokenizer, layout=Layout.SCHEMA_FIRST) == [None]
+
+
+class TestShapeBuckets:
+    def test_width_rounds_up_to_the_multiple(self):
+        from lev.model import bucket
+
+        assert bucket(1, 32) == 32 and bucket(32, 32) == 32 and bucket(33, 32) == 64
+
+    def test_rows_round_up_to_a_power_of_two(self):
+        from lev.model import pow2
+
+        assert [pow2(n) for n in (1, 2, 3, 5, 8, 9)] == [1, 2, 4, 8, 8, 16]

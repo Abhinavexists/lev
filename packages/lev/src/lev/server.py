@@ -17,6 +17,7 @@ calibration profile is actually in effect.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .calibrate import CalibrationProfile
@@ -53,6 +54,8 @@ def create_app(
     calibration: str | None = None,
     model_id: str = "Qwen/Qwen3.5-4B-Base",
     noul_readout: str | None = None,
+    compile: bool = False,
+    max_label_options: int | None = None,
 ) -> Any:
     from fastapi import FastAPI, HTTPException
 
@@ -61,6 +64,7 @@ def create_app(
 
     @app.on_event("startup")
     def _load() -> None:
+        nonlocal model_id
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -128,14 +132,25 @@ def create_app(
         # A stock checkpoint pins the 0-8 rating scale at one end regardless of
         # content (ADR-007), so untrained serving reads Noul as two options.
         readout = noul_readout or ("rating" if checkpoint else "binary")
-        config = EngineConfig(model_id=model_id, noul_readout=readout)
-        state["engine"] = DecisionEngine(model, tokenizer, config, profile, mode_b_head=head)
+        config = EngineConfig(model_id=model_id, noul_readout=readout, compile=compile)
+        if max_label_options is not None:
+            # A serving-side experiment knob (ADR-025): the trained policy is the
+            # EngineConfig default, and /health reports whatever is in effect.
+            config.max_label_options = max_label_options
+        engine = DecisionEngine(model, tokenizer, config, profile, mode_b_head=head)
+        if compile:
+            # Pay compile and graph capture now, on every shape bucket the
+            # benchmark and the demo send, so no request ever does.
+            print(f"warmup: compiled forward in {engine.warmup():.0f}s", flush=True)
+        state["engine"] = engine
         state["calibrated"] = bool(profile.temperatures)
         state["checkpoint"] = str(checkpoint) if checkpoint else None
         state["mode_b"] = head is not None
         state["noul_readout"] = readout
         state["max_label_options"] = config.max_label_options
         state["order_average"] = config.order_average
+        state["prefix_mode"] = config.prefix_mode
+        state["compiled"] = config.compile
 
     @app.get("/health")
     def health() -> dict:
@@ -148,6 +163,8 @@ def create_app(
             "noul_readout": state.get("noul_readout"),
             "max_label_options": state.get("max_label_options"),
             "order_average": state.get("order_average"),
+            "prefix_mode": state.get("prefix_mode"),
+            "compiled": state.get("compiled"),
         }
 
     @app.post("/v1/systemone", response_model=SystemOneResponse)

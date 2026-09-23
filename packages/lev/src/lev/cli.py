@@ -209,7 +209,12 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
     uvicorn.run(
         create_app(
-            args.checkpoint, args.model_cache, args.calibration, args.model, args.noul_readout
+            args.checkpoint,
+            args.model_cache,
+            args.calibration,
+            args.model,
+            args.noul_readout,
+            compile=args.compile,
         ),
         host=args.host,
         port=args.port,
@@ -263,6 +268,9 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="default: rating with a checkpoint, binary without one",
     )
+    serve_parser.add_argument(
+        "--compile", action="store_true", help="torch.compile + CUDA graphs; warms up at startup"
+    )
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8000)
     serve_parser.set_defaults(func=cmd_serve)
@@ -309,14 +317,6 @@ def main(argv: list[str] | None = None) -> None:
     )
     s1_export.set_defaults(func=cmd_s1bench_export)
 
-    train_parser = sub.add_parser("train", help="run the LoRA fine-tune")
-    train_parser.add_argument("--preset", default="4b", choices=_preset_names())
-    train_parser.add_argument("--data", default="data/mixture")
-    train_parser.add_argument("--output-dir", default=None)
-    train_parser.add_argument("--model-cache", default=None)
-    train_parser.add_argument(
-        "--max-steps", type=int, default=None, help="stop early; for smoke runs"
-    )
     release_parser = sub.add_parser("release", help="package a checkpoint; publish it to the Hub")
     release_sub = release_parser.add_subparsers(dest="release_command", required=True)
     build_release_parser = release_sub.add_parser(
@@ -336,6 +336,14 @@ def main(argv: list[str] | None = None) -> None:
     publish_parser.add_argument("--private", action="store_true")
     publish_parser.set_defaults(func=cmd_release_publish)
 
+    train_parser = sub.add_parser("train", help="run the LoRA fine-tune")
+    train_parser.add_argument("--preset", default="4b", choices=_preset_names())
+    train_parser.add_argument("--data", default="data/mixture")
+    train_parser.add_argument("--output-dir", default=None)
+    train_parser.add_argument("--model-cache", default=None)
+    train_parser.add_argument(
+        "--max-steps", type=int, default=None, help="stop early; for smoke runs"
+    )
     train_parser.add_argument(
         "--resume", default=None, help="a step-N directory; default: newest in --output-dir"
     )

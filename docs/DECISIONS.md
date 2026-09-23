@@ -728,7 +728,9 @@ held-out *task family* rather than held-out rows.
 from reflex's 0.719, which would put the gap in our prompts or engine rather
 than in training; or if massive-en-US under the cap -- the first real Mode B
 transfer number -- comes out near chance, which would mean the head memorised
-its two training taxonomies.
+its two training taxonomies. *Reopened on the second point by ADR-025: the
+head scored 0.166 then 0.231 on massive, and the serving cap now follows the
+tokenizer, not the training cap.*
 
 ---
 
@@ -805,6 +807,66 @@ or the first item of an eval must not fail on a container scaling from zero.
 
 ---
 
+## ADR-023 — One batched forward, not prefill-and-fork
+
+**Accepted.** Reverses the default of ADR-005's serving path on measurement.
+
+The engine was built around prefill-once-fork-per-question: compute the state
+prefix once, fork the hybrid cache, run every question's suffix against it.
+The argument was FLOPs -- N questions cost one prefix instead of N. Profiled
+in the container on the 4B checkpoint (`modal run modal/app.py::profile_engine`),
+CUDA-synchronised, medians of 20:
+
+    fork    1 noul 167 ms   3 mixed 169 ms   8 nouls 159 ms   60-option Mode B 159 ms
+    single  1 noul  73 ms   3 mixed  81 ms   8 nouls  84 ms   60-option Mode B  78 ms
+
+Both are flat in the number of questions, which says the forward is bound by
+kernel launches, not arithmetic, at these sizes. The fork's saved prefix
+FLOPs are therefore worth nothing, and its second forward costs a full second
+pass. A single right-padded batch of prefix+suffix rows halves the latency at
+every shape measured, and the two strategies agree on every probability
+(checked in the same profile).
+
+`EngineConfig.prefix_mode` defaults to `"single"`; `"fork"` remains for the
+regime the original design assumed -- long states with many questions, where
+repeating the prefix per row would dominate. That crossover has not been
+measured and should be before anyone relies on it. The two paths agree to a
+maximum probability difference of 0.0075 across every answer profiled, which
+is the bf16 kernel-path noise ADR-019 already documents, not a semantic gap.
+
+With `causal_conv1d` present (the image now builds it against
+`torch 2.14.0+cu130`): fork 140-156 ms, single 65-75 ms -- about 10% each.
+That the kernel bought so little is the diagnosis confirmed from a second
+angle: the time is in launching ~200 kernels twice, not in any one of them.
+What removes launches is CUDA-graph replay, so the engine gains
+`EngineConfig.compile` (`torch.compile(mode="reduce-overhead", dynamic=True)`)
+with inputs padded to shape buckets -- width to 32 tokens, rows to a power of
+two -- so the set of recorded graphs stays small, and a `warmup()` the server
+runs at startup so no request pays a capture. Padding changes no real row's
+logits: right padding is masked and rows are independent. The GPU forward is
+taken under a lock, because graph replay is not thread-safe and the server now
+accepts concurrent requests; parsing, tokenising and the network overlap
+around it.
+
+**Compile: measured, rejected.** On the same container, eager single-forward
+ran 86–94 ms and the compiled path 103–137 ms, after a 104 s warmup; dynamo
+hit its recompile limit (8) on the hybrid's linear-attention layers, so much
+of the forward stayed eager with extra guard overhead, and the Mode B shape
+then failed with a CUDA-graphs output-buffer overwrite when hidden states from
+one replay were read after the next. The flag stays (`LEV_SERVE_COMPILE=1`)
+so the measurement can be repeated on a future transformers/FLA release, and
+defaults off. Getting decider's 8 ms would mean a static-shape engine built
+for this model, not `torch.compile` over the stock one.
+
+Also decided here, from the same session's measurements (FINDINGS.md §13):
+the image builds `causal_conv1d` from a CUDA devel base, since no wheel
+exists for `torch 2.14.0+cu130` and every log said the reference path was in
+use; and the serving path was verified correct end to end -- in-distribution
+accuracy over HTTP matches the collator-path `evaluate` on every source -- so
+no inference-side error is hiding behind the S1Bench gap.
+
+---
+
 ## ADR-024 — The mixture reader merged shuffled questions, and the instruct run trained on it
 
 **Accepted.** A bug report as much as a decision; recorded because it decides
@@ -846,6 +908,45 @@ rebuilding. The run was repeated with the fixed reader (`FRESH=1`, which now
 also moves the superseded run aside): Mode B loss 0.531 over the last 300
 steps against ~2.3, held-out weighted 0.836 with ECE 0.0459, clinc_oos 0.976.
 FINDINGS.md §14.
+
+---
+
+## ADR-025 — Serving routes Mode A up to the tokenizer limit; training keeps its cap
+
+**Accepted.** Partly reverses ADR-020's "same cap in training and serving".
+
+ADR-020 capped Mode A at 26 options on both sides because the Base model,
+sent 60 lettered options it had never trained on, scored 0.291 with a
+letter-position bias that flipped 85% of answers on reordering. That was the
+right reading of that model. The instruct backbone is a different model: frozen,
+it scores 0.83 on the same subset in Mode A at 60 options.
+
+Measured on the retrained instruct LoRA, same deployment, same 350 items,
+only the serving cap changed:
+
+    cap 26  → Mode B head      massive-en-US 0.231
+    cap 76  → Mode A, 60 codes massive-en-US 0.746   (two-order averaged)
+
+The head is excellent on the taxonomies it trained on (clinc_oos 0.976,
+banking77 0.922) and weak on one it has not seen; the backbone's zero-shot
+label-token reading survives the LoRA well enough to be worth 51 points on
+an unseen one. So serving now routes Mode A whenever the tokenizer expresses
+the codes (`EngineConfig.max_label_options = None`; 76 for this tokenizer),
+and Mode B above that. Training keeps `LABEL_OPTION_CAP = 26`: it decides how
+much data the head sees, not what the server does, and lowering Mode B's share
+would cost the in-distribution results above. `LEV_SERVE_MAX_LABEL_OPTIONS`
+reproduces any other policy; `/health` reports the one in effect.
+
+Two costs, stated. The LoRA gave back ~8 points against the frozen backbone
+in this regime (0.746 vs 0.83) -- Mode A was trained on at most 14 options,
+so the regime is under-trained rather than untrained, and option subsampling
+into the 15-76 range for the Mode B sources would close it. And calibration
+there is unfitted: `choice:A`'s temperature comes from ≤26-option questions,
+and at 60 options the model is under-confident (ECE 0.20, accuracy 0.953 on
+the 60% of items it puts above 0.5). A temperature bucket keyed on option
+count needs held-out rows in that range, which the mixture does not yet have.
+
+Macro on the six S1Bench subsets with this policy: **0.697**, from 0.612.
 
 ---
 

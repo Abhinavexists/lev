@@ -3,7 +3,14 @@
     modal setup                                   # once
     modal run   modal/app.py::smoke               # ~5 min, proves the path works
     modal run   modal/app.py::train --preset 4b   # the real run, ~2h
-    modal serve modal/app.py                      # /v1/systemone on an H100
+    modal serve modal/app.py                      # /v1/systemone on an H100, dev URL
+    modal deploy modal/app.py                     # ...with a stable URL
+
+`modal serve` and `modal run` are both *ephemeral* apps, and every ephemeral
+app of this file registers the `serve` web function under the same `-dev`
+label. Running any function here -- an export, a diagnostic -- while a dev
+server is up steals that label, and the server's URL returns 404 once the run
+exits. Serve with `modal deploy` for a URL that other runs cannot take.
 
 Design notes worth knowing before you change anything here:
 
@@ -45,7 +52,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # reproducible run into a lottery. `transformers` must be 5.x -- the prefix-cache
 # fork calls `reorder_cache` on a hybrid cache, which 4.x cannot do.
 image = (
-    modal.Image.debian_slim(python_version="3.12")
+    # A CUDA *devel* base, not `debian_slim`: it carries `nvcc`, which is what
+    # `causal-conv1d` needs to build. Without that kernel 24 of the 32 layers
+    # run their depthwise conv on a reference PyTorch path -- every training and
+    # serving log said so -- and the served forward measured ~160 ms flat for a
+    # 4B model on an H100, launch-bound rather than FLOP-bound. The CUDA major
+    # must match torch's build (2.14.0+cu130).
+    modal.Image.from_registry("nvidia/cuda:13.0.3-devel-ubuntu24.04", add_python="3.12")
     .pip_install(
         "torch==2.14.0",
         "transformers==5.17.0",
@@ -57,20 +70,18 @@ image = (
         "fastapi==0.141.1",
         "huggingface-hub==1.32.0",
     )
-    # Speed, not correctness -- but 24 of the 32 layers are linear-attention, so
-    # without this three quarters of the model runs on a reference PyTorch path
-    # (ADR-017). Pure Python and Triton, so no compiler needed.
-    #
-    # `causal-conv1d` is deliberately absent: it is a CUDA source build needing
-    # `nvcc`, which `debian_slim` has no compiler for, and it accelerates only
-    # the short depthwise conv. Unpinned because it tracks torch closely; if the
-    # build breaks, delete this layer -- the run gets slow, not wrong.
-    .pip_install("flash-linear-attention")
-    # The package last, so editing it does not invalidate the expensive
-    # dependency layer above. `add_local_dir`, not `add_local_python_source`:
-    # the latter resolves through the local interpreter's import system and so
-    # fails unless `lev` is installed in whichever Python runs the `modal` CLI.
-    # `/root` is on `sys.path` in a Modal container, so `import lev` resolves.
+    # Speed, not correctness: the linear-attention kernels (pure Triton) and the
+    # depthwise conv kernel (CUDA, built here against the torch above). If the
+    # conv build breaks on a pin change, delete that line -- the run gets slow,
+    # not wrong, and says so in its log.
+    .pip_install("flash-linear-attention", "ninja", "packaging")
+    # The devel image ships nvcc but no host C++ compiler, and torch's
+    # extension builder refuses to proceed without one ("clang++ 0.0.0").
+    # Arch 9.0 only: this image runs on H100s, and compiling every arch takes
+    # several times longer for nothing.
+    .apt_install("build-essential")
+    .env({"CC": "gcc", "CXX": "g++", "TORCH_CUDA_ARCH_LIST": "9.0", "MAX_JOBS": "8"})
+    .pip_install("causal-conv1d", extra_options="--no-build-isolation")
     .add_local_dir(
         REPO_ROOT / "packages" / "lev" / "src" / "lev",
         remote_path="/root/lev",
@@ -118,13 +129,43 @@ def _hf_secrets() -> list:
     return [modal.Secret.from_dict({"HF_TOKEN": token})] if token else []
 
 
+# Deploy-time knobs, read where `modal deploy` runs. Decorator arguments are
+# fixed at import, so these cannot travel as Secrets the way the preset does.
+#   LEV_SERVE_CONCURRENCY  requests one container handles at once (default 4).
+#                          The engine serialises GPU forwards; everything else
+#                          -- parsing, tokenising, the network -- overlaps.
+#   LEV_SERVE_WARM         containers kept running (default 0). One removes the
+#                          20-55 s cold start and the compile warmup at the cost
+#                          of an idle GPU.
+#   LEV_SERVE_REGION       a Modal region near the client; the measured 280 ms
+#                          TCP round trip is a continent, not a server.
+#   LEV_SERVE_SCALEDOWN    idle seconds before a container stops (default 300).
+SERVE_CONCURRENCY = int(os.environ.get("LEV_SERVE_CONCURRENCY", "4"))
+SERVE_WARM = int(os.environ.get("LEV_SERVE_WARM", "0"))
+SERVE_REGION = os.environ.get("LEV_SERVE_REGION")
+SERVE_SCALEDOWN = int(os.environ.get("LEV_SERVE_SCALEDOWN", "300"))
+
+
 def _serve_overrides() -> list:
-    """`LEV_SERVE_MODEL=Qwen/Qwen3.5-4B modal serve modal/app.py` serves that
-    checkpoint frozen -- no adapter, binary Noul -- which is the zero-shot
-    baseline every trained run has to beat (reflex-4b: 0.719 on S1Bench).
-    Local env does not reach the container, so it travels as a Secret."""
-    model = os.environ.get("LEV_SERVE_MODEL")
-    return [modal.Secret.from_dict({"LEV_SERVE_MODEL": model})] if model else []
+    """Which checkpoint the server loads, chosen from the local environment.
+
+    `LEV_SERVE_PRESET=4b-instruct make deploy` serves that preset's newest
+    checkpoint. `LEV_SERVE_MODEL=Qwen/Qwen3.5-4B` serves that model frozen --
+    no adapter, binary Noul -- the zero-shot baseline every trained run has to
+    beat (reflex-4b: 0.719 on S1Bench). Local env does not reach the
+    container, so whichever are set travel as a Secret.
+    """
+    overrides = {
+        key: value
+        for key in (
+            "LEV_SERVE_PRESET",
+            "LEV_SERVE_MODEL",
+            "LEV_SERVE_COMPILE",
+            "LEV_SERVE_MAX_LABEL_OPTIONS",
+        )
+        if (value := os.environ.get(key))
+    }
+    return [modal.Secret.from_dict(overrides)] if overrides else []
 
 
 SECRETS = _hf_secrets() + _serve_overrides()
@@ -313,7 +354,15 @@ def evaluate(
     return {"uncalibrated": plain.summary(), "calibrated": tuned.summary()}
 
 
-@app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, scaledown_window=300)
+@app.function(
+    gpu="H100",
+    volumes=VOLUMES,
+    secrets=SECRETS,
+    scaledown_window=SERVE_SCALEDOWN,
+    min_containers=SERVE_WARM,
+    **({"region": SERVE_REGION} if SERVE_REGION else {}),
+)
+@modal.concurrent(max_inputs=SERVE_CONCURRENCY)
 @modal.asgi_app()
 def serve():
     """Serve `/v1/systemone`, wire-compatible with the TypeSafe API.
@@ -333,20 +382,35 @@ def serve():
     from lev.server import create_app
     from lev.train.config import PRESETS
 
-    # A module constant, not an argument: `@modal.asgi_app` functions must be
-    # nullary. Change SERVE_PRESET to serve a different one.
-    config = PRESETS[SERVE_PRESET]
-    output = _Path(f"{CKPT_DIR}/{SERVE_PRESET}")
+    # Not an argument: `@modal.asgi_app` functions must be nullary. The preset
+    # comes from LEV_SERVE_PRESET (see `_serve_overrides`), else the default.
+    preset = os.environ.get("LEV_SERVE_PRESET", SERVE_PRESET)
+    if preset not in PRESETS:
+        raise ValueError(f"LEV_SERVE_PRESET={preset!r} is not a preset; have {sorted(PRESETS)}")
+    config = PRESETS[preset]
+    output = _Path(f"{CKPT_DIR}/{preset}")
     trained = output.is_dir() and (
         any(output.glob("step-*")) or (output / "adapter_model.safetensors").is_file()
     )
 
     # A frozen model is a different backbone; the adapter trained on -Base
     # cannot be applied to it, so the checkpoint is deliberately not loaded.
+    # Off unless asked: measured slower than eager on this model (ADR-023).
+    compile = os.environ.get("LEV_SERVE_COMPILE", "0") in ("1", "true", "yes")
+    # Default None: Mode A up to the tokenizer limit (ADR-025). Set to force a
+    # lower cap, e.g. 26 to reproduce the ADR-020 policy.
+    cap_env = os.environ.get("LEV_SERVE_MAX_LABEL_OPTIONS")
+    max_label_options = int(cap_env) if cap_env else None
     frozen = os.environ.get("LEV_SERVE_MODEL")
     if frozen:
         print(f"serving {frozen} frozen: no adapter, binary Noul, raw softmax")
-        return create_app(checkpoint_dir=None, model_cache=MODELS_DIR, model_id=frozen)
+        return create_app(
+            checkpoint_dir=None,
+            model_cache=MODELS_DIR,
+            model_id=frozen,
+            compile=compile,
+            max_label_options=max_label_options,
+        )
 
     if not trained:
         print(f"WARNING: nothing trained at {output}; serving the base backbone uncalibrated")
@@ -355,6 +419,8 @@ def serve():
         checkpoint_dir=str(output) if trained else None,
         model_cache=MODELS_DIR,
         model_id=config.model_id,
+        compile=compile,
+        max_label_options=max_label_options,
     )
 
 
@@ -363,6 +429,32 @@ def main(preset: str = "4b", dry_run: bool = True):
     """Default entrypoint: print the budget without spending it."""
     result = train.remote(preset=preset, dry_run=dry_run)
     print(result)
+
+
+RELEASES_DIR = f"{CKPT_DIR}/releases"
+
+
+@app.function(volumes={CKPT_DIR: checkpoints}, secrets=SECRETS, timeout=30 * 60)
+def export_checkpoint(preset: str = "4b", name: str | None = None) -> dict:
+    """Package the newest checkpoint of a preset into `/checkpoints/releases/<name>`.
+
+    No GPU: this copies files. The result is what `make weights` pulls and
+    `lev release publish` uploads -- adapter, head, tokenizer, calibration and
+    a manifest naming the base model and serving policy.
+    """
+    from lev.release import build_release
+
+    manifest = build_release(
+        f"{CKPT_DIR}/{preset}", f"{RELEASES_DIR}/{name or preset}", preset=preset, name=name
+    )
+    checkpoints.commit()
+    target = name or preset
+    print(
+        f"release {manifest['name']} -> {RELEASES_DIR}/{target}  ({len(manifest['files'])} files)"
+    )
+    print(f"  pull it:    make weights RELEASE={target}")
+    print(f"  publish it: make publish RELEASE={target} REPO=<org/name>")
+    return manifest
 
 
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=30 * 60)
@@ -431,32 +523,6 @@ def diagnose_candidates(model_id: str = "Qwen/Qwen3.5-4B-Base") -> dict:
 
     def reprs(batch, side="right"):
         tok.padding_side = side
-RELEASES_DIR = f"{CKPT_DIR}/releases"
-
-
-@app.function(volumes={CKPT_DIR: checkpoints}, secrets=SECRETS, timeout=30 * 60)
-def export_checkpoint(preset: str = "4b", name: str | None = None) -> dict:
-    """Package the newest checkpoint of a preset into `/checkpoints/releases/<name>`.
-
-    No GPU: this copies files. The result is what `make weights` pulls and
-    `lev release publish` uploads -- adapter, head, tokenizer, calibration and
-    a manifest naming the base model and serving policy.
-    """
-    from lev.release import build_release
-
-    manifest = build_release(
-        f"{CKPT_DIR}/{preset}", f"{RELEASES_DIR}/{name or preset}", preset=preset, name=name
-    )
-    checkpoints.commit()
-    target = name or preset
-    print(
-        f"release {manifest['name']} -> {RELEASES_DIR}/{target}  ({len(manifest['files'])} files)"
-    )
-    print(f"  pull it:    make weights RELEASE={target}")
-    print(f"  publish it: make publish RELEASE={target} REPO=<org/name>")
-    return manifest
-
-
         enc = tok(batch, return_tensors="pt", padding=True, add_special_tokens=False).to("cuda")
         with torch.no_grad():
             hs = model(**enc, output_hidden_states=True, use_cache=False).hidden_states[-1]
@@ -494,3 +560,200 @@ def export_checkpoint(preset: str = "4b", name: str | None = None) -> dict:
     for key, value in report.items():
         print(f"{key:<32} {value}")
     return report
+
+
+@app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=30 * 60)
+def profile_engine(preset: str = "4b", rounds: int = 20) -> dict:
+    """Where a `/v1/systemone` call spends its time inside the container.
+
+    Loads the served checkpoint exactly as `serve` does and times each stage of
+    the engine with CUDA synchronised: tokenising, the prefix prefill, the cache
+    fork, the suffix forward, the readout. Medians over `rounds` after warmup,
+    for the request shapes the benchmark and the demo actually send. Network
+    is excluded by construction; subtract these from a client-side latency to
+    get it.
+    """
+    import statistics
+    import time
+    from pathlib import Path as _Path
+
+    import lev.model as engine_module
+    import torch
+    from lev.calibrate import CalibrationProfile
+    from lev.model import DecisionEngine, EngineConfig
+    from lev.server import _load_head
+    from lev.train.checkpoints import resolve_checkpoint
+    from lev.train.config import PRESETS
+    from lev.types import Choice, Noul, Score
+    from peft import PeftModel
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    config = PRESETS[preset]
+    checkpoint = resolve_checkpoint(f"{CKPT_DIR}/{preset}")
+    tokenizer = AutoTokenizer.from_pretrained(str(checkpoint))
+    model = AutoModelForCausalLM.from_pretrained(
+        config.model_id, dtype=torch.bfloat16, cache_dir=MODELS_DIR
+    ).cuda()
+    model = PeftModel.from_pretrained(model, str(checkpoint)).eval()
+    head = _load_head(checkpoint, model)
+    profile = CalibrationProfile.load(_Path(checkpoint).parent / "calibration.json")
+    engine = DecisionEngine(model, tokenizer, EngineConfig(model_id=config.model_id), profile, head)
+
+    kernels = {}
+    for name in ("fla", "causal_conv1d"):
+        try:
+            __import__(name)
+            kernels[name] = "installed"
+        except ImportError:
+            kernels[name] = "MISSING (reference PyTorch path)"
+
+    # Instrument the engine's stages.
+    timings: dict[str, list[float]] = {}
+
+    def timed(name, fn):
+        def wrapper(*a, **k):
+            torch.cuda.synchronize()
+            t = time.perf_counter()
+            out = fn(*a, **k)
+            torch.cuda.synchronize()
+            timings.setdefault(name, []).append((time.perf_counter() - t) * 1000)
+            return out
+
+        return wrapper
+
+    engine._render = timed("render+tokenise", engine._render)
+    engine._forward = timed("prefill+fork+suffix forward", engine._forward)
+    engine_module._fork = timed("  of which: cache fork (deepcopy)", engine_module._fork)
+    engine._candidate_reprs = timed("mode B candidate encode", engine._candidate_reprs)
+
+    state = (
+        "Customer writes: I was charged twice for my order #48213 last Tuesday, the second "
+        "charge has not been refunded, and I need this fixed before my rent is due on Friday. "
+        "I have already called once and was told to wait 5 days."
+    )
+    shapes = {
+        "1 noul": {"urgent": Noul(instructions="Is the customer blocked right now?")},
+        "3 mixed (choice4, score3, noul)": {
+            "dept": Choice(
+                instructions="Which team?",
+                criteria={"billing": None, "technical": None, "sales": None, "account": None},
+            ),
+            "frustration": Score(
+                instructions="How frustrated?", criteria=["calm", "annoyed", "angry"]
+            ),
+            "urgent": Noul(instructions="Is the customer blocked right now?"),
+        },
+        "8 nouls": {
+            f"q{i}": Noul(instructions=f"Question {i} about the ticket?") for i in range(8)
+        },
+        "60-option choice (Mode B)": {
+            "intent": Choice(
+                instructions="What is the user's intent?",
+                criteria={f"intent number {i}": None for i in range(60)},
+            )
+        },
+    }
+
+    report: dict = {"gpu": torch.cuda.get_device_name(0), "kernels": kernels, "shapes": {}}
+    # The two strategies must agree before the faster one is trusted.
+    answers = {}
+    for prefix_mode in ("fork", "single"):
+        engine.config.prefix_mode = prefix_mode
+        answers[prefix_mode] = {
+            label: engine.system_one(state, q).answers for label, q in shapes.items()
+        }
+    worst = 0.0
+    for label in shapes:
+        for name, a in answers["fork"][label].items():
+            b = answers["single"][label][name]
+            pa = a.probabilities or {1: a.noul}
+            pb = b.probabilities or {1: b.noul}
+            worst = max(worst, *(abs(pa[k] - pb[k]) for k in pa))
+    report["fork_vs_single_max_prob_diff"] = round(worst, 5)
+    print(f"fork vs single: max |dp| over all answers = {worst:.5f}", flush=True)
+    # Both prefix strategies, because which is faster depends on whether the
+    # forward is FLOP-bound (fork wins) or launch-bound (single wins); then the
+    # compiled single path, with its warmup cost reported separately.
+    variants = [("fork", False), ("single", False), ("single", True)]
+    for prefix_mode, compiled in variants:
+        if compiled:
+            compiled_engine = DecisionEngine(
+                model,
+                tokenizer,
+                EngineConfig(model_id=config.model_id, prefix_mode="single", compile=True),
+                profile,
+                head,
+            )
+            warm = compiled_engine.warmup()
+            print(
+                f"compile warmup {warm:.1f}s  (compiled={compiled_engine.config.compile})",
+                flush=True,
+            )
+            report["compile_warmup_s"] = round(warm, 1)
+            if not compiled_engine.config.compile:
+                report["compile"] = "failed; see warning above"
+                break
+            active = compiled_engine
+            active._render = timed("render+tokenise", active._render)
+            active._forward = timed("prefill+fork+suffix forward", active._forward)
+            reference = engine.system_one(state, shapes["3 mixed (choice4, score3, noul)"]).answers
+            got = active.system_one(state, shapes["3 mixed (choice4, score3, noul)"]).answers
+            drift = max(
+                abs(
+                    (a.probabilities or {1: a.noul})[k]
+                    - (got[n].probabilities or {1: got[n].noul})[k]
+                )
+                for n, a in reference.items()
+                for k in (a.probabilities or {1: a.noul})
+            )
+            report["compiled_vs_eager_max_prob_diff"] = round(drift, 5)
+            print(f"compiled vs eager: max |dp| = {drift:.5f}", flush=True)
+        else:
+            active = engine
+            active.config.prefix_mode = prefix_mode
+        tag = f"{prefix_mode}{'+compile' if compiled else ''}"
+        for label, questions in shapes.items():
+            for _ in range(5):
+                active.system_one(state, questions)
+            timings.clear()
+            totals = []
+            for _ in range(rounds):
+                torch.cuda.synchronize()
+                t = time.perf_counter()
+                active.system_one(state, questions)
+                torch.cuda.synchronize()
+                totals.append((time.perf_counter() - t) * 1000)
+            stages = {k: round(statistics.median(v), 2) for k, v in timings.items()}
+            key = f"{tag}: {label}"
+            report["shapes"][key] = {
+                "total_ms_median": round(statistics.median(totals), 2),
+                **stages,
+            }
+            detail = "  ".join(f"{k}={v}" for k, v in stages.items())
+            print(f"{key:<42} total {statistics.median(totals):7.2f} ms  {detail}", flush=True)
+    print("kernels:", kernels)
+    return report
+
+
+@app.function(secrets=SECRETS, timeout=10 * 60)
+def env_info() -> dict:
+    """What the image actually runs: torch, its CUDA build, and which kernels import."""
+    import platform
+
+    import torch
+
+    # Plain strings: `torch.__version__` is a TorchVersion, which the local
+    # `modal run` process cannot unpickle without torch installed.
+    info = {
+        "python": platform.python_version(),
+        "torch": str(torch.__version__),
+        "cuda": str(torch.version.cuda),
+    }
+    for name in ("fla", "causal_conv1d", "triton"):
+        try:
+            module = __import__(name)
+            info[name] = str(getattr(module, "__version__", "installed"))
+        except ImportError:
+            info[name] = "missing"
+    print(info)
+    return info

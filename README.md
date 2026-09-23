@@ -200,6 +200,31 @@ JSONL that `levbench replay` plays back. In the compact prompt the state text
 *states* the Noul answers, so the running Noul score is the cheapest test there
 is of whether a model reads its question.
 
+## Speed
+
+Measured inside the container on an H100 (`modal run modal/app.py::profile_engine`):
+the original prefill-and-fork path took ~160 ms per call regardless of how
+many questions were asked, because at these sizes the forward is bound by
+kernel launches, not arithmetic. The engine now runs one batched forward
+(65–95 ms depending on the host) and the image builds the `causal_conv1d`
+kernel (another ~10%). `torch.compile` was tried and measured slower on this
+hybrid model, so it is off. What you see from a laptop is mostly the route to
+the container: a 280 ms round trip, TLS on top, then Modal's ingress.
+
+```bash
+LEV_SERVE_COMPILE=1 make deploy PRESET=4b          # torch.compile path: measured slower here, off by default
+LEV_SERVE_CONCURRENCY=8 make deploy                # requests in flight per container (default 4)
+LEV_SERVE_WARM=1 make deploy                       # keep one container up: no cold start, idle cost
+LEV_SERVE_REGION=<modal region> make deploy        # put the container near the client
+uv run levbench eval --backend lev --tasks data/s1bench --base-url $URL --concurrency 4
+```
+
+Measured on paws (250 items, same checkpoint, identical accuracy and ECE to
+four decimals): the old path took ~232 s; the new one 112 s sequentially and
+39 s at `--concurrency 4`. Per-call latency from a laptop halved (p50 928 →
+417 ms); the full 1,999-item S1Bench pass takes about five minutes. ADR-023
+and FINDINGS §13 have the breakdown.
+
 ## Weights
 
 A release is one flat directory -- adapter, Mode B head, tokenizer, fitted
