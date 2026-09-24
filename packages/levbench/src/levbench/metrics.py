@@ -3,12 +3,14 @@
 Every answer type is first flattened to a distribution over discrete labels, so
 one set of metrics covers Noul, Choice and Score.
 
-Note the asymmetry this module has to paper over: `ChoiceAnswer` and
-`ScoreAnswer` carry a `probabilities` map and a vendor-computed `confidence`,
-but `NoulAnswer` is a bare float. For a Noul we synthesise the two-way
-distribution {True: p, False: 1-p} and compute confidence ourselves. That
-synthesised distribution is our inference, not a model output -- see FINDINGS.md
-section 2.
+Confidence here is always the top probability of that distribution. Servers
+also report a `confidence` field, but each defines it differently -- Jev's is
+chance-corrected max probability, lev's is Gini concentration -- so calibration
+binned on it would compare different statistics across backends.
+
+`NoulAnswer` is a bare float, so a Noul is flattened to the two-way distribution
+{True: p, False: 1-p}. That distribution is our inference, not a model output --
+see FINDINGS.md section 2.
 """
 
 from __future__ import annotations
@@ -49,17 +51,12 @@ def predicted_label(answer: Any) -> Any:
     raise ValueError(f"Unknown answer type {kind!r}")
 
 
-def confidence(answer: Any) -> float:
-    """Vendor confidence where it exists, else the top probability.
+def top_probability(answer: Any) -> float:
+    """The probability of the most likely label: the confidence ECE bins on.
 
-    Noul answers have no `confidence` field, so a Noul's certainty is its
-    distance from 0.5 rescaled to [0.5, 1] -- i.e. max(p, 1-p).
+    For a Noul that is max(p, 1-p).
     """
-    reported = getattr(answer, "confidence", None)
-    if reported is not None:
-        return float(reported)
-    dist = to_distribution(answer)
-    return max(dist.values())
+    return max(to_distribution(answer).values())
 
 
 def log_loss(dist: dict[Any, float], truth: Any) -> float:

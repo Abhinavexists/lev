@@ -56,7 +56,7 @@ def test_every_primitive_flattens_to_a_distribution() -> None:
     assert not hasattr(noul, "confidence") or noul.confidence is None
     dist = metrics.to_distribution(noul)
     assert abs(sum(dist.values()) - 1.0) < 1e-9
-    assert metrics.confidence(noul) >= 0.5, "synthesised Noul confidence must be >= 0.5"
+    assert metrics.top_probability(noul) == max(dist.values())
 
     choice = result.answers["department"]
     assert metrics.predicted_label(choice) == choice.choice
@@ -67,6 +67,36 @@ def test_every_primitive_flattens_to_a_distribution() -> None:
     expected = sum(level * p for level, p in by_level.items())
     assert abs(score.score - expected) < 1e-2, "score must equal the probability-weighted mean"
     print("answer flattening OK (all three primitives)")
+
+
+def test_ece_bins_on_the_top_probability_not_the_vendor_confidence_field() -> None:
+    """Backends define `confidence` differently -- Gini concentration for lev,
+    chance-corrected max probability for Jev -- so binning on that field makes
+    two servers' ECE incomparable. ECE must bin on the answer's own top
+    probability, whatever the server reports alongside it."""
+    from types import SimpleNamespace
+
+    from levbench.runner import run_eval
+    from levbench.tasks import FileItem
+    from typesafe_sdk import Choice
+
+    class Server:
+        def system_one(self, state, questions):
+            # 90% on the right answer, but a vendor confidence of 0.2.
+            answer = SimpleNamespace(
+                type="choice", choice="a", probabilities={"a": 0.9, "b": 0.1}, confidence=0.2
+            )
+            return SimpleNamespace(
+                answers={"q": answer},
+                usage=SimpleNamespace(input_tokens=1, output_tokens=0),
+                model="stub",
+            )
+
+    items = [FileItem(f"s{i}", {"q": "a" if i < 9 else "b"}) for i in range(10)]
+    questions = {"q": Choice(instructions="?", criteria={"a": None, "b": None})}
+    report = run_eval(Server(), "lev", "stub", items, questions)
+    # Every answer is 0.9 confident and 9 of 10 are right: perfectly calibrated.
+    assert report.per_question["q"].ece == pytest.approx(0.0, abs=1e-9)
 
 
 def test_eval_runs_end_to_end_over_the_built_in_fixture() -> None:
@@ -439,3 +469,36 @@ class TestConcurrentEval:
         assert len(report.calls) == 8 and report.wall_seconds < 0.3
         preds = [rec[1] for rec in report.records["q"]]
         assert preds == [i % 2 == 1 for i in range(8)], "results must stay in item order"
+
+
+class TestCostAccounting:
+    def test_cost_is_per_million_tokens_at_list_price(self) -> None:
+        from levbench.pricing import cost_usd
+
+        assert cost_usd("jev-latest", 1_000_000, 0) == pytest.approx(0.042)
+        assert cost_usd("claude-opus-5", 1_000_000, 1_000_000) == pytest.approx(30.0)
+        assert cost_usd("Qwen/Qwen3.5-4B", 1_000_000, 1_000_000) == 0.0, "self-hosted is unmetered"
+
+    def test_billed_totals_win_over_base_counts(self) -> None:
+        """The adapter's `*_total` fields include retried attempts -- what is billed."""
+        from types import SimpleNamespace
+
+        usage = SimpleNamespace(
+            input_tokens=10, input_tokens_total=25, output_tokens=2, output_tokens_total=4
+        )
+        assert runner._usage_ints(usage)[:2] == (25, 4)
+
+    def test_missing_token_counts_raise_rather_than_count_as_free(self) -> None:
+        from types import SimpleNamespace
+
+        with pytest.raises(ValueError, match="refusing to assume 0 tokens"):
+            runner._usage_ints(SimpleNamespace(input_tokens=None, output_tokens=None))
+
+    def test_a_substituted_model_is_flagged_in_the_report(self) -> None:
+        """Pricing uses the requested model; if the server answered with another,
+        the report has to say so."""
+        report = runner.EvalReport(backend="jev", model="jev-latest")
+        report.calls.append(runner.CallResult({}, 0.3, "jev-1.13.0", 10, 1))
+        assert "requested 'jev-latest' but server served ['jev-1.13.0']" in runner.format_report(
+            report
+        )

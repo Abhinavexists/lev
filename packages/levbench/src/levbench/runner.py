@@ -238,7 +238,7 @@ def run_eval(
                     metrics.to_distribution(answer),
                     metrics.predicted_label(answer),
                     truth,
-                    metrics.confidence(answer),
+                    metrics.top_probability(answer),
                 )
             )
 
@@ -315,7 +315,7 @@ def _format_per_question(report: EvalReport) -> list[str]:
             )
         occupied = [b for b in calibration.bins if b.n]
         if occupied:
-            lines.append("   reliability (confidence bin -> accuracy, n):")
+            lines.append("   reliability (top-probability bin -> accuracy, n):")
             for b in occupied:
                 lines.append(
                     f"     [{b.lo:.1f},{b.hi:.1f})  conf {b.mean_confidence:.3f}  "
