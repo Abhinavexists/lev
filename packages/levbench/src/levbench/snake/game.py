@@ -1,10 +1,8 @@
 """Deterministic Snake rules and a Hamiltonian-cycle safety planner.
 
-A move is *safe* when it keeps the snake on a cycle that visits every cell,
-never crossing its own tail and never skipping the food on the way round. A
-guarded player that only ever takes safe moves cannot die, so every death in
-an unassisted run is the model's, and every shield intervention is a move the
-model would have died on. Rules follow laya-mlx exactly so runs are comparable.
+A safe move preserves cycle order without crossing the tail or skipping food.
+The shield rejects moves outside that policy, including legal moves that do
+not cause an immediate collision. Rules follow laya-mlx so runs are comparable.
 """
 
 from __future__ import annotations

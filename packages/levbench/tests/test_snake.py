@@ -329,3 +329,35 @@ class TestReplay:
         )
         with pytest.raises(ValueError, match="strictly increase"):
             load_record(bad)
+
+    def test_reusing_a_recording_path_replays_the_latest_run(self, tmp_path):
+        record = tmp_path / "run.jsonl"
+        for seed, steps in ((7, 8), (8, 3)):
+            play(
+                PlannerClient(),
+                "planner",
+                "planner",
+                width=8,
+                height=6,
+                seed=seed,
+                initial_length=3,
+                steps=steps,
+                record=record,
+            )
+        metadata, frames = load_record(record)
+        assert metadata["settings"]["seed"] == 8
+        assert len(frames) == 3
+        assert all(frame["game"]["seed"] == 8 for frame in frames)
+        events = [json.loads(line) for line in record.read_text().splitlines()]
+        assert sum(event["type"] == "frame" for event in events) == 11
+
+    def test_an_empty_latest_run_does_not_borrow_previous_frames(self, tmp_path):
+        record = tmp_path / "run.jsonl"
+        events = [
+            {"type": "metadata", "model": "previous"},
+            {"type": "frame", "at": 1.0},
+            {"type": "metadata", "model": "latest"},
+        ]
+        record.write_text("\n".join(json.dumps(event) for event in events) + "\n")
+        with pytest.raises(ValueError, match="at least one frame"):
+            load_record(record)

@@ -12,6 +12,8 @@ import select
 import sys
 from urllib.parse import urlparse
 
+from .game import DIRECTIONS
+
 BG = "#090f13"
 FG = "#e3f3ef"
 MUTED = "#68868c"
@@ -33,7 +35,6 @@ DIGITS = {
     "8": ("█▀█", "█▀█", "▀▀▀"),
     "9": ("█▀█", "▀▀█", "▀▀▀"),
 }
-DIRECTIONS = ("UP", "DOWN", "LEFT", "RIGHT")
 
 
 class Canvas:
@@ -100,15 +101,14 @@ def compose(game: dict, decision: dict, stats: dict) -> Canvas:
     side = width - right - 4
     bottom = top + game["height"] + 1
 
-    state = (
-        "PAUSED"
-        if stats.get("paused")
-        else "BOARD CLEAR"
-        if game["won"]
-        else "GAME OVER"
-        if not game["alive"]
-        else "LIVE"
-    )
+    if stats.get("paused"):
+        state = "PAUSED"
+    elif game["won"]:
+        state = "BOARD CLEAR"
+    elif not game["alive"]:
+        state = "GAME OVER"
+    else:
+        state = "LIVE"
     if stats.get("replay") and state == "LIVE":
         state = "RECORDED RUN · 1×"
     c.put(1, left, "LEV  /  SYSTEM ONE", MUTED)

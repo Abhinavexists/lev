@@ -90,6 +90,18 @@ def describe(game: SnakeGame, prompt: str) -> tuple[str, dict[str, Any], dict]:
             "food": Noul(instructions="Is food reachable through the currently empty cells?"),
         }
     else:
+        descriptions = {}
+        for move in moves:
+            if not move.legal:
+                descriptions[move.direction] = "Blocked. Collision."
+            elif not move.safe:
+                descriptions[move.direction] = "Unsafe. Traps the snake."
+            elif move.eats:
+                descriptions[move.direction] = "Safe. Eat food now. Best."
+            elif move.direction == preferred:
+                descriptions[move.direction] = "Safe. Best route to food."
+            else:
+                descriptions[move.direction] = "Safe. Slower route."
         state = (
             f"Safe route: {'yes' if safe else 'no'}. "
             f"Food reachable through empty cells: {'yes' if reachable else 'no'}."
@@ -97,20 +109,7 @@ def describe(game: SnakeGame, prompt: str) -> tuple[str, dict[str, Any], dict]:
         questions = {
             "move": Choice(
                 instructions="Choose the best safe move toward food.",
-                criteria={
-                    m.direction: (
-                        "Blocked. Collision."
-                        if not m.legal
-                        else "Unsafe. Traps the snake."
-                        if not m.safe
-                        else "Safe. Eat food now. Best."
-                        if m.eats
-                        else "Safe. Best route to food."
-                        if m.direction == preferred
-                        else "Safe. Slower route."
-                    )
-                    for m in moves
-                },
+                criteria=descriptions,
             ),
             "risk": Noul(instructions="Is a safe route available?"),
             "food": Noul(instructions="Is food reachable through empty cells?"),
@@ -145,14 +144,7 @@ class PlannerClient:
         probabilities = {o: 0.02 for o in criteria}
         probabilities[pick] = 1.0 - 0.02 * (len(criteria) - 1)
         route = 0.98 if safe else 0.02
-        food = (
-            0.98
-            if (
-                "reachable through empty cells: yes" in state
-                or "Food reachable through empty cells: yes" in state
-            )
-            else 0.02
-        )
+        food = 0.98 if "reachable through empty cells: yes" in state else 0.02
         return SimpleNamespace(
             answers={
                 "move": SimpleNamespace(type="choice", probabilities=probabilities, choice=pick),

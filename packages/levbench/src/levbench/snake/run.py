@@ -361,7 +361,7 @@ def _summarise(
 
 
 def load_record(path: str | Path) -> tuple[dict, list[dict]]:
-    """A recording's metadata and its frames, timestamps checked strictly increasing."""
+    """Read the latest appended run, requiring strictly increasing frame timestamps."""
     metadata, frames = None, []
     for line in Path(path).read_text().splitlines():
         if not line.strip():
@@ -369,6 +369,7 @@ def load_record(path: str | Path) -> tuple[dict, list[dict]]:
         event = json.loads(line)
         if event.get("type") == "metadata":
             metadata = event
+            frames = []
         elif event.get("type") == "frame":
             frames.append(event)
     if metadata is None or not frames:
