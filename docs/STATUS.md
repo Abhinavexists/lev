@@ -22,11 +22,4 @@ What is built, and how far each part has been exercised.
 | Mode B head | **trains and serves**; weak unseen-taxonomy transfer measured on massive-en-US ([FINDINGS §12](FINDINGS.md#12-first-head-to-head-on-s1bench-two-named-failure-modes)) |
 | `lev.load`, release packaging, Hub publishing | **done**; the release loads through both `lev.load` and the server on an H100 (`check_release`) |
 
-Three checkpoints have been trained, calibrated and scored on S1Bench against
-Jev through identical task files: 0.489, then 0.697, then **0.725** macro
-against Jev's 0.754 on the earlier six-subset definitions. The released
-checkpoint scores **0.689** against Jev's 0.761 on all 13 subsets as S1Bench
-pins them. What each run changed and why is in
-[FINDINGS §12–17](FINDINGS.md); the reader bug that corrupted the labels of
-one intermediate run is
-[ADR-024](DECISIONS.md#adr-024--the-mixture-reader-merged-shuffled-questions-and-the-instruct-run-trained-on-it).
+Three checkpoints have been trained, calibrated and scored on S1Bench against Jev through identical task files: 0.489, then 0.697, then **0.725** macro against Jev's 0.754 on the earlier six-subset definitions. The released checkpoint scores **0.689** against Jev's 0.761 on all 13 subsets as S1Bench pins them. What each run changed and why is in [FINDINGS §12–17](FINDINGS.md); the reader bug that corrupted the labels of one intermediate run is [ADR-024](DECISIONS.md#adr-024--the-mixture-reader-merged-shuffled-questions-and-the-instruct-run-trained-on-it).

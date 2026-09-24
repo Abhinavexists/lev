@@ -6,9 +6,7 @@
 make check     # ruff + the full test suite
 ```
 
-Both must be clean. Tests run without a GPU, network or API keys. A basic `uv sync`
-skips tests that need optional model dependencies; use `uv sync --extra train`
-to include the CPU tensor, cache and training-loop tests.
+Both must be clean. Tests run without a GPU, network or API keys. A basic `uv sync` skips tests that need optional model dependencies; use `uv sync --extra train` to include the CPU tensor, cache and training-loop tests.
 
 ## Finding the code
 
@@ -28,22 +26,13 @@ Tests live under each package's `tests/` directory. For example:
 uv run pytest packages/lev/tests/test_core.py
 ```
 
-`modal/app.py` connects these components to remote volumes and GPUs. Import model
-dependencies inside the functions that need them so the core and CLI help remain
-usable without the training extras. Copy a `PRESETS` entry with
-`dataclasses.replace` before applying per-run overrides.
+`modal/app.py` connects these components to remote volumes and GPUs. Import model dependencies inside the functions that need them so the core and CLI help remain usable without the training extras. Copy a `PRESETS` entry with `dataclasses.replace` before applying per-run overrides.
 
 ## Comments and structure
 
-Use names and direct control flow to explain ordinary operations. Keep comments
-for constraints, tensor shapes, units, compatibility requirements and reasons a
-seemingly simpler implementation would be wrong. Docstrings should describe a
-contract or non-obvious behavior; omit ones that only repeat the function name.
+Use names and direct control flow to explain ordinary operations. Keep comments for constraints, tensor shapes, units, compatibility requirements and reasons a seemingly simpler implementation would be wrong. Docstrings should describe a contract or non-obvious behavior; omit ones that only repeat the function name.
 
-Keep benchmark histories and design comparisons in `docs/FINDINGS.md` and
-`docs/DECISIONS.md`, with a short reference beside code when needed. Avoid copying
-those narratives into module headers or adding generic helpers for a single call
-site. Preserve package boundaries and public interfaces during cleanup.
+Keep benchmark histories and design comparisons in `docs/FINDINGS.md` and `docs/DECISIONS.md`, with a short reference beside code when needed. Avoid copying those narratives into module headers or adding generic helpers for a single call site. Preserve package boundaries and public interfaces during cleanup.
 
 ## Where things go
 

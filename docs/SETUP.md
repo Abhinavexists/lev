@@ -7,9 +7,7 @@ Two environments, and you only need the first to do useful work.
 | **Local (any machine)** | tests, the benchmark, the router, calibration fitting, budget planning | Python 3.12, `uv`; the `train` extra for CPU tensor tests |
 | **H100 via Modal** | training, calibration over a real model, GPU serving | a Modal account |
 
-The core package imports without `torch` on purpose — the schema, prompt layouts,
-router, calibration and contamination guard are pure Python, so you can develop and
-test the parts most likely to contain bugs on a laptop.
+The core package imports without `torch` on purpose — the schema, prompt layouts, router, calibration and contamination guard are pure Python, so you can develop and test the parts most likely to contain bugs on a laptop.
 
 ---
 
@@ -22,8 +20,7 @@ make setup
 make test          # offline tests; optional model tests need the train extra
 ```
 
-Tests that need torch skip on a bare `uv sync`; the rest must pass. If they do,
-everything below is optional until you train.
+Tests that need torch skip on a bare `uv sync`; the rest must pass. If they do, everything below is optional until you train.
 
 ```bash
 make plan PRESET=4b-instruct   # the H100 budget for the released preset
@@ -46,12 +43,9 @@ cp .env.example .env
 | `ANTHROPIC_API_KEY` | `levbench compare`, the LLM baseline |
 | `LEVBENCH_LOCAL_API_KEY` | Only if you front a local server with auth |
 
-`.env` also reaches `modal deploy` — see [the deploy knobs](#deploy-knobs) below.
-Anything you `export` wins over it.
+`.env` also reaches `modal deploy` — see [the deploy knobs](#deploy-knobs) below. Anything you `export` wins over it.
 
-> **Your real `TYPESAFE_API_KEY` is never sent to a `--base-url` host.** The SDK always
-> sends `Authorization: Bearer <key>`, so reusing it against a third-party server would
-> leak it. A placeholder is substituted instead, and there is a regression test for it.
+> **Your real `TYPESAFE_API_KEY` is never sent to a `--base-url` host.** The SDK always sends `Authorization: Bearer <key>`, so reusing it against a third-party server would leak it. A placeholder is substituted instead, and there is a regression test for it.
 
 ---
 
@@ -62,8 +56,7 @@ uv sync --extra modal
 uv run modal setup
 ```
 
-The backbones are public, so **no credential is needed**. For a gated one,
-export a token and the app passes it through:
+The backbones are public, so **no credential is needed**. For a gated one, export a token and the app passes it through:
 
 ```bash
 export HF_TOKEN=hf_...
@@ -79,9 +72,7 @@ export LEV_HF_SECRET=huggingface
 <a id="deploy-knobs"></a>
 ### Deploy knobs
 
-Read on the machine where `modal deploy` runs — from the environment or from
-`.env` — never inside the container. The first group travels to the container
-as a Secret; the second sets decorator arguments, which are fixed at import.
+Read on the machine where `modal deploy` runs — from the environment or from `.env` — never inside the container. The first group travels to the container as a Secret; the second sets decorator arguments, which are fixed at import.
 
 | Variable | Default | Effect |
 |---|---|---|
@@ -96,10 +87,7 @@ as a Secret; the second sets decorator arguments, which are fixed at import.
 | `LEV_SERVE_REGION` | unset | A Modal region near the client; the measured 280 ms round trip is a continent, not a server |
 | `LEV_SERVE_SCALEDOWN` | `300` | Idle seconds before a container stops |
 
-> Leave these **commented** in `.env` rather than writing `VAR=`. The empty
-> string is not the same as unset: `int("")` raises for the four numeric knobs,
-> and an empty `LEV_SERVE_PRESET` fails the preset check instead of falling back
-> to the default.
+> Leave these **commented** in `.env` rather than writing `VAR=`. The empty string is not the same as unset: `int("")` raises for the four numeric knobs, and an empty `LEV_SERVE_PRESET` fails the preset check instead of falling back to the default.
 
 ### The order
 
@@ -112,8 +100,7 @@ make calibrate PRESET=4b-instruct                             # the temperatures
 make deploy PRESET=4b-instruct                                # /v1/systemone
 ```
 
-`download` warms the model cache (~8 GB into a Volume). `build_data` runs on CPU:
-it is downloads, and there is no reason to pay GPU rates to wait on a CDN.
+`download` warms the model cache (~8 GB into a Volume). `build_data` runs on CPU: it is downloads, and there is no reason to pay GPU rates to wait on a CDN.
 
 Then **always run the smoke test before the real thing**:
 
@@ -121,10 +108,7 @@ Then **always run the smoke test before the real thing**:
 make smoke      # 0.8B, 40 steps, ~5 min of H100
 ```
 
-It exercises the whole path — image, volumes, **both readout modes**, the loss, and a
-checkpoint write — and fails if only one mode was covered. If the data volume is
-empty it builds a small mixture first, on the GPU, so for a real run do
-`build_data` first.
+It exercises the whole path — image, volumes, **both readout modes**, the loss, and a checkpoint write — and fails if only one mode was covered. If the data volume is empty it builds a small mixture first, on the GPU, so for a real run do `build_data` first.
 
 You can prove the same path with no GPU and no Modal account at all:
 
@@ -140,13 +124,7 @@ make smoke-local STEPS=20     # 0.8B on CPU; slow, but it is the real loop
 | `lev-checkpoints` | adapters, calibration profiles | written *during* training so a preemption is survivable |
 | `lev-data` | prepared mixtures | reused across runs and ablations |
 
-The server exposes the preset named by `LEV_SERVE_PRESET` (`make deploy PRESET=...`
-sets it), else `SERVE_PRESET` in `modal/app.py` (`4b`). With no checkpoint for
-that preset it serves the untrained backbone with a warning. `GET /health`
-reports which checkpoint resolved, whether a Mode B head loaded, and whether a
-calibration profile is in effect; check it before reading a number off any eval.
-`make serve` gives an ephemeral dev URL that any other `modal run` on the app
-takes over, so use `make deploy` for anything you benchmark.
+The server exposes the preset named by `LEV_SERVE_PRESET` (`make deploy PRESET=...` sets it), else `SERVE_PRESET` in `modal/app.py` (`4b`). With no checkpoint for that preset it serves the untrained backbone with a warning. `GET /health` reports which checkpoint resolved, whether a Mode B head loaded, and whether a calibration profile is in effect; check it before reading a number off any eval. `make serve` gives an ephemeral dev URL that any other `modal run` on the app takes over, so use `make deploy` for anything you benchmark.
 
 ---
 
