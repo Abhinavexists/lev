@@ -1,12 +1,7 @@
-"""Mode A: read the label-token logits at the answer boundary.
+"""Map verified label codes to vocabulary ids at the answer boundary.
 
-    ... Options:  A: refund   B: replace   C: info
-    Answer:
-            ^ the scored position: its next-token logits, restricted to the ids
-              for " A", " B", " C". Nothing is sampled or generated.
-
-No added parameters, so it works on a stock checkpoint before any training.
-Callers read `logits[row, last_position, candidate_ids]`, as litjev does.
+The caller selects their logits at the final prompt position; no tokens
+are generated and no extra parameters are needed.
 """
 
 from __future__ import annotations

@@ -1,14 +1,6 @@
-"""Assemble the training mixture, gated by the contamination guard.
+"""Sample typed training examples with layout, abstention and question variation.
 
-An example is one (state, question, answer) triple. The mixture controls:
-
-  layout          50/50 state-first / schema-first, so both layouts work at inference
-  abstain         a fraction whose answer cannot be determined from the state,
-                  with a uniform target instead of a gold label
-  option scaling  large option sets, for Mode B and large lettered sets
-
-`build_mixture` takes its loaders (`lev.data.sources`) injected, so tests stay
-offline.
+Loaders are injected so the mixture can be built and tested offline.
 """
 
 from __future__ import annotations
@@ -152,13 +144,10 @@ def _vary(
     rng: random.Random,
     allow_negation: bool,
 ) -> tuple[Question, int]:
-    """One training row's question, varied so the state alone cannot answer it.
+    """Vary wording and Choice options while preserving the gold answer.
 
-    Instruction: a paraphrase, or for a Noul a negation with the rating target
-    mirrored (0 <-> 8). Choice: a random subset of the options that keeps the
-    gold one, in shuffled order, sometimes with descriptions withheld -- so
-    codes, positions and option counts all vary across rows of one source.
-    Score levels are ordered and are never subsampled or reordered.
+    Noul negation mirrors the rating target. Choice subsampling keeps the gold
+    option and remaps its index. Score levels are never reordered.
     """
     instructions = question.instructions
     negate = isinstance(question, Noul) and augment.negations and allow_negation

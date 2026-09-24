@@ -1,12 +1,4 @@
-"""Fit per-bucket temperatures after training, on a dedicated split.
-
-Separate from the fine-tune so re-fitting needs no re-training. The split must be
-disjoint from train and test (`lev.calibrate.fit` refuses test/eval/holdout).
-
-One temperature per (question type, readout mode), plus an option-count band for
-Choice: a Noul's nine-rating distribution and a 151-option Mode B distribution are
-miscalibrated differently, and one scalar lands between them.
-"""
+"""Collect checkpoint logits and fit temperatures on a dedicated calibration split."""
 
 from __future__ import annotations
 

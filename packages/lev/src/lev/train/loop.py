@@ -1,11 +1,6 @@
-"""The LoRA fine-tune loop.
+"""Fine-tune the backbone and candidate head, with checkpointing and resume.
 
-The objective is a proper scoring rule: cross-entropy plus a Brier term, plus an
-ordinal term for the ordered types (Score and Noul). A temperature is also fitted
-afterwards; the two complement each other.
-
-Run `make smoke` before a real preset: it exercises data, routing, collation, both
-readouts, loss and checkpoint write on a small backbone in a few minutes.
+The objective combines cross-entropy, Brier and an ordinal term.
 """
 
 from __future__ import annotations
@@ -14,7 +9,9 @@ import json
 import random
 import time
 from collections.abc import Callable
+from dataclasses import fields
 from pathlib import Path
+from typing import Any
 
 from ..prompt import Style
 from .checkpoints import (
@@ -48,7 +45,8 @@ def build_model(config: TrainConfig, model_cache: str | None = None):
         print("no CUDA; training in float32 instead of bfloat16")
         dtype = torch.float32
 
-    model = AutoModelForCausalLM.from_pretrained(
+    # The adapter wrapper and backbone expose different static types.
+    model: Any = AutoModelForCausalLM.from_pretrained(
         config.model_id,
         dtype=dtype,
         # Multi-GPU only: on an Apple machine accelerate dispatches to MPS and
@@ -82,19 +80,13 @@ def build_model(config: TrainConfig, model_cache: str | None = None):
 
 
 def decision_loss(logits, targets, config: TrainConfig, ordinal=False, soft_targets=None):
-    """Cross-entropy + Brier (+ ordinal for Score and Noul), over a padded
-    candidate set.
-
-    Cross-entropy alone optimises the argmax and tolerates overconfidence; the
-    Brier term penalises the whole probability vector.
+    """Cross-entropy, Brier and ordinal loss over padded candidate sets.
 
     Args:
-        logits: `(B, K)`, already `-inf` at padded candidate slots.
-        targets: `(B,)` gold index, or `IGNORE_INDEX` where the row is an
-            abstain example with no single correct answer.
-        ordinal: `(B,)` bool, True for Score and Noul rows, or a bare bool.
-        soft_targets: `(B, K)` target distribution for the `IGNORE_INDEX` rows:
-            uniform, since with no evidence every candidate is equally supported.
+        logits: `(B, K)`, with `-inf` at padded slots.
+        targets: `(B,)` gold indices; `IGNORE_INDEX` for abstain rows.
+        ordinal: `(B,)` bool for ordered targets, or a scalar bool.
+        soft_targets: `(B, K)` distributions for abstain rows.
     """
     import torch
     import torch.nn.functional as F
@@ -142,9 +134,8 @@ def candidate_logits(model, batch, head=None):
     from ..router import Mode
 
     if batch.mode is Mode.LABEL_TOKEN:
-        # Project only the answer positions: the full (B, seq, V) logits at
-        # V=248,320 is ~28 GiB for a 32 x 1,900-token batch (the OOM chat-style
-        # prompts hit at step 6,075). Each row then picks its own column.
+        # Project only answer positions to avoid a full (B, seq, vocab) allocation.
+        # Rows with different answer positions must pick their own output column.
         keep, column = torch.unique(batch.last_positions, return_inverse=True)
         out = model(
             input_ids=batch.input_ids,
@@ -206,11 +197,9 @@ def device_of(model):
 
 
 def to_device(batch, device):
-    from dataclasses import fields as _fields
-
     import torch
 
-    for f in _fields(batch):
+    for f in fields(batch):
         value = getattr(batch, f.name)
         if isinstance(value, torch.Tensor):
             setattr(batch, f.name, value.to(device))
@@ -218,11 +207,7 @@ def to_device(batch, device):
 
 
 def prepare_data(config: TrainConfig, data_dir: str):
-    """Resolve and validate the training mixture. Must run before the model loads.
-
-    Missing data is the most common failure, and finding it after loading a
-    multi-GB checkpoint wastes GPU minutes. Raises rather than returning empty.
-    """
+    """Validate data and contamination before loading the model."""
     from ..data.build import MANIFEST, load_split
     from ..data.splits import Split
 
@@ -241,8 +226,6 @@ def prepare_data(config: TrainConfig, data_dir: str):
     # is caught.
     manifest_path = root / MANIFEST
     if manifest_path.is_file():
-        import json
-
         from ..data.contamination import assert_clean
 
         manifest = json.loads(manifest_path.read_text())
@@ -426,16 +409,15 @@ def run_training(
                 )
                 last_saved = step
                 # So a run that dies late still leaves its loss curve.
-                _write_history(output, history, step, str(output))
+                _write_history(output, history, step)
             if step >= total_steps:
                 break
         if step >= total_steps:
             break
 
-    # Unless the interval save already landed on this step.
     if step != last_saved:
         save_checkpoint(model, head, tokenizer, output, step, on_checkpoint)
-    summary = _write_history(output, history, step, str(output))
+    summary = _write_history(output, history, step)
     print(
         f"done: {step:,} steps in {hms(time.monotonic() - progress.start)} -> {output}",
         flush=True,
@@ -444,8 +426,10 @@ def run_training(
 
 
 def set_aside_previous_run(output: Path) -> Path | None:
-    """Move `step-*`, `history.json` and `calibration.json` into a sibling
-    `superseded-<utc>` directory. Returns it, or None if there was nothing."""
+    """Move prior checkpoints, history and calibration under `superseded-<utc>`.
+
+    Return the directory, or None if there was nothing to move.
+    """
     stale = list(output.glob("step-*")) + [
         output / name for name in ("history.json", CALIBRATION) if (output / name).exists()
     ]
@@ -459,19 +443,18 @@ def set_aside_previous_run(output: Path) -> Path | None:
 
 
 def _read_history(output: Path) -> list[dict]:
-    """The loss curve a previous run left behind, so a resumed run extends it."""
     file = output / "history.json"
     if not file.is_file():
         return []
     return json.loads(file.read_text()).get("history", [])
 
 
-def _write_history(output: Path, history: list[dict], step: int, output_dir: str) -> dict:
+def _write_history(output: Path, history: list[dict], step: int) -> dict:
     summary = {
         "steps": step,
         "final_loss": history[-1]["loss"] if history else None,
         "first_loss": history[0]["loss"] if history else None,
-        "output_dir": output_dir,
+        "output_dir": str(output),
         "history": history,
     }
     (output / "history.json").write_text(json.dumps(summary, indent=2) + "\n")

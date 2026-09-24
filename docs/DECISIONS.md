@@ -761,8 +761,9 @@ one would have, across an epoch boundary too.
 told `--fresh`; `--resume <path>` still names one. `smoke` always starts fresh.
 A checkpoint without a state file -- any written before this -- restores
 weights only and behaves as before, so nothing already on the volume is
-stranded. The state file is written after the weights, so an interrupted save
-degrades to weights-only rather than to a corrupt state.
+stranded. The state file is written after the weights. Writes are not atomic:
+an interruption can leave incomplete weights or state, so a partial checkpoint
+may need to be set aside before resuming from the previous complete one.
 
 ---
 
@@ -1079,7 +1080,7 @@ failure mode), not refitting.
 | **Q5** | How long does a 4B run actually take? | Read once at 23 h before bucketing, a cumulative-rate artefact (ADR-017). Sequence length and padding are measured, and the image installs both kernels (`flash-linear-attention`, `causal-conv1d`); record the wall clock of the next full run here |
 | ~~Q6~~ | ~~Does an instruct checkpoint fix zero-shot Noul?~~ | **Closed by ADR-018, reopened by ADR-020.** Training fixed it in-distribution (0.975/0.915) and broke it out of distribution (aegis2 0.312, below every constant predictor). The instruct checkpoint became the starting point (ADR-020), and the released model reads Noul from the trained rating scale |
 | **Q7** | Do the public training corpora transfer to support-triage states? | Train, then eval on both the generated set *and* the 24-item fixture. Agreement between them is the signal; the fixture alone cannot resolve it |
-| ~~Q9~~ | ~~How does lev compare to Jev on S1Bench?~~ | **Answered on identical task files**, harness validated against Jev's own numbers: 0.489 macro in the first run (FINDINGS.md §12, ADR-020), 0.725 in the third, against Jev's 0.754 (§16) |
+| ~~Q9~~ | ~~How does lev compare to Jev on S1Bench?~~ | **Answered on identical task files**, harness validated against Jev's own numbers. On the earlier six-subset definitions: 0.489 macro in the first run (FINDINGS.md §12, ADR-020), 0.725 in the third, against Jev's 0.754 (§16). On all 13 subsets as S1Bench pins them: 0.689 against Jev's 0.761, and 0.719 on the board's six, level with reflex-4b (§17) |
 | ~~Q10~~ | ~~Does Mode B generalise to an unseen taxonomy?~~ | **Weakly: 0.166 on massive-en-US** under the cap, 10x chance and well calibrated (ECE 0.076), against Mode A's 0.291 and Jev's 0.814. Key format ruled out (0.140 = 0.140). Two training taxonomies were not enough; the rebuilt mixture is the fix. FINDINGS.md §12 |
 | ~~Q11~~ | ~~Does the frozen instruct checkpoint match reflex's 0.719 through our engine?~~ | **No: 0.653.** Same weights, our prompts; reflex's prompts get 0.719. Six points of prompt/readout design, 17 on massive. FINDINGS.md §15 |
 | **Q8** | Is 25% the right Mode B share? | Ablation at 10% / 25% / 40%, read on banking77 and clinc_oos accuracy against Mode A sources' regression |

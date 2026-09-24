@@ -1,16 +1,8 @@
-"""The decision engine: one forward pass per request, read logits, never generate.
+"""Batched inference over typed questions, without token generation.
 
-    state + q1 suffix ─┐
-    state + q2 suffix ─┼─> one batched forward ─> logits at each answer position,
-    state + qN suffix ─┘                          restricted to the candidates
-                                                        │
-                    temperature (per type, mode, band) ─┴─> softmax ─> typed answer
-
-`prefix_mode="fork"` instead prefills the state once and forks the cache per
-question, which pays off only for long states with many questions (ADR-023).
-
-A Mode B question needs a trained candidate-path head; without one,
-`system_one` refuses up front rather than answering badly.
+The default repeats the shared prefix in one batch. The optional fork mode
+prefills it once and copies its cache for each question (ADR-023). Mode B
+requires a trained head and separately encodes uncached candidate texts.
 """
 
 from __future__ import annotations
@@ -50,39 +42,21 @@ _QUESTIONS = TypeAdapter(dict[str, Question])
 @dataclass
 class EngineConfig:
     model_id: str = "Qwen/Qwen3.5-4B-Base"
-    # None: Mode A whenever the tokenizer can express the codes, Mode B beyond.
-    # On the instruct LoRA, Mode A at 60 options scores 0.746 on an unseen
-    # taxonomy against 0.231 for the head, which learns only the taxonomies it
-    # was shown (ADR-025).
+    # None uses Mode A up to the tokenizer's limit (ADR-025).
     max_label_options: int | None = None
     layout: Layout = Layout.STATE_FIRST
-    # Must match the style the adapter trained under (`TrainConfig.prompt_style`,
-    # recorded in the release manifest). See `prompt.Style`.
+    # Must match training; recorded in the release manifest.
     prompt_style: Literal["plain", "chat"] = "plain"
-    # "rating" is the trained 0-8 scale; "binary" is two lettered options for a
-    # checkpoint that was never trained on the scale (ADR-007).
+    # Frozen checkpoints use binary Noul; trained ones use the 0-8 scale (ADR-007).
     noul_readout: Literal["rating", "binary"] = "rating"
-    # Read Mode A questions in two option orders and average, cancelling letter
-    # position bias (argmax agreement was 0.15 between two orders of the same 60
-    # massive-en-US options). Costs one extra row in the same forward.
+    # A second option order reduces letter-position bias; costs one extra batch row.
     order_average: bool = True
-    # Skip label codes that are more than one token (Qwen3.5: `BQ`, `BZ`, ...)
-    # instead of falling to Mode B at the first. Serving-only, so training keeps
-    # large sets for Mode B. On 400 held-out rows each: banking77 0.818 -> 0.980,
-    # clinc_oos 0.953 -> 0.968 (ADR-028).
+    # Serving can skip split codes; training keeps large sets for Mode B (ADR-028).
     skip_multi_token_codes: bool = True
-    # "single": one batched forward over prefix+suffix per row. "fork": prefill
-    # once, fork the cache, run the suffixes (two forwards, no repeated prefix
-    # FLOPs). On an H100 with the 4B model the forward is launch-bound: fork
-    # 159-169 ms, single 73-84 ms, flat in question count. Fork is for long
-    # states with many questions, where the repeated prefix dominates (ADR-023).
+    # Forking avoids repeated prefix work but adds a forward and cache copies (ADR-023).
     prefix_mode: Literal["fork", "single"] = "single"
-    # `torch.compile(mode="reduce-overhead")`: CUDA graphs replay a forward's
-    # ~200 kernel launches as one, recorded per input shape, so shapes are padded
-    # to buckets (`pad_to` tokens, power-of-two rows). Off by default: on this
-    # hybrid model it measured 103-137 ms against eager's 86-94 ms after a 104 s
-    # warmup, as dynamo hit its recompile limit (ADR-023). When on, `warmup()`
-    # pays graph capture at startup.
+    # Off because it measured slower on this backbone (ADR-023). When enabled,
+    # inputs are padded to shape buckets and warmup captures graphs at startup.
     compile: bool = False
     pad_to: int = 32
 
@@ -125,8 +99,7 @@ def average_orders(prob_rows: list[list[float]], orders: list[list[int] | None])
 def serving_routes(
     questions: dict[str, Question], tokenizer, config: EngineConfig
 ) -> dict[str, Route]:
-    """The readout mode each question gets under `config`: the one routing policy
-    the engine applies, and the one `lev route` previews."""
+    """Resolve the serving routes, also exposed by `lev route`."""
     return route_all(
         questions,
         tokenizer,
@@ -153,7 +126,6 @@ class DecisionEngine:
         self.config = config or EngineConfig()
         self.calibration = calibration or CalibrationProfile()
         self.mode_b_head = mode_b_head
-        # The resolved checkpoint directory `load` read, for reporting.
         self.checkpoint: Path | None = None
         self._candidate_cache: dict[tuple[str, ...], Any] = {}
         # Read once: a compiled module proxies attributes, but not reliably.
@@ -263,13 +235,11 @@ class DecisionEngine:
         )
 
     def _orders(self, question: Question, route: Route) -> list[list[int] | None]:
-        """The candidate orders to render a question in. `None` is its own order.
+        """Return candidate orders; None means the original order.
 
-        Two orders only where order is arbitrary: Choice and binary Noul, under
-        lettered codes, in the state-first layout (schema-first shares the
-        options in the prefix). Score levels and the rating scale are never
-        reversed: training only presents them low to high, and reversing Score
-        cost 2.4 points on helpsteer2.
+        Only lettered Choice and binary Noul in state-first layout are reversed.
+        Schema-first shares options in the prefix; ordered scales retain the
+        low-to-high ordering used in training.
         """
         if (
             not self.config.order_average
@@ -407,7 +377,6 @@ class DecisionEngine:
         question: Question,
         hidden,
     ) -> list[float]:
-        """Raw candidate scores for one question, by whichever mode it routed to."""
         if route.mode is Mode.LABEL_TOKEN:
             return self._label_token_scores(logits, last_positions, row, route)
         return self._candidate_path_scores(hidden, last_positions, row, question)
@@ -475,7 +444,6 @@ class DecisionEngine:
         return reprs
 
     def _to_answer(self, question: Question, route: Route, probs: list[float]):
-        """Shape a calibrated distribution as the question's answer type."""
         confidence = _gini(probs)
 
         if isinstance(question, Choice):
@@ -559,7 +527,8 @@ def load(
     tok_source = resolved if resolved and (resolved / "tokenizer.json").is_file() else model_id
     tokenizer = AutoTokenizer.from_pretrained(str(tok_source), cache_dir=cache_dir)
 
-    model = AutoModelForCausalLM.from_pretrained(
+    # The adapter wrapper and backbone expose different static types.
+    model: Any = AutoModelForCausalLM.from_pretrained(
         model_id,
         dtype=torch.bfloat16,
         device_map="auto" if torch.cuda.device_count() > 1 else None,
@@ -586,8 +555,6 @@ def load(
         try:
             profile = CalibrationProfile.load(calibration)
         except FileNotFoundError:
-            # Legitimate for a frozen model, but loud: untuned backbones sit at
-            # ECE 0.43 on S1Bench.
             print(f"WARNING: no calibration at {calibration}; serving raw softmax")
 
     config = EngineConfig(
@@ -597,23 +564,18 @@ def load(
         noul_readout=noul_readout or ("rating" if resolved else "binary"),
         compile=compile,
         prompt_style=prompt_style or "plain",
-        # A serving-side experiment knob (ADR-025); None is the trained policy.
         max_label_options=max_label_options,
         skip_multi_token_codes=skip_multi_token_codes,
     )
     engine = DecisionEngine(model, tokenizer, config, profile, mode_b_head=head)
     engine.checkpoint = resolved
     if compile:
-        # Pay graph capture now so no request does.
         print(f"warmup: compiled forward in {engine.warmup():.0f}s", flush=True)
     return engine
 
 
 def _load_head(path: Path, model):
-    """Load the Mode B head saved beside the adapter, if there is one.
-
-    Absent means Mode A only; the engine then refuses Mode B questions.
-    """
+    """Load the saved Mode B head, or return None for Mode A-only serving."""
     import torch
 
     from .readout.mode_b import CandidatePathReadout
@@ -630,21 +592,16 @@ def _load_head(path: Path, model):
 
 
 def _bucket_type(question: Question, route: Route) -> str:
-    """Calibration bucket. A binary Noul must not borrow the rating scale's
-    temperature: the two readouts have nothing in common but the answer type."""
+    """Keep binary Noul calibration separate from the trained rating scale."""
     return "noul_binary" if route.reason == BINARY_NOUL else question.type
 
 
 def _fork(cache, n: int, device=None):
-    """Expand a batch-1 prefix cache to `n` rows, one per question.
+    """Copy a batch-1 prefix cache and expand it to `n` rows.
 
-    Not `batch_repeat_interleave`: it exists only on full-attention layers, and
-    24 of Qwen3.5's 32 layers are `LinearAttentionLayer`, holding
-    `conv_states`/`recurrent_states` instead of keys/values, which raise
-    `AttributeError` on that call. `reorder_cache` is defined on
-    `CacheLayerMixin`, so every layer type implements it; selecting index 0 `n`
-    times expands one row into `n`. Deep-copied first because `reorder_cache`
-    mutates in place and the prefix cache must stay reusable.
+    `reorder_cache` supports both full- and linear-attention layers;
+    `batch_repeat_interleave` does not. Copy first because reordering mutates
+    the cache and the original must stay reusable.
     """
     import torch
 
@@ -655,11 +612,7 @@ def _fork(cache, n: int, device=None):
 
 
 def _gini(probs: list[float]) -> float:
-    """Normalised Gini concentration: (K*sum(p^2) - 1) / (K - 1).
-
-    LitJev's choice (Jev's own `confidence` is chance-corrected max probability,
-    FINDINGS §2). Uniform -> 0, point mass -> 1.
-    """
+    """Normalised Gini concentration: uniform -> 0, point mass -> 1."""
     k = len(probs)
     if k <= 1:
         return 1.0

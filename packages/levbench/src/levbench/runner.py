@@ -24,8 +24,6 @@ load_dotenv()
 class CallResult:
     answers: dict[str, Any]
     seconds: float
-    # The model the server reports; compared with the requested one to catch a
-    # silently substituted default.
     served_by: str
     input_tokens: int
     output_tokens: int
@@ -71,8 +69,6 @@ class EvalReport:
 
     @property
     def served_by(self) -> set[str]:
-        """Distinct models the server reported. More than one means the run
-        is not a single-model measurement and must not be reported as one."""
         return {c.served_by for c in self.calls}
 
 
@@ -90,29 +86,17 @@ def build_client(
     base_url: str | None = None,
     timeout: float | None = None,
 ):
-    """Return `(client, model_name)` for `jev`, `lev` or `anthropic`.
+    """Return `(client, model_name)` for jev, lev or anthropic.
 
-    All three speak one of two client APIs, so the benchmark body is written once:
-
-      jev        the hosted TypeSafe API. Needs TYPESAFE_API_KEY.
-      lev        a local /v1/systemone server -- ours, or any compatible
-                 reproduction. Defaults to localhost:8000, needs no credential,
-                 and is priced as self-hosted rather than at Jev's rate.
-      anthropic  an LLM baseline through the vendor's adapter.
-
-    `jev` and `lev` are the *same* wire protocol; they differ only in where the
-    request goes, whether a credential is required, and how cost is reported.
+    Jev and lev share the TypeSafe protocol. lev defaults to localhost, needs no
+    credential and uses self-hosted pricing. Anthropic uses the LLM adapter.
     """
     if backend in ("jev", "lev"):
         if backend == "lev":
             base_url = base_url or DEFAULT_LOCAL_BASE_URL
         from typesafe_sdk import TypeSafeClient
 
-        # A local server serves whatever it loaded; `run_eval` corrects the
-        # label from the response.
         resolved = model or ("jev-latest" if backend == "jev" else "local")
-        # Set at construction: `system_one` defaults to `model=None`, which lets
-        # the server pick and would label its default as `resolved`.
         kwargs: dict[str, Any] = {"model": resolved}
         if timeout is not None:
             kwargs["timeout"] = timeout
@@ -120,11 +104,8 @@ def build_client(
             kwargs["timeout"] = DEFAULT_LOCAL_TIMEOUT
         if base_url:
             kwargs["base_url"] = base_url
-            # Never forward TYPESAFE_API_KEY to a non-default host: the SDK always
-            # sends `Authorization: Bearer <key>`. A server behind auth takes
-            # LEVBENCH_LOCAL_API_KEY. `or` rather than a get() default, so a
-            # set-but-empty variable (as copied from .env.example) also falls
-            # back instead of sending a malformed `Bearer ` header.
+            # Never forward the hosted API key to a custom endpoint. Empty local
+            # keys also fall back, since an empty Bearer header is invalid.
             kwargs["api_key"] = os.environ.get("LEVBENCH_LOCAL_API_KEY") or "local"
         return TypeSafeClient(**kwargs), resolved
 
@@ -134,7 +115,6 @@ def build_client(
         resolved = model or "claude-opus-5"
         client = SystemOneAdapterClient(
             structured_outputs=True,
-            # Full distributions, not an argmax: calibration metrics need them.
             llm_answer_mode="probabilities",
             normalize_probabilities=True,
             n_retry_malformed_structure=2,
@@ -165,7 +145,6 @@ def _token_count(usage: Any, total_field: str, base_field: str) -> int:
 
 
 def _usage_ints(usage: Any) -> tuple[int, int, int, int]:
-    """Pull tokens and retry counts, tolerating both Usage shapes."""
     inp = _token_count(usage, "input_tokens_total", "input_tokens")
     out = _token_count(usage, "output_tokens_total", "output_tokens")
     # Adapter-only counters; absent on the SDK, where 0 is correct.

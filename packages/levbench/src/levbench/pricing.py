@@ -28,18 +28,15 @@ PRICES: dict[str, Price] = {
 }
 
 
-# A self-hosted model costs GPU time, not tokens; callers label it rather than
-# quote a misleading per-token figure.
+# A self-hosted model costs GPU time, not tokens
 SELF_HOSTED = Price(0.0, 0.0)
 
 
 def is_self_hosted(model: str) -> bool:
-    """True for anything served locally rather than metered by a vendor."""
     return model not in PRICES and not model.startswith("jev")
 
 
 def lookup(model: str) -> Price:
-    """Resolve a price. Unknown models are treated as self-hosted, not an error."""
     if model in PRICES:
         return PRICES[model]
     if model.startswith("jev"):

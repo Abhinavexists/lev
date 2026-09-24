@@ -1,21 +1,7 @@
-"""The two prompt layouts, and where each one is cut for caching.
+"""Prompt text and prefix/suffix boundaries shared by training and serving.
 
-A layout makes one part of the input a stable prefix that can be computed once
-and reused. Training uses both (half the examples each); serving defaults to
-state-first.
-
-    STATE-FIRST   [state] | [question + options + "Answer:"]
-                  ^shared   ^one suffix per question
-                  One state, many questions.
-
-    SCHEMA-FIRST  [all questions + options] | [state + "Answer:"]
-                  ^shared across requests     ^varies per request
-                  One schema, many states: high-volume batch classification.
-
-decider measured schema-first's accuracy cost (docs/ARCHITECTURE.md §5.5):
-  fixed label set        -1.5 pts
-  options vary per item  -5 pts
-  50-219 options         -5 to -24 pts
+State-first shares the state prefix across questions. Schema-first shares
+the question catalogue across states. Both score the final suffix token.
 """
 
 from __future__ import annotations
@@ -36,14 +22,10 @@ class Layout(StrEnum):
 
 
 class Style(StrEnum):
-    """How the text is dressed for the model.
+    """Prompt format recorded with the weights and shared by training and serving.
 
-    `plain`: `Context: ... Question: ... Options: ... Answer:`. `chat`: reflex's
-    ChatML layout, with a system prompt, headed sections, `A. option` lines, an
-    explicit "respond with only the letter" and Qwen's empty think block. On the
-    same frozen instruct weights `chat` scores 0.710 on S1Bench against 0.653 for
-    `plain` (ADR-027). The style is a property of the weights: recorded in the
-    release manifest and applied identically in training and serving.
+    Plain uses Context/Question/Options/Answer sections. Chat uses ChatML with
+    a system prompt and an empty think block (ADR-027).
     """
 
     PLAIN = "plain"
@@ -212,11 +194,7 @@ def render_content(value: JSONContent) -> str:
 
 
 def candidate_texts(question: Question) -> list[str]:
-    """The strings Mode B scores: each option's own text, not a label code.
-
-    Lives here because both the serving engine and the training collator need
-    it.
-    """
+    """Candidate text shared by the Mode B serving and training paths."""
     if isinstance(question, Noul):
         return list(NOUL_RATING_TOKENS)
     if isinstance(question, Score):

@@ -1,29 +1,19 @@
-"""The contamination guard: no S1Bench evaluation subset may reach training.
-
-A blocked subset in the mixture invalidates every S1Bench number, silently,
-because a contaminated model looks *better*; three models on the leaderboard
-self-declare exactly this. So the guard raises rather than warns, before
-training. decider's registry (~95 public datasets) contains several of the 13.
-"""
+"""Reject training sources that resolve to any of the 13 S1Bench subsets."""
 
 from __future__ import annotations
 
 import re
 from collections.abc import Iterable
 
-# All 13 S1Bench evaluation subsets in `published_jev`, not just the 6 the
-# `s1-fast` run executed: the other 7 are still evaluation data for any future
-# full-suite comparison.
+# All 13 S1Bench evaluation subsets, not only the six the public board completed.
 BLOCKED_SUBSETS: frozenset[str] = frozenset(
     {
-        # ran in s1-fast
         "vitaminc-dev",
         "massive-en-US",
         "boolq",
         "helpsteer2",
         "aegis2",
         "paws",
-        # intended, did not run
         "massive-de-DE",
         "squad2",
         "multinli",
@@ -61,7 +51,6 @@ _ALIASES: dict[str, str] = {
     "aegis": "aegis2",
     "paws-x": "paws",
     "google-research-datasets/paws": "paws",
-    # intended-but-unrun subsets
     "massive-de": "massive-de-DE",
     "squad-v2": "squad2",
     "squad_v2": "squad2",
@@ -90,7 +79,6 @@ def normalise(name: str) -> str:
     return re.sub(r":(train|validation|dev|test)$", "", cleaned)
 
 
-# Derived from the constants above, so build it once rather than per lookup.
 _BLOCKED_BY_NORMALISED: dict[str, str] = {normalise(s): s for s in BLOCKED_SUBSETS}
 _ALIASES_BY_NORMALISED: dict[str, str] = {normalise(a): t for a, t in _ALIASES.items()}
 # Bare aliases (`massive`, `aegis`, `squad-v2`) as segment sets, so a re-hosted
@@ -138,12 +126,7 @@ def check_mixture(dataset_names: Iterable[str]) -> dict[str, str]:
 
 
 def assert_eval_only(dataset_name: str) -> str:
-    """The mirror of `assert_clean`: raise unless `dataset_name` *is* a blocked
-    subset, and return the subset it resolves to.
-
-    The evaluation loader must read the 13, and accepting only blocked subsets
-    keeps it from becoming a second route into the training mixture.
-    """
+    """Return the blocked subset name; reject sources outside the evaluation set."""
     subset = resolve(dataset_name)
     if subset is None:
         raise ContaminationError(

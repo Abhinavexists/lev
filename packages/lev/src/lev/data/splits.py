@@ -1,15 +1,8 @@
-"""Deterministic train / calibration / test splits.
+"""Deterministic, disjoint train, calibration and test splits.
 
-Three splits because the temperature is fitted on held-out data that must not be
-the test set: `calibrate.fit` refuses test/eval/holdout, and this module produces
-the disjoint `calibration` split it accepts.
-
-Assignment hashes a per-row key (source, position within the source, text), so it
-needs no RNG state and reproduces across processes and machines for the same row
-order. A re-ordered corpus re-splits.
-
-A random split over banking77's 77 intents can leave an intent in test and never
-in train; `check_coverage` raises on that.
+Assignment hashes the source, row position and text. The same input order
+reproduces the split across processes; reordering a corpus changes it.
+Coverage checks reject labels missing from training or the sampled corpus.
 """
 
 from __future__ import annotations

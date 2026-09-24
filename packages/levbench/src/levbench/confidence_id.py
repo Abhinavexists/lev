@@ -8,7 +8,7 @@ chance-corrected max probability (`norm_max_prob`), rounded to 2 dp
 (FINDINGS.md §2). LitJev states it uses normalized Gini, which makes a LitJev
 server a known-answer test.
 
-Noul answers carry no confidence field and are skipped.
+Answers without both probabilities and confidence (including Jev's Noul) are skipped.
 """
 
 from __future__ import annotations

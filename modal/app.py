@@ -1,32 +1,28 @@
-"""Modal app: build data, train, calibrate, evaluate, package and serve lev on one H100.
+"""Build data, train, calibrate, evaluate and serve lev on Modal.
 
-    modal setup                                            # once
-    modal run    modal/app.py::smoke                       # ~5 min, proves the path
-    modal run    modal/app.py::train --preset 4b-instruct  # the real run
-    modal run    modal/app.py::calibrate --preset 4b-instruct
-    modal deploy modal/app.py                              # /v1/systemone, stable URL
-
-`modal serve` and `modal run` are both ephemeral apps, and each registers the
-`serve` web function under the same `-dev` label: running any function here
-while a dev server is up steals that label, and the server's URL returns 404
-once the run exits. `modal deploy` gives a URL other runs cannot take.
-
-* **The model cache is a Volume**, not part of the image: a 4B checkpoint is
-  ~8 GB, which would make every image rebuild slow.
-* **Checkpoints go to a second Volume, committed during training**, so a
-  preemption costs at most `checkpoint_every` steps.
-* **`smoke` runs first**: the 0.8B preset for a few dozen steps exercises image,
-  volumes, data, both readouts, loss and checkpoint write in minutes.
-* **The H100 timeout is 24 h against a ~2 h estimate**: a run that dies just
-  before it saves costs everything.
+Models, datasets and checkpoints live on separate persistent volumes.
+Use `modal deploy` for a stable server URL: other ephemeral runs can take
+over the shared `-dev` label used by `modal serve`. See docs/SETUP.md.
 """
 
 from __future__ import annotations
 
 import os
-from pathlib import Path
+from dataclasses import replace
+from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:  # `lev` is installed in the container, not where deploy runs.
+    from lev.types import Answer
+
+from dotenv import load_dotenv
 
 import modal
+
+# The deploy-time knobs below are read where `modal deploy` runs, not in the
+# container, so they come from this machine's environment — and `.env` is part
+# of it. A real export still wins, since load_dotenv does not override.
+load_dotenv()
 
 APP_NAME = "lev"
 
@@ -74,7 +70,6 @@ image = (
 
 app = modal.App(APP_NAME, image=image)
 
-# Persisted across runs, so the 4B checkpoint downloads once.
 models = modal.Volume.from_name("lev-models", create_if_missing=True)
 checkpoints = modal.Volume.from_name("lev-checkpoints", create_if_missing=True)
 datasets_vol = modal.Volume.from_name("lev-data", create_if_missing=True)
@@ -83,7 +78,11 @@ MODELS_DIR = "/models"
 CKPT_DIR = "/checkpoints"
 DATA_DIR = "/data"
 
-VOLUMES = {MODELS_DIR: models, CKPT_DIR: checkpoints, DATA_DIR: datasets_vol}
+VOLUMES: dict[str | PurePosixPath, modal.Volume | modal.CloudBucketMount] = {
+    MODELS_DIR: models,
+    CKPT_DIR: checkpoints,
+    DATA_DIR: datasets_vol,
+}
 
 # Which preset `serve` exposes. Not a function argument: Modal requires
 # `@modal.asgi_app` functions to take none.
@@ -120,6 +119,15 @@ SERVE_REGION = os.environ.get("LEV_SERVE_REGION")
 SERVE_SCALEDOWN = int(os.environ.get("LEV_SERVE_SCALEDOWN", "300"))
 
 
+def _prompt_style(value: str | None) -> Literal["plain", "chat"] | None:
+    """Validate the prompt-style environment override before serving."""
+    if not value:
+        return None
+    if value not in ("plain", "chat"):
+        raise ValueError(f"LEV_SERVE_PROMPT={value!r} is not 'plain' or 'chat'")
+    return value
+
+
 def _serve_overrides() -> list:
     """Which checkpoint the server loads, chosen from the local environment.
 
@@ -128,7 +136,7 @@ def _serve_overrides() -> list:
     adapter, binary Noul) as the zero-shot baseline. Local env does not reach
     the container, so whichever are set travel as a Secret.
     """
-    overrides = {
+    overrides: dict[str, str | None] = {
         key: value
         for key in (
             "LEV_SERVE_PRESET",
@@ -190,8 +198,7 @@ def train(
     if preset not in PRESETS:
         raise ValueError(f"unknown preset {preset!r}; have {sorted(PRESETS)}")
 
-    config = PRESETS[preset]
-    config.output_dir = f"{CKPT_DIR}/{preset}"
+    config = replace(PRESETS[preset], output_dir=f"{CKPT_DIR}/{preset}")
     config.validate()
 
     print(config.summary())
@@ -269,8 +276,7 @@ def calibrate(preset: str = "4b", split: str = "calibration", method: str = "tra
     from lev.train.calibration_run import fit_profile
     from lev.train.config import PRESETS
 
-    config = PRESETS[preset]
-    config.output_dir = f"{CKPT_DIR}/{preset}"
+    config = replace(PRESETS[preset], output_dir=f"{CKPT_DIR}/{preset}")
     return fit_profile(
         # `fit_profile` resolves the newest checkpoint inside this directory.
         checkpoint_dir=config.output_dir,
@@ -299,8 +305,7 @@ def evaluate(
     from lev.train.config import PRESETS
     from lev.train.evaluate import evaluate_split
 
-    config = PRESETS[preset]
-    config.output_dir = f"{CKPT_DIR}/{preset}"
+    config = replace(PRESETS[preset], output_dir=f"{CKPT_DIR}/{preset}")
 
     profile = CalibrationProfile()
     calibration = Path(config.output_dir) / CALIBRATION
@@ -329,7 +334,7 @@ def evaluate(
     secrets=SECRETS,
     scaledown_window=SERVE_SCALEDOWN,
     min_containers=SERVE_WARM,
-    **({"region": SERVE_REGION} if SERVE_REGION else {}),
+    region=SERVE_REGION or None,  # `LEV_SERVE_REGION=` must mean unset, not ""
 )
 @modal.concurrent(max_inputs=SERVE_CONCURRENCY)
 @modal.asgi_app()
@@ -348,7 +353,6 @@ def serve():
     from lev.train.checkpoints import latest_checkpoint
     from lev.train.config import PRESETS
 
-    # `@modal.asgi_app` functions take no arguments; see `_serve_overrides`.
     preset = os.environ.get("LEV_SERVE_PRESET", SERVE_PRESET)
     if preset not in PRESETS:
         raise ValueError(f"LEV_SERVE_PRESET={preset!r} is not a preset; have {sorted(PRESETS)}")
@@ -365,8 +369,7 @@ def serve():
     # lower cap, e.g. 26 to reproduce the ADR-020 policy.
     cap_env = os.environ.get("LEV_SERVE_MAX_LABEL_OPTIONS")
     max_label_options = int(cap_env) if cap_env else None
-    # The preset's prompt style; LEV_SERVE_PROMPT overrides it for a frozen model.
-    prompt_style = os.environ.get("LEV_SERVE_PROMPT") or config.prompt_style
+    prompt_style = _prompt_style(os.environ.get("LEV_SERVE_PROMPT")) or config.prompt_style
     skip_codes = os.environ.get("LEV_SERVE_SKIP_CODES", "1") not in ("0", "false", "no")
     # A frozen model is a different backbone from the adapter's, so no checkpoint.
     frozen = os.environ.get("LEV_SERVE_MODEL")
@@ -505,11 +508,11 @@ def diagnose_candidates(model_id: str = "Qwen/Qwen3.5-4B-Base") -> dict:
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(model_id, cache_dir=MODELS_DIR)
-    model = (
-        AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16, cache_dir=MODELS_DIR)
-        .cuda()
-        .eval()
+    # `from_pretrained` is typed as returning the class, not an instance.
+    loaded: Any = AutoModelForCausalLM.from_pretrained(
+        model_id, dtype=torch.bfloat16, cache_dir=MODELS_DIR
     )
+    model = loaded.cuda().eval()
     texts = [
         "datetime query",
         "iot hue lightchange",
@@ -594,6 +597,20 @@ def diagnose_candidates(model_id: str = "Qwen/Qwen3.5-4B-Base") -> dict:
     return report
 
 
+def _probabilities(answer: Answer) -> dict[Any, float]:
+    """An answer's probability map, whatever its shape.
+
+    Choice keys are option strings and Score keys are level ints, so a map is
+    only ever compared against the same answer's own keys. Only a Noul may
+    report no map, and then its single probability stands in.
+    """
+    from lev.types import NoulAnswer  # noqa: PLC0415
+
+    if isinstance(answer, NoulAnswer):
+        return dict(answer.probabilities) if answer.probabilities else {1: answer.noul}
+    return dict(answer.probabilities)
+
+
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=30 * 60)
 def profile_engine(preset: str = "4b", rounds: int = 20) -> dict:
     """Where a `/v1/systemone` call spends its time inside the container.
@@ -630,7 +647,6 @@ def profile_engine(preset: str = "4b", rounds: int = 20) -> dict:
         except ImportError:
             kernels[name] = "MISSING (reference PyTorch path)"
 
-    # Instrument the engine's stages.
     timings: dict[str, list[float]] = {}
 
     def timed(name, fn):
@@ -696,7 +712,11 @@ def profile_engine(preset: str = "4b", rounds: int = 20) -> dict:
     print(f"fork vs single: max |dp| over all answers = {worst:.5f}", flush=True)
     # Fork wins when the forward is FLOP-bound, single when launch-bound; then the
     # compiled single path, with its warmup reported separately.
-    variants = [("fork", False), ("single", False), ("single", True)]
+    variants: list[tuple[Literal["fork", "single"], bool]] = [
+        ("fork", False),
+        ("single", False),
+        ("single", True),
+    ]
     for prefix_mode, compiled in variants:
         if compiled:
             compiled_engine = DecisionEngine(
@@ -726,12 +746,9 @@ def profile_engine(preset: str = "4b", rounds: int = 20) -> dict:
             reference = engine.system_one(state, shapes["3 mixed (choice4, score3, noul)"]).answers
             got = active.system_one(state, shapes["3 mixed (choice4, score3, noul)"]).answers
             drift = max(
-                abs(
-                    (a.probabilities or {1: a.noul})[k]
-                    - (got[n].probabilities or {1: got[n].noul})[k]
-                )
+                abs(_probabilities(a)[k] - _probabilities(got[n])[k])
                 for n, a in reference.items()
-                for k in (a.probabilities or {1: a.noul})
+                for k in _probabilities(a)
             )
             report["compiled_vs_eager_max_prob_diff"] = round(drift, 5)
             print(f"compiled vs eager: max |dp| = {drift:.5f}", flush=True)

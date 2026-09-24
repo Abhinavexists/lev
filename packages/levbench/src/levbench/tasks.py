@@ -1,21 +1,8 @@
-"""Benchmark task sets: a built-in smoke fixture, and file-backed eval sets.
+"""Built-in smoke fixture and file-backed benchmark tasks.
 
-The built-in set is 24 support tickets labelled by hand for this repository,
-not a public benchmark. Items were chosen to be unambiguous; `frustration` is
-the softest of the three labels.
-
-**24 items cannot detect a training improvement:** the 95% interval on one
-accuracy estimate is about +/-16 points. Use the built-in set as a smoke fixture
-(does the server answer, are the types right) and point `--tasks` at a held-out
-file for real numbers; `lev data eval` writes one from the mixture's test split.
-
-A task file is JSON:
-
-    {"questions": {"<name>": {"type": "choice"|"score"|"noul", ...}},
-     "items": [{"state": "...", "labels": {"<name>": <truth>}}]}
-
-levbench reads that file and nothing else. It does not import `lev`, so the
-exporter lives on the model side (ADR-010).
+The 24 support tickets below are too few to measure training improvements.
+Use held-out task files for benchmarks. Each JSON file has `questions` and
+`items`; each item has a `state` and `labels` keyed by question name.
 """
 
 from __future__ import annotations
@@ -43,7 +30,6 @@ FRUSTRATION_LEVELS = [
 
 
 def questions() -> dict[str, Any]:
-    """The three questions asked of every item, one per primitive type."""
     return {
         "department": Choice(
             instructions="Which team should handle this ticket",
@@ -202,8 +188,6 @@ ITEMS: list[Item] = [
 
 @dataclass(frozen=True)
 class FileItem:
-    """An item read from a task file. Same surface as `Item`: state + labels."""
-
     state: str
     _labels: dict[str, Any] = field(default_factory=dict)
 
@@ -216,7 +200,6 @@ _PRIMITIVES = {"choice": Choice, "score": Score, "noul": Noul}
 
 
 def load_task_file(path: str | Path) -> tuple[list[FileItem], dict[str, Any]]:
-    """Read a task file into the same shape `dataset()` returns."""
     path = Path(path)
     if not path.is_file():
         raise FileNotFoundError(
@@ -243,7 +226,6 @@ def load_task_file(path: str | Path) -> tuple[list[FileItem], dict[str, Any]]:
 
 
 def dataset(path: str | Path | None = None) -> tuple[list[Any], dict[str, Any]]:
-    """The built-in smoke fixture, or a task file when one is given."""
     if path is not None:
         return load_task_file(path)
     return ITEMS, questions()

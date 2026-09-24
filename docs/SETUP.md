@@ -4,7 +4,7 @@ Two environments, and you only need the first to do useful work.
 
 | | What it runs | Needs |
 |---|---|---|
-| **Local (any machine)** | the full test suite, the benchmark, the router, calibration fitting, budget planning | Python 3.12, `uv` |
+| **Local (any machine)** | tests, the benchmark, the router, calibration fitting, budget planning | Python 3.12, `uv`; the `train` extra for CPU tensor tests |
 | **H100 via Modal** | training, calibration over a real model, GPU serving | a Modal account |
 
 The core package imports without `torch` on purpose — the schema, prompt layouts,
@@ -19,7 +19,7 @@ test the parts most likely to contain bugs on a laptop.
 git clone <this repo> && cd lev
 curl -LsSf https://astral.sh/uv/install.sh | sh   # if you don't have uv
 make setup
-make test          # the full suite: no GPU, no network, no API keys
+make test          # offline tests; optional model tests need the train extra
 ```
 
 Tests that need torch skip on a bare `uv sync`; the rest must pass. If they do,
@@ -45,6 +45,9 @@ cp .env.example .env
 | `TYPESAFE_API_KEY` | `levbench eval --backend jev`. Get one at <https://console.typesafe.ai/settings/keys> |
 | `ANTHROPIC_API_KEY` | `levbench compare`, the LLM baseline |
 | `LEVBENCH_LOCAL_API_KEY` | Only if you front a local server with auth |
+
+`.env` also reaches `modal deploy` — see [the deploy knobs](#deploy-knobs) below.
+Anything you `export` wins over it.
 
 > **Your real `TYPESAFE_API_KEY` is never sent to a `--base-url` host.** The SDK always
 > sends `Authorization: Bearer <key>`, so reusing it against a third-party server would
@@ -72,6 +75,31 @@ For a shared or long-lived deployment, use a real Modal Secret instead:
 modal secret create huggingface HF_TOKEN=hf_...
 export LEV_HF_SECRET=huggingface
 ```
+
+<a id="deploy-knobs"></a>
+### Deploy knobs
+
+Read on the machine where `modal deploy` runs — from the environment or from
+`.env` — never inside the container. The first group travels to the container
+as a Secret; the second sets decorator arguments, which are fixed at import.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `LEV_SERVE_PRESET` | `4b` | Which preset's newest checkpoint to serve. `make deploy PRESET=...` sets it |
+| `LEV_SERVE_MODEL` | unset | Serve this model frozen instead — no adapter, binary Noul, the zero-shot baseline |
+| `LEV_SERVE_COMPILE` | `0` | `torch.compile`. Off unless asked: measured slower than eager here (ADR-023) |
+| `LEV_SERVE_MAX_LABEL_OPTIONS` | unset | Cap on label options. Unset means Mode A up to the tokenizer limit (ADR-025) |
+| `LEV_SERVE_PROMPT` | the preset's | Override the prompt style, mainly for a frozen model |
+| `LEV_SERVE_SKIP_CODES` | `1` | Skip label codes that tokenize to more than one token (ADR-028) |
+| `LEV_SERVE_CONCURRENCY` | `4` | Requests one container handles at once; GPU forwards serialise, parsing and network overlap |
+| `LEV_SERVE_WARM` | `0` | Containers kept running. One removes the 20-55 s cold start, at the cost of an idle GPU |
+| `LEV_SERVE_REGION` | unset | A Modal region near the client; the measured 280 ms round trip is a continent, not a server |
+| `LEV_SERVE_SCALEDOWN` | `300` | Idle seconds before a container stops |
+
+> Leave these **commented** in `.env` rather than writing `VAR=`. The empty
+> string is not the same as unset: `int("")` raises for the four numeric knobs,
+> and an empty `LEV_SERVE_PRESET` fails the preset check instead of falling back
+> to the default.
 
 ### The order
 

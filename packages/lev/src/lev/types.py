@@ -1,12 +1,7 @@
-"""The `/v1/systemone` wire schema.
+"""TypeSafe-compatible request and response models for `/v1/systemone`.
 
-Identical to TypeSafe's public schema, so a client written against Jev works
-against lev by changing `base_url`, and `levbench` measures both the same way.
-
-One divergence (docs/ARCHITECTURE.md §5.4): lev's `NoulAnswer` also carries
-`probabilities` and `confidence`, because lev reads Noul from nine rating tokens
-and has a real distribution. Jev's Noul is a bare float. The `noul` field is
-identical, so clients that only read `.noul` are unaffected.
+lev also exposes Noul rating probabilities and confidence. Clients that only
+read the shared `noul` probability can ignore these extra fields.
 """
 
 from __future__ import annotations

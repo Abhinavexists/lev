@@ -1,16 +1,7 @@
-"""Turn Examples into tensors the readouts can be trained through.
+"""Batch and collate examples by readout mode.
 
-Batches are **homogeneous in mode** (`ModeBatcher` groups them), so the two
-readouts never need masking against each other.
-
-The scored position is the final token of the rendered prompt, whose next-token
-distribution is the answer. Rows are right-padded, so `last_positions` carries the
-real index; reading `seq - 1` would train on a pad token's logits without failing.
-
-Mode B also needs one representation per candidate. Candidates belong to the
-question, so a batch's unique candidate strings are encoded once and shared (77
-short rows, not 8 x 77), making a 77-option question cost about what a 4-option
-one does.
+Rows are right-padded: `last_positions` points to each final real token.
+Mode B encodes a shared pool of distinct candidate strings per batch.
 """
 
 from __future__ import annotations
@@ -22,25 +13,21 @@ from dataclasses import dataclass
 from ..data.mixture import Example
 from ..prompt import Style, candidate_texts, label_prefix
 from ..prompt import build as build_prompt
-from ..router import Mode, candidate_count, route
+from ..router import Mode, Route, candidate_count, route
 
 IGNORE_INDEX = -100
 
 
 class RouteCache:
-    """Resolves a question's readout mode once per distinct question.
-
-    Re-tokenising an option set for each of 200k rows would be the slowest step
-    in the pipeline; the batcher and collator share one cache.
-    """
+    """Cache routes shared by the batcher and collator to avoid repeated tokenization."""
 
     def __init__(self, tokenizer, max_label_options: int | None = None, style: Style = Style.PLAIN):
         self.tokenizer = tokenizer
         self.max_label_options = max_label_options
         self.style = style
-        self._routes: dict[tuple[str, str, int], object] = {}
+        self._routes: dict[tuple[str, str, int], Route] = {}
 
-    def route_for(self, example: Example):
+    def route_for(self, example: Example) -> Route:
         # Keyed on the option count: a source has many questions (subsampled
         # option sets, per-row QA choices), and the route depends only on the count.
         key = (example.source, example.name, candidate_count(example.question))
@@ -94,19 +81,10 @@ def render(example: Example, codes: list[str] | None, style: Style = Style.PLAIN
 
 
 class ModeBatcher:
-    """Groups examples by readout mode and length, then emits fixed-size batches.
+    """Group by readout mode, sort within length windows, then shuffle batches.
 
-    An example whose options do not fit single tokens goes to Mode B; nothing is
-    dropped or capped.
-
-    **Batches are length-bucketed.** A batch pads to its longest row: on the real
-    mixture at batch 32, random batching computes 4.43x the real tokens (one
-    1,300-token imdb review among 31 short tickets); bucketing brings that to
-    1.43x, against a 1.03x floor (ADR-017).
-
-    Sorting happens within a window of `bucket_window` batches, not globally, so
-    length does not correlate with training order or source; batch order is then
-    shuffled.
+    Windowed sorting limits padding without globally ordering rows by length
+    or source. No examples are dropped.
     """
 
     def __init__(
@@ -125,16 +103,12 @@ class ModeBatcher:
         self.routes = routes or RouteCache(tokenizer, max_label_options)
         self.style = self.routes.style
 
-    def route_for(self, example: Example):
+    def route_for(self, example: Example) -> Route:
         return self.routes.route_for(example)
 
     @staticmethod
     def length_of(example: Example) -> int:
-        """Character count as a proxy for token count.
-
-        Tokenising twice would cost more than the padding it saves, and characters
-        track tokens closely enough (1.43x against a 1.03x floor).
-        """
+        """Use character count as a length proxy to avoid tokenizing twice."""
         return len(str(example.state))
 
     def __call__(self, examples: Iterable[Example], epoch: int = 0) -> Iterator[list[Example]]:

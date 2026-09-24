@@ -1,19 +1,12 @@
-"""FastAPI server for `/v1/systemone`.
+"""FastAPI endpoints for typed decisions and model health.
 
-Wire-identical to TypeSafe's endpoint, so levbench measures lev and Jev through
-the same code path:
-
-    levbench eval --backend jev --base-url http://localhost:8000
-
-Status codes follow the real API: 422 for a malformed request, 529 while the
-model is still loading. Loading is `lev.model.load`. Check `/health` before
-trusting a number: it shows which checkpoint resolved and whether calibration is
-in effect.
+Malformed requests return 422; requests without a loaded engine return 529.
+`/health` reports the resolved checkpoint, readout settings and calibration.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from .model import load
 from .types import SystemOneRequest, SystemOneResponse
@@ -24,15 +17,17 @@ def create_app(
     model_cache: str | None = None,
     calibration: str | None = None,
     model_id: str = "Qwen/Qwen3.5-4B-Base",
-    noul_readout: str | None = None,
+    noul_readout: Literal["rating", "binary"] | None = None,
     compile: bool = False,
     max_label_options: int | None = None,
-    prompt_style: str | None = None,
+    prompt_style: Literal["plain", "chat"] | None = None,
     skip_multi_token_codes: bool = True,
 ) -> Any:
     from fastapi import FastAPI, HTTPException
 
-    app = FastAPI(title="lev", version="0.1.0")
+    from . import __version__
+
+    app = FastAPI(title="lev", version=__version__)
     state: dict[str, Any] = {"engine": None}
 
     @app.on_event("startup")

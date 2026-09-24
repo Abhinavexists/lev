@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import sys
 from pathlib import Path
 
@@ -11,13 +12,10 @@ sys.path.insert(0, str(PKG / "src"))
 sys.path.insert(0, str(PKG / "tests"))
 
 import pytest  # noqa: E402
-from dotenv import load_dotenv  # noqa: E402
 from fake_transport import transport  # noqa: E402
 from levbench import batching, confidence_id, metrics, runner  # noqa: E402
 from levbench.tasks import dataset  # noqa: E402
 from typesafe_sdk import TypeSafeClient  # noqa: E402
-
-load_dotenv()
 
 
 def fake_client() -> TypeSafeClient:
@@ -141,7 +139,7 @@ def test_confidence_identifier_recovers_a_planted_formula() -> None:
                 options = list(question["criteria"])
                 # Varied, non-uniform distributions, so candidate statistics
                 # actually separate instead of coinciding.
-                raw = [1 + (hash((key, o)) % 97) for o in options]
+                raw = [1 + hashlib.sha256(f"{key}:{o}".encode()).digest()[0] % 97 for o in options]
                 total = sum(raw)
                 probs = {o: r / total for o, r in zip(options, raw, strict=True)}
                 answers[key] = {
@@ -206,48 +204,31 @@ def test_base_url_routes_to_a_local_clone() -> None:
     assert seen["url"] == "http://127.0.0.1:8000/v1/systemone", seen["url"]
 
 
-def test_local_base_url_never_forwards_the_real_key() -> None:
+def test_local_base_url_never_forwards_the_real_key(monkeypatch) -> None:
     """A `--base-url` server must not receive TYPESAFE_API_KEY (the SDK always
     sends `Authorization: Bearer <key>`); the hosted path still authenticates."""
-    import os
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-REAL-SECRET-KEY")
+    monkeypatch.delenv("LEVBENCH_LOCAL_API_KEY", raising=False)
+    local, _ = runner.build_client("jev", "litjev", "http://127.0.0.1:8000")
+    assert "REAL-SECRET" not in str(local._config.api_key), "leaked the real key"
+    assert local._config.api_key == "local"
 
-    previous = os.environ.get("TYPESAFE_API_KEY")
-    os.environ["TYPESAFE_API_KEY"] = "sk-REAL-SECRET-KEY"
-    try:
-        local, _ = runner.build_client("jev", "litjev", "http://127.0.0.1:8000")
-        assert "REAL-SECRET" not in str(local._config.api_key), "leaked the real key"
-        assert local._config.api_key == "local"
-
-        hosted, _ = runner.build_client("jev", "jev-latest")
-        assert hosted._config.api_key == "sk-REAL-SECRET-KEY", "hosted path lost its key"
-    finally:
-        if previous is None:
-            del os.environ["TYPESAFE_API_KEY"]
-        else:
-            os.environ["TYPESAFE_API_KEY"] = previous
+    hosted, _ = runner.build_client("jev", "jev-latest")
+    assert hosted._config.api_key == "sk-REAL-SECRET-KEY", "hosted path lost its key"
 
 
-def test_empty_local_key_env_var_falls_back() -> None:
+def test_empty_local_key_env_var_falls_back(monkeypatch) -> None:
     """`LEVBENCH_LOCAL_API_KEY=` (as copied from `.env.example`) must fall back.
 
     `os.environ.get(var, "local")` returns "" there, and the SDK then sends a
     malformed `Authorization: Bearer ` header (`LocalProtocolError: Illegal
     header value`).
     """
-    import os
-
-    previous = os.environ.get("LEVBENCH_LOCAL_API_KEY")
-    os.environ["LEVBENCH_LOCAL_API_KEY"] = ""
-    try:
-        client, _ = runner.build_client("lev")
-        assert client._config.api_key == "local", (
-            f"empty env var leaked through as {client._config.api_key!r}"
-        )
-    finally:
-        if previous is None:
-            os.environ.pop("LEVBENCH_LOCAL_API_KEY", None)
-        else:
-            os.environ["LEVBENCH_LOCAL_API_KEY"] = previous
+    monkeypatch.setenv("LEVBENCH_LOCAL_API_KEY", "")
+    client, _ = runner.build_client("lev")
+    assert client._config.api_key == "local", (
+        f"empty env var leaked through as {client._config.api_key!r}"
+    )
 
 
 def _write_task_file(path, question_type="choice", n=5):
@@ -412,16 +393,19 @@ def test_detect_precision_reads_the_quantisation_off_the_data() -> None:
 
 class TestConcurrentEval:
     def test_parallel_requests_keep_item_order_and_report_wall_time(self):
-        import time
+        from threading import Barrier
         from types import SimpleNamespace
 
         from levbench.runner import run_eval
         from levbench.tasks import FileItem
         from typesafe_sdk import Noul
 
-        class SlowStub:
+        barrier = Barrier(4)
+
+        class ConcurrentStub:
             def system_one(self, state, questions):
-                time.sleep(0.05)
+                # All four workers must enter before any request can finish.
+                barrier.wait(timeout=5)
                 return SimpleNamespace(
                     answers={
                         "q": SimpleNamespace(type="noul", noul=0.9 if state.endswith("1") else 0.1)
@@ -432,8 +416,8 @@ class TestConcurrentEval:
 
         items = [FileItem(f"state {i % 2}", {"q": i % 2 == 1}) for i in range(8)]
         questions = {"q": Noul(instructions="one?")}
-        report = run_eval(SlowStub(), "lev", "stub", items, questions, concurrency=4)
-        assert len(report.calls) == 8 and report.wall_seconds < 0.3
+        report = run_eval(ConcurrentStub(), "lev", "stub", items, questions, concurrency=4)
+        assert len(report.calls) == 8 and report.wall_seconds > 0
         preds = [rec[1] for rec in report.records["q"]]
         assert preds == [i % 2 == 1 for i in range(8)], "results must stay in item order"
 
@@ -472,5 +456,4 @@ class TestCostAccounting:
 
 
 if __name__ == "__main__":
-    # Delegate to pytest so running the module directly runs every test.
     raise SystemExit(pytest.main([__file__, "-v"]))

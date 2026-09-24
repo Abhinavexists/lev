@@ -1,14 +1,7 @@
-"""Materialise the mixture to disk as three JSONL splits.
+"""Write train, calibration and test JSONL files for offline training.
 
-Training reads from disk, not the network: a run that re-downloads its corpus is
-not reproducible, and an H100 stalled on a rate-limited dataset server is still
-billed.
-
-    lev data build --out data/mixture --limit-per-source 20000
-
-Writes `train.jsonl`, `calibration.jsonl`, `test.jsonl` and a `manifest.json`
-recording exactly what went into them -- source ids, row counts, the split salt
-and the resolved weights -- so a later run can prove it trained on the same data.
+The manifest records source ids, row counts, weights and split salt. Source
+rows are split before sampling or augmentation to prevent cross-split leakage.
 """
 
 from __future__ import annotations
@@ -45,12 +38,10 @@ def to_json(example: Example) -> dict:
 
 
 def _question_from(payload: dict, cache: dict[str, Question]) -> Question:
-    """Validate a question once per distinct schema, not once per row.
+    """Cache validated questions without changing option order.
 
-    Distinct includes option order, because `target` indexes it. A sorted key
-    merged shuffled rows into the first-seen order: 35-45% of shuffled Choice
-    rows in the ADR-020 mixture trained on wrong labels and clinc_oos fell to
-    0.055 (ADR-024).
+    Targets index that order, so sorting the cache key silently corrupts
+    labels on shuffled Choice rows (ADR-024).
     """
     key = json.dumps(payload, sort_keys=False)
     if key not in cache:
@@ -125,11 +116,7 @@ def build_dataset(
     cache_dir: str | None = None,
     loader: Callable | None = None,
 ) -> dict:
-    """Load every source, split it, then draw the mixture from the train split.
-
-    **Split first, mix second**: the other order lets one underlying row reach
-    both train and test under different layouts, a leak that flatters results.
-    """
+    """Split source rows before drawing or augmenting any mixture."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     weights = sources or default_weights()
@@ -159,7 +146,6 @@ def build_dataset(
 
         mixture = MixtureSpec(
             sources={name: weight / total_weight for name, weight in available.items()},
-            # Only train is oversampled to the budget.
             n_examples=(
                 n_examples if is_train else sum(len(rows) for rows in by_source[split].values())
             ),
@@ -193,8 +179,7 @@ def build_dataset(
     unique_train = sum(len(rows) for rows in by_source[Split.TRAIN].values())
     manifest = {
         "sources": {name: REGISTRY[name].hf_id for name in weights},
-        # Draws are with replacement, each with its own layout and abstain roll.
-        # Recorded because 1.4x oversampling at 3 epochs shows each row ~4 times.
+        # Sampling with replacement can expose each unique row more than once per epoch.
         "unique_train_rows": unique_train,
         "oversample_ratio": round(n_examples / max(1, unique_train), 2),
         "weights": weights,

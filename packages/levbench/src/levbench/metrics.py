@@ -1,15 +1,7 @@
-"""Calibration and accuracy metrics over typed answers.
+"""Accuracy and calibration over typed answer distributions.
 
-Every answer type is first flattened to a distribution over discrete labels, so
-one set of metrics covers Noul, Choice and Score.
-
-Confidence here is always the top probability of that distribution. Servers
-also report a `confidence` field, but each defines it differently -- Jev's is
-chance-corrected max probability, lev's is Gini concentration -- so calibration
-binned on it would compare different statistics across backends.
-
-`NoulAnswer` is a bare float, so a Noul is flattened to the two-way distribution
-{True: p, False: 1-p}: an inference, not a model output (FINDINGS.md §2).
+ECE uses top probability, since servers define their `confidence` fields
+differently. Noul is represented as {True: p, False: 1-p} for both backends.
 """
 
 from __future__ import annotations

@@ -1,16 +1,9 @@
-"""Reading and writing training checkpoints.
-
-A checkpoint is the LoRA adapter, Mode B head and tokenizer (what serving
-needs) plus the training state that lets a preempted run continue exactly
-(ADR-021). Separate from `loop` so readers (`lev.model`,
-`lev.train.calibration_run`) need not import the training loop.
-"""
+"""Read and write adapter, head and tokenizer checkpoints, with optional resume state."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-# Artifact names, shared by every module that writes or reads a checkpoint.
 TRAINING_STATE = "training_state.pt"
 MODE_B_HEAD = "mode_b_head.pt"
 CALIBRATION = "calibration.json"
@@ -82,14 +75,10 @@ def load_training_state(path: str | Path) -> dict | None:
 
 
 def load_checkpoint(model, head, path: str | Path) -> None:
-    """Restore adapter and head weights into an already-built model.
+    """Restore adapter and head weights into existing parameter tensors.
 
-    Not `model.load_adapter(path, adapter_name="default")`: `get_peft_model`
-    already created that adapter, so it would error or leave two. Writing into
-    the existing tensors also keeps the optimiser's parameter list valid.
-
-    A missing head file is fatal: a freshly initialised head would silently
-    discard every Mode B step taken before the preemption.
+    Keeping the tensors preserves optimiser references. A missing or unexpected
+    head is an error, since dropping it would discard Mode B training.
     """
     import torch
     from peft import set_peft_model_state_dict
@@ -125,12 +114,9 @@ def save_checkpoint(
     on_checkpoint=None,
     state: dict | None = None,
 ) -> Path:
-    """Write adapters, head and tokenizer together, and the training state.
+    """Write adapter, head and tokenizer, then optional training state.
 
-    Together because an adapter without its head cannot serve Mode B, and a
-    tokenizer mismatch silently changes which label token ids are read. `state`
-    is written last, so a write interrupted midway degrades to weights-only
-    rather than a corrupt state file.
+    Files are written individually; an interrupted save may be incomplete.
     """
     import torch
 

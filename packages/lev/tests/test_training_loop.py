@@ -167,7 +167,6 @@ class TestResume:
     def test_resumes_at_the_saved_step_and_sees_only_the_remaining_batches(
         self, tmp_path, monkeypatch
     ):
-        # The uninterrupted run, for reference.
         _, full, _ = self.run(tmp_path / "ref", monkeypatch, max_steps=10)
         # The same run, stopped at 6 and restarted.
         saved_a, seen_a, _ = self.run(tmp_path, monkeypatch, max_steps=6)

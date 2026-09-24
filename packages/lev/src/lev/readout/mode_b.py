@@ -1,20 +1,8 @@
-"""Mode B: score each candidate's own text against the question.
+"""Score candidate text with a shared attention head.
 
-This removes the option ceiling: each candidate's text is embedded and matched
-against the question's representation, rather than projected onto one label token.
-Candidates are scored as a *set* in one backbone forward, following NanoJev.
-
-    question repr ─┐
-                   ├─> set attention over candidates ─> shared scalar head ─> score
-    candidate reprs ┘
-
-Over Mode A it gains no single-token constraint, and the candidate's meaning
-reaches the scorer directly. It loses free ordinality: under Mode A a Score's
-ordering lives in the prompt text, but here nothing forces level i+1 to score
-above level i, so training adds `ordinal_penalty`.
-
-Measured size: 3.67M parameters at hidden=2560, proj=512 (2.10M at 1024,
-5.25M at 4096).
+Question and candidate representations are projected to the same dimension.
+Candidates attend to each other before scoring. Ordered targets also use
+`ordinal_penalty` during training.
 """
 
 from __future__ import annotations
@@ -24,11 +12,7 @@ from torch import nn
 
 
 class CandidatePathReadout(nn.Module):
-    """Shared matching head over a candidate set. 3.67M params at hidden=2560.
-
-    One head serves Choice, Score and Noul: the question type changes how the
-    resulting distribution is *interpreted*, not how it is produced.
-    """
+    """A candidate-set matching head shared by Choice, Score and Noul."""
 
     def __init__(self, hidden_size: int = 2560, proj_dim: int = 512, n_heads: int = 8):
         super().__init__()
@@ -60,7 +44,6 @@ class CandidatePathReadout(nn.Module):
         c = self.candidate_proj(candidate_reprs)
 
         attended, _ = self.set_attention(c, c, c, key_padding_mask=candidate_mask)
-        # Condition every candidate on the question before scoring.
         scores = self.score(self.norm(attended + q)).squeeze(-1)
 
         if candidate_mask is not None:
@@ -69,12 +52,7 @@ class CandidatePathReadout(nn.Module):
 
 
 def ordinal_penalty(scores: torch.Tensor, target_level: torch.Tensor) -> torch.Tensor:
-    """Penalise probability mass by its distance from the true level.
-
-    Cross-entropy scores "level 0 when the answer was 4" as badly as "level 3";
-    weighting by squared level distance restores the ordering Mode A gets from
-    the prompt.
-    """
+    """Expected squared distance from the true level under the predicted distribution."""
     n_levels = scores.size(-1)
     levels = torch.arange(n_levels, device=scores.device, dtype=scores.dtype)
     distance = (levels.unsqueeze(0) - target_level.unsqueeze(1).to(scores.dtype)) ** 2

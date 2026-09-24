@@ -1,12 +1,7 @@
-"""Chooses the readout mode per question.
+"""Route questions to label-token readout or candidate-text scoring.
 
-Label-token projects (simple-jev, litjev, decider, reflex) hit a ceiling when the
-options stop fitting in single tokens, and cap the count or reject the request.
-lev routes those questions to Mode B, which scores candidate *text* and has no
-ceiling.
-
-The boundary is whether every option maps to a verified single token for the
-loaded tokenizer, not an option count, which would break on a tokenizer swap.
+Mode A requires a verified single token per option and respects an optional
+policy cap. Questions that do not fit use Mode B.
 """
 
 from __future__ import annotations

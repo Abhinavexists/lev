@@ -1,17 +1,8 @@
-"""Internal label codes, and the single-token check that decides the readout mode.
-
-Mode A scores a bare letter code at the answer boundary, never the option's own
-text, so option keys are arbitrary strings and the model only sees `A`, `B`, ...
-(hence `Choice.criteria` is a map).
-
-Each code must be exactly one token for the loaded tokenizer. Where LitJev rejects
-a tokenizer that cannot express the codes, lev falls through to Mode B, which has
-no such limit.
-"""
+"""Label codes, tokenizer checks and conversion of Noul ratings to probability."""
 
 from __future__ import annotations
 
-from itertools import product
+from itertools import islice, product
 from string import ascii_uppercase
 
 # The single-letter boundary: above it the source registry treats a label set as
@@ -27,32 +18,20 @@ def label_codes(n: int) -> list[str]:
     """
     if n < 1:
         raise ValueError("need at least one code")
-    codes: list[str] = list(ascii_uppercase)
-    for width in (2, 3):
-        if len(codes) >= n:
-            break
-        codes.extend("".join(t) for t in product(ascii_uppercase, repeat=width))
+    codes = list(islice(_all_codes(), n))
     if n > len(codes):
         raise ValueError(f"{n} options exceeds the {len(codes)}-code scheme")
-    return codes[:n]
+    return codes
 
 
 def single_token_codes(
     tokenizer, n: int, prefix: str = " ", skip_multi_token: bool = False
 ) -> list[str] | None:
-    """Return `n` codes that are each one token, or None if that is impossible.
+    """Return `n` single-token codes, or None to request Mode B.
 
-    `prefix` is part of the check because the model predicts the token after
-    `Answer:`, which most tokenizers space-prefix; a bare code could verify while
-    the scored token differs.
-
-    By default the codes are the first `n` of the scheme, so a question always
-    gets the same codes. For Qwen3.5 the 69th, `BQ`, is two tokens, which makes 68
-    options the Mode A limit. `skip_multi_token` passes over split codes instead,
-    lifting the limit to several hundred. Serving enables it and training does
-    not, so Mode A never trains on a set above 68 (ADR-028).
-
-    None is not a failure; it routes the question to Mode B.
+    The prefix must match the answer boundary: a space in plain prompts,
+    no space in chat prompts. By default, all first `n` codes must pass.
+    Serving may skip split codes; training retains contiguous codes (ADR-028).
     """
     if not skip_multi_token:
         try:

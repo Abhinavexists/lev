@@ -1,9 +1,6 @@
-"""Score a trained checkpoint on a held-out split.
+"""Evaluate checkpoints through the training forward path, without fitting.
 
-Runs the training forward path (route, collate, candidate logits) and reports
-accuracy and calibration per source, with and without the fitted temperature;
-accuracy is the same in both, so only the pair shows whether calibration helped.
-This module evaluates on `test` and never fits.
+Report metrics per source before and after applying fitted temperatures.
 """
 
 from __future__ import annotations
@@ -17,13 +14,7 @@ from ..metrics import brier, log_loss
 
 
 def accuracy_interval(accuracy: float, n: int, z: float = 1.96) -> float:
-    """95% half-width on an accuracy estimate from `n` items.
-
-    Printed beside every accuracy because evaluation is not bit-reproducible:
-    bf16 reductions and the Triton linear-attention kernels do not pin their
-    reduction order, and two runs of one checkpoint have differed by one item in
-    200.
-    """
+    """Normal-approximation confidence interval half-width; 95% at the default z."""
     if n <= 0:
         return 1.0
     return min(1.0, z * math.sqrt(max(accuracy * (1 - accuracy), 1e-9) / n))
@@ -63,12 +54,13 @@ class EvalReport:
         ]
         total = sum(s.n for s in self.per_source)
         if total:
-            macro_acc = sum(s.accuracy * s.n for s in self.per_source) / total
-            macro_ece = sum(s.ece * s.n for s in self.per_source) / total
+            weighted_accuracy = sum(s.accuracy * s.n for s in self.per_source) / total
+            weighted_ece = sum(s.ece * s.n for s in self.per_source) / total
             rows.append(
                 f"  {'WEIGHTED':<18} {'':<6} {' '}  n={total:<5} "
-                f"acc {macro_acc:.3f} +/-{accuracy_interval(macro_acc, total):.3f}  "
-                f"ECE {macro_ece:.4f}"
+                f"acc {weighted_accuracy:.3f} "
+                f"+/-{accuracy_interval(weighted_accuracy, total):.3f}  "
+                f"ECE {weighted_ece:.4f}"
             )
         rows.append(
             "  Intervals are 95% on accuracy alone. The run is not bit-reproducible; "
@@ -81,19 +73,7 @@ def score(
     raw_logits: Sequence[tuple[list[float], int]], temperature: float
 ) -> tuple[float, float, float, float]:
     """Accuracy, ECE, mean Brier and mean log loss at one temperature."""
-    probs, truths = [], []
-    for logits, truth in raw_logits:
-        probs.append(softmax(logits, temperature))
-        truths.append(truth)
-    correct = sum(
-        max(range(len(p)), key=p.__getitem__) == t for p, t in zip(probs, truths, strict=True)
-    )
-    return (
-        correct / len(probs),
-        expected_calibration_error(probs, truths),
-        sum(brier(p, t) for p, t in zip(probs, truths, strict=True)) / len(probs),
-        sum(log_loss(p, t) for p, t in zip(probs, truths, strict=True)) / len(probs),
-    )
+    return score_mixed([(logits, truth, temperature) for logits, truth in raw_logits])
 
 
 def score_mixed(
@@ -166,7 +146,7 @@ def evaluate_split(
     device = device_of(model)
 
     # (source, question type, mode, option count) -> (raw logits, gold index) rows.
-    collected: dict[tuple[str, str, str], list[tuple[list[float], int]]] = {}
+    collected: dict[tuple[str, str, str, int], list[tuple[list[float], int]]] = {}
     with torch.no_grad():
         for group in batcher(rows):
             batch = to_device(collator(group), device)
@@ -188,9 +168,10 @@ def evaluate_split(
     for (source, qtype, mode), rows_t in sorted(per_source.items()):
         samples = [(lg, y) for lg, y, _ in rows_t]
         temperatures = {t for _, _, t in rows_t}
-        shown_t = temperatures.pop() if len(temperatures) == 1 else float("nan")
+        mixed_temperatures = len(temperatures) > 1
+        shown_t = next(iter(temperatures)) if not mixed_temperatures else float("nan")
         for report, calibrated in ((plain, False), (tuned, True)):
-            if calibrated and len({t for _, _, t in rows_t}) > 1:
+            if calibrated and mixed_temperatures:
                 accuracy, ece, mean_brier, mean_ll = score_mixed(rows_t)
             else:
                 accuracy, ece, mean_brier, mean_ll = score(samples, shown_t if calibrated else 1.0)

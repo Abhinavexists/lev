@@ -1,28 +1,8 @@
-"""The training sources: public classification datasets, cast as typed questions.
+"""Training dataset registry and readers for Choice, Score and Noul examples.
 
-The model learns to put calibrated mass on a candidate set, not world
-knowledge, so a gold label plus an explicit option set (a classification corpus)
-is the supervision it needs. The registry covers:
-
-  primitives    Choice, Score and Noul all need supervision: a Choice-only
-                mixture teaches nothing about the 9-rating Noul readout or
-                Score's ordinal structure.
-  large sets    banking77 (77 intents) and clinc_oos (151) are the only sources
-                above 26 options; their full sets are the Mode B head's training
-                data, weighted up by `default_weights` (`MODE_B_SOURCES`).
-  cleanliness   every id is checked against the ADR-009 block list at import.
-
-Label names come from each dataset's `ClassLabel` rather than being retyped: a
-reordered list would silently become a wrong gold answer.
-
-Every id is parquet-backed and loads under `datasets>=5`, which no longer runs
-dataset scripts. `CogComp/trec` and `takala/financial_phrasebank` have no parquet
-mirror with their label names, so they are omitted; `PolyAI/banking77` is
-script-backed, so `legacy-datasets/banking77` (same corpus, `ClassLabel` intact)
-is used instead.
-
-**Loadability is not tested**: the suite injects fake loaders, so a dead or
-renamed id surfaces only on the next real `data build`.
+Label order comes from ClassLabel metadata unless explicitly pinned. Every
+source id is checked against the evaluation block list at import. Tests use
+fake loaders; they do not verify that upstream datasets remain available.
 """
 
 from __future__ import annotations
@@ -35,7 +15,7 @@ from typing import Literal
 
 from ..labels import LABEL_OPTION_CAP, NOUL_RATING_TOKENS
 from ..prompt import Layout
-from ..types import Choice, Noul, Question, Score
+from ..types import Choice, JSONContent, Noul, Question, Score
 from .contamination import assert_clean
 from .mixture import Augment, Example
 
@@ -45,30 +25,23 @@ _LARGE_OPTION_SETS = frozenset({"banking77", "clinc_oos"})
 
 Primitive = Literal["choice", "score", "noul"]
 
-# Mode B's share of the mixture, not proportional to corpus size: only 2 of the
-# 29 sources train the candidate-path head, which a size-weighted mixture would
-# starve (ADR-013).
+# Reserve a share for large taxonomies so the Mode B head gets enough data (ADR-013).
 MODE_B_SHARE = 0.25
 
 
 # What a per-row reader returns: the state to show, the option texts if the row
 # carries its own (None means the source's fixed label set), and the gold index.
 Row = tuple[str | dict, list[str] | None, int]
-Reader = Callable[[dict, random.Random], Row | None]
+# Readers may yield several examples from one row, or None to skip it.
+Reader = Callable[[dict, random.Random], Row | list[Row] | None]
 
 
 @dataclass(frozen=True)
 class SourceSpec:
-    """One HuggingFace dataset, and how to read a typed question out of it.
+    """A dataset and its question, label mapping and optional row reader.
 
-    `instructions` is the canonical wording, used for the held-out splits;
-    training samples `paraphrases`, and `negations` (Noul only) flip the target.
-    With one fixed wording per source the model learned to ignore the question:
-    on aegis2 "is this unsafe?" and "is this safe?" returned the same number
-    (ADR-020).
-
-    `reader` handles sources whose rows are not `text_field` + `label_field`:
-    QA sets with per-row options, sentence pairs, nested rating annotations.
+    Training can sample paraphrases or negate Noul questions. A custom reader
+    handles per-row choices, sentence pairs and nested annotations.
     """
 
     name: str
@@ -93,11 +66,6 @@ class SourceSpec:
         if self.name in _LARGE_OPTION_SETS:
             return True
         return bool(self.label_names) and len(self.label_names) > LABEL_OPTION_CAP
-
-
-# Per-row readers return `(state, options, target)`, a list of them, or None to
-# skip the row. `options` is None for a fixed label set. `rng` is the loader's
-# seeded stream, so shuffling readers stay reproducible.
 
 
 def _read_race(row: dict, rng: random.Random) -> Row | None:
@@ -177,13 +145,10 @@ def swap_two_words(text: str, rng: random.Random) -> str | None:
 
 
 def _read_pair(first: str, second: str, adversarial: float = 0.0) -> Reader:
-    """Sentence pairs with a 0/1 paraphrase label.
+    """Read labelled sentence pairs, optionally adding word-swapped negatives.
 
-    With `adversarial` > 0, that fraction of positive pairs also yields a
-    negative with two words of the second sentence exchanged. mrpc and qqp
-    reward lexical overlap; PAWS (blocked evaluation data) is built from exactly
-    these high-overlap non-paraphrases, and the second run learned the shortcut
-    (S1Bench paws 0.612).
+    `adversarial` is the fraction of positive pairs that also yield a negative,
+    reducing the usefulness of lexical overlap as a shortcut.
     """
 
     def reader(row: dict, rng: random.Random) -> list[Row] | None:
@@ -217,8 +182,6 @@ def _read_nli_fever(row: dict, rng: random.Random) -> Row | None:
 
 
 def _read_parade(row: dict, rng: random.Random) -> Row | None:
-    """Two definitions of one term; binary label 1 when they are paraphrases.
-    Overlap is high either way, which is the point."""
     return (
         {"sentence1": row["Definition1"], "sentence2": row["Definition2"]},
         None,
@@ -227,17 +190,11 @@ def _read_parade(row: dict, rng: random.Random) -> Row | None:
 
 
 def _read_strategyqa(row: dict, rng: random.Random) -> Row | None:
-    """A yes/no question whose answer needs the facts given; answers are balanced."""
     return {"question": row["question"], "facts": row["facts"]}, None, int(bool(row["answer"]))
 
 
 def yes_no_from_choices(reader: Reader) -> Reader:
-    """Turn a multiple-choice reader into a yes/no one.
-
-    Each MC row yields two Noul rows: the gold option proposed ("yes") and a
-    wrong one ("no"). Grounded yes/no supervision with no new corpus, putting
-    "yes" on a factual axis rather than a sentiment one.
-    """
+    """Turn each multiple-choice row into two Noul rows: gold and wrong proposals."""
 
     def wrapped(row: dict, rng: random.Random) -> list[Row] | None:
         produced = reader(row, rng)
@@ -288,6 +245,8 @@ def _read_ultrafeedback(row: dict, rng: random.Random) -> list[Row] | None:
     out: list[Row] = []
     for completion in row.get("completions") or []:
         rating = ((completion.get("annotations") or {}).get("helpfulness") or {}).get("Rating")
+        if rating is None:
+            continue
         try:
             level = int(rating) - 1
         except (TypeError, ValueError):
@@ -699,21 +658,12 @@ def adjacency_map() -> dict[str, frozenset[str]]:
 
 
 def _noul_rating(label: int) -> int:
-    """Map a binary class onto the ends of the 0-8 rating scale.
-
-    Noul is read from nine rating tokens, so the target is a rating: passing the
-    raw class through would train "yes" as rating 1, which `noul_probability`
-    reads back as P(yes) = 0.125.
-    """
+    """Map binary labels to ratings 0 and 8; rating 1 would mean P(yes)=0.125."""
     return 0 if int(label) == 0 else len(NOUL_RATING_TOKENS) - 1
 
 
 def humanise(label: str) -> str:
-    """`card_arrival` -> `card arrival`; `Sci/Tech` is left alone.
-
-    banking77 and clinc_oos ship snake_case intent ids, which no real request
-    would use as option text.
-    """
+    """Expand snake_case and camelCase labels; leave names such as Sci/Tech intact."""
     spaced = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", label)
     return re.sub(r"[_\-]+", " ", spaced).strip()
 
@@ -740,7 +690,9 @@ def build_question(spec: SourceSpec, names: list[str]) -> Question:
         return Noul(instructions=spec.instructions)
     options = [humanise(n) for n in names]
     if spec.primitive == "score":
-        return Score(instructions=spec.instructions, criteria=options)
+        # `list` is invariant, so the element type has to be the one Score declares.
+        levels: list[JSONContent] = [*options]
+        return Score(instructions=spec.instructions, criteria=levels)
     return Choice(
         instructions=spec.instructions,
         criteria={opt: spec.descriptions.get(raw) for opt, raw in zip(options, names, strict=True)},
@@ -755,12 +707,9 @@ def load_source(
     seed: int = 17,
     load_dataset: Callable | None = None,
 ) -> Iterator[Example]:
-    """Yield Examples from one source, sampling rather than truncating.
+    """Yield examples, shuffling before applying a row limit.
 
-    `limit` **shuffles first** (seeded): most of these corpora ship grouped by
-    label, so `imdb[:400]` is 400 negative reviews, and every split drawn from a
-    head slice is biased the same way, so nothing downstream notices.
-
+    A head slice can contain only one class in a label-sorted corpus.
     `load_dataset` is injectable so tests run offline.
     """
     if load_dataset is None:
@@ -797,6 +746,8 @@ def load_source(
 
     for i, row in enumerate(dataset):
         if spec.reader is None:
+            if names is None or fixed_question is None:
+                raise ValueError(f"{spec.name}: no reader, so a fixed label set is required")
             text = row[spec.text_field]
             if not text or not text.strip():
                 continue
@@ -811,7 +762,7 @@ def load_source(
             if _blank(state):
                 continue
             if options is None:
-                if fixed_question is None:
+                if fixed_question is None or names is None:
                     raise ValueError(f"{spec.name}: reader gave no options and spec has no labels")
                 yield emit(state, fixed_question, target, len(names), i)
             else:
@@ -831,9 +782,7 @@ def _blank(state) -> bool:
     return not any(str(v).strip() for v in state.values())
 
 
-# The smallest set a large taxonomy is cut down to, so Mode A trains on sets far
-# larger than any small source offers: massive-en-US's regime, where the first
-# instruct model trailed the frozen backbone by 8 points.
+# Keep subsampled large taxonomies large enough to train Mode A beyond small sets.
 LARGE_SET_MIN_OPTIONS = 15
 
 

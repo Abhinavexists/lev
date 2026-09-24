@@ -1,15 +1,7 @@
-"""Temperature scaling, the cheapest large calibration win.
+"""Temperature scaling by question type, readout mode and Choice option count.
 
-On the S1Bench board, untuned Qwen3.5 backbones sit at ECE 0.4252; reflex, the
-same family plus one fitted scalar, reaches 0.0849; Jev is 0.0764.
-
-Two rules are enforced in code:
-
-1. **Fit per bucket.** Choice, Score and Noul produce differently shaped
-   distributions, and Mode A and Mode B produce them differently, so the key is
-   (type, mode), plus an option-count band for Choice.
-2. **Never fit on held-out data.** `fit` and `fit_for_transfer` take a split name
-   and refuse "test", "eval" and "holdout".
+Fits reject test, eval and holdout splits. Transfer selection compares row-
+and family-weighted fits using leave-one-family-out ECE (ADR-028).
 """
 
 from __future__ import annotations
@@ -78,18 +70,6 @@ def fit_temperature(
         return 1.0
     return fitted
 
-
-# Calibration for task families the model has not seen. A temperature fitted on
-# held-out rows comes from the training distribution, where the model is most
-# reliable. Two fits are compared by how well each transfers to an unseen family:
-#
-#   rows    every calibration row weighted equally
-#   family  every task family weighted equally, so large, easy, familiar families
-#           stop setting the temperature for small, hard ones
-#
-# Transfer is leave-one-family-out ECE: fit on all families but one, measure on
-# that one, average. Per bucket the lower one wins; the rule is fixed before any
-# external benchmark is consulted (ADR-028).
 
 MIN_FAMILIES_FOR_TRANSFER = 3
 
@@ -163,12 +143,7 @@ def fit_for_transfer(
 def expected_calibration_error(
     probs: Sequence[Sequence[float]], truths: Sequence[int], n_bins: int = 10
 ) -> float:
-    """Sample-weighted mean gap between top-probability and accuracy.
-
-    A perfectly calibrated model that says "80% confident" is right 80% of the
-    time, so within each confidence bin the mean confidence should equal the
-    accuracy. ECE is the average of those gaps, weighted by bin population.
-    """
+    """Sample-weighted mean absolute gap between top probability and accuracy."""
     if not probs:
         return 0.0
 
@@ -191,10 +166,7 @@ def expected_calibration_error(
     return total_weighted_gap / len(probs)
 
 
-# Choice temperatures are fitted per option-count band. One `choice:A` scalar
-# fitted on 3-14 options left a 60-option question under-confident (ECE 0.20
-# on massive-en-US at accuracy 0.95 above p=0.5): the softmax over many more
-# candidates spreads mass differently, and one temperature cannot serve both.
+# Softmax spreads mass differently as option count grows, so Choice fits use bands.
 CHOICE_BANDS = ((8, "small"), (26, "mid"))
 
 
@@ -260,11 +232,7 @@ def fit(
     split_name: str,
     min_samples: int = 50,
 ) -> CalibrationProfile:
-    """Fit one temperature per bucket.
-
-    Refuses "test", "eval" and "holdout": a profile fitted on test labels looks
-    excellent and means nothing.
-    """
+    """Fit one temperature per bucket; reject test, eval and holdout splits."""
     if split_name.lower() in {"test", "eval", "holdout"}:
         raise ValueError(
             f"refusing to fit calibration on split {split_name!r}. "

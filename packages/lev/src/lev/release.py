@@ -1,13 +1,6 @@
-"""Package a checkpoint for distribution, and publish it to the Hub.
+"""Package adapters, head, tokenizer and calibration into a flat Hub release.
 
-A release is one flat directory: the LoRA adapter, the Mode B head, the
-tokenizer, the fitted `calibration.json`, a `lev_release.json` manifest and a
-model card. `lev.load` and `lev serve` load it as-is from disk or the Hub, so it
-is what `modal volume get` pulls, `lev release publish` uploads and a user
-downloads.
-
-The manifest records what the weights mean nothing without: the base model the
-adapter belongs to and the prompt format it was trained in.
+The manifest pins the base model and prompt format required to load it.
 """
 
 from __future__ import annotations

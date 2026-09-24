@@ -37,6 +37,12 @@ class TestLabelCodes:
         codes = label_codes(700)
         assert len(set(codes)) == len(codes)
 
+    def test_codes_cover_the_three_letter_boundary_and_final_code(self):
+        codes = label_codes(18_278)
+        assert codes[701:703] == ["ZZ", "AAA"]
+        assert codes[-1] == "ZZZ"
+        assert len(set(codes)) == 18_278
+
     def test_rejects_zero_and_oversized_option_counts(self):
         with pytest.raises(ValueError):
             label_codes(0)

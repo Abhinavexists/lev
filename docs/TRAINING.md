@@ -232,6 +232,7 @@ compute      3.2e10 x 7.7e7 = 2.46e18 FLOPs
 H100         ~400 TFLOP/s sustained bf16 (not the 990 peak)
              2.46e18 / 4e14 = 6.1e3 s = 1.7 hours
 cross-check  18,750 steps @ 32 examples/step = 0.33 s/step
+```
 
 The 128 tokens is **measured** (a 121-token mean over 1,500 rendered prompts from
 the real mixture under the Qwen3.5 tokenizer, rounded up). Per source it runs
@@ -247,7 +248,6 @@ This arithmetic assumes the model computes on the real tokens; it computes on
 the padded rectangle. Batches are length-bucketed, which takes padding from
 4.43x to 1.43x, and the linear-attention kernels are installed, so treat ~2 h
 as a floor. [ADR-017.](DECISIONS.md#adr-017--batches-are-length-bucketed-and-the-budget-was-wrong-again)
-```
 
 `make plan` recomputes this from the config, so changing any knob shows the new cost
 _before_ you rent the GPU.
@@ -400,5 +400,5 @@ Ranked by what they would actually change:
 ## What has been run
 
 Three 4B runs have been trained, calibrated and scored on S1Bench; what each run
-changed and measured is in [FINDINGS §12–16](FINDINGS.md), and the component
+changed and measured is in [FINDINGS §12–17](FINDINGS.md), and the component
 status table is in [STATUS.md](STATUS.md).
