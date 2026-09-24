@@ -1,0 +1,76 @@
+# `uv run levbench eval --backend jev --tasks data/s1bench`, sequential (concurrency 1),
+# run from the maintainer's laptop on 2026-09-22 against the hosted TypeSafe API
+# (served jev-1.13.0). Pasted verbatim from the terminal; per-bin reliability
+# tables omitted. The same task files as every lev run.
+
+=== aegis2  (250 items) ===
+=== jev / jev-latest ===
+calls              250
+latency p50        0.348s
+latency mean       0.361s
+latency p95        0.412s
+input tokens       85,850
+output tokens      5,750
+total cost         $0.003606
+-- aegis2
+   accuracy 0.832   log-loss 0.3654   brier 0.2299   ECE 0.0310
+
+=== boolq  (300 items) ===
+=== jev / jev-latest ===
+calls              300
+latency p50        0.349s
+latency mean       0.360s
+latency p95        0.422s
+input tokens       135,750
+output tokens      6,300
+total cost         $0.005701
+-- boolq
+   accuracy 0.910   log-loss 0.2501   brier 0.1474   ECE 0.0283
+
+=== helpsteer2  (250 items) ===
+=== jev / jev-latest ===
+calls              250
+latency p50        0.357s
+latency mean       0.367s
+latency p95        0.428s
+input tokens       201,798
+output tokens      5,000
+total cost         $0.008476
+-- helpsteer2
+   accuracy 0.304   log-loss 3.6638   brier 0.8680   ECE 0.2927
+
+=== massive-en-US  (350 items) ===
+=== jev / jev-latest ===
+calls              350
+latency p50        0.354s
+latency mean       0.358s
+latency p95        0.406s
+input tokens       442,477
+output tokens      201,894
+total cost         $0.018584
+-- massive-en-US
+   accuracy 0.814   log-loss 1.7973   brier 0.2827   ECE 0.0815
+
+=== paws  (250 items) ===
+=== jev / jev-latest ===
+calls              250
+latency p50        0.344s
+latency mean       0.351s
+latency p95        0.411s
+input tokens       92,220
+output tokens      5,250
+total cost         $0.003873
+-- paws
+   accuracy 0.820   log-loss 0.4050   brier 0.2583   ECE 0.0380
+
+=== vitaminc-dev  (599 items) ===
+=== jev / jev-latest ===
+calls              599
+latency p50        0.348s
+latency mean       0.355s
+latency p95        0.408s
+input tokens       251,430
+output tokens      29,913
+total cost         $0.010560
+-- vitaminc-dev
+   accuracy 0.846   log-loss 1.4228   brier 0.2435   ECE 0.0694

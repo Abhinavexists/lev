@@ -1,0 +1,170 @@
+# `uv run levbench eval --backend lev --tasks data/s1bench --concurrency 1`, sequential,
+# from the same laptop as the Jev log, 2026-09-24, against the deployed 4b-instruct/step-18750
+# (chat prompts, skipped label codes, transfer-selected calibration; see /health below).
+# {"status":"ok","model":"Qwen/Qwen3.5-4B","checkpoint":"/checkpoints/4b-instruct/step-18750","calibrated":true,"mode_b":true,"noul_readout":"rating","max_label_options":null,"order_average":true,"prefix_mode":"single","compiled":false,"prompt_style":"chat","skip_multi_token_codes":true}
+
+
+=== aegis2  (250 items) ===
+=== lev / Qwen/Qwen3.5-4B ===
+wall time          159.6s  (1.57 items/s)
+calls              250
+latency p50        0.419s
+latency mean       0.638s
+latency p95        0.518s
+input tokens       38,764
+output tokens      0
+total cost         self-hosted (GPU time, not per-token)
+schema retries     0
+transient retries  0
+
+-- aegis2
+   accuracy 0.864   log-loss 0.4034   brier 0.2369   ECE 0.0817
+   conf>=0.5: accuracy 0.864 on 100% of items
+   conf>=0.7: accuracy 0.866 on 96% of items
+   conf>=0.9: accuracy 0.910 on 80% of items
+   reliability (confidence bin -> accuracy, n):
+     [0.5,0.6)  conf 0.533  acc 0.800  n=5  gap -0.267
+     [0.6,0.7)  conf 0.653  acc 0.833  n=6  gap -0.180
+     [0.7,0.8)  conf 0.753  acc 0.600  n=10  gap +0.153
+     [0.8,0.9)  conf 0.858  acc 0.667  n=30  gap +0.191
+     [0.9,1.0)  conf 0.964  acc 0.910  n=199  gap +0.054
+
+
+=== boolq  (300 items) ===
+=== lev / Qwen/Qwen3.5-4B ===
+wall time          133.8s  (2.24 items/s)
+calls              300
+latency p50        0.444s
+latency mean       0.446s
+latency p95        0.499s
+input tokens       77,935
+output tokens      0
+total cost         self-hosted (GPU time, not per-token)
+schema retries     0
+transient retries  0
+
+-- boolq
+   accuracy 0.880   log-loss 0.3831   brier 0.2151   ECE 0.0847
+   conf>=0.5: accuracy 0.880 on 100% of items
+   conf>=0.7: accuracy 0.879 on 99% of items
+   conf>=0.9: accuracy 0.896 on 90% of items
+   reliability (confidence bin -> accuracy, n):
+     [0.5,0.6)  conf 0.507  acc 1.000  n=1  gap -0.493
+     [0.6,0.7)  conf 0.690  acc 1.000  n=2  gap -0.310
+     [0.7,0.8)  conf 0.763  acc 0.667  n=3  gap +0.096
+     [0.8,0.9)  conf 0.871  acc 0.708  n=24  gap +0.162
+     [0.9,1.0)  conf 0.971  acc 0.896  n=270  gap +0.075
+
+
+=== helpsteer2  (250 items) ===
+=== lev / Qwen/Qwen3.5-4B ===
+wall time          114.2s  (2.19 items/s)
+calls              250
+latency p50        0.463s
+latency mean       0.457s
+latency p95        0.498s
+input tokens       160,136
+output tokens      0
+total cost         self-hosted (GPU time, not per-token)
+schema retries     0
+transient retries  0
+
+-- helpsteer2
+   accuracy 0.360   log-loss 1.3991   brier 0.7276   ECE 0.1554
+   conf>=0.5: accuracy 0.000 on 0% of items
+   conf>=0.7: accuracy 0.000 on 0% of items
+   conf>=0.9: accuracy 0.000 on 0% of items
+   reliability (confidence bin -> accuracy, n):
+     [0.0,0.1)  conf 0.072  acc 0.182  n=22  gap -0.110
+     [0.1,0.2)  conf 0.163  acc 0.182  n=88  gap -0.019
+     [0.2,0.3)  conf 0.238  acc 0.492  n=124  gap -0.254
+     [0.3,0.4)  conf 0.345  acc 0.462  n=13  gap -0.117
+     [0.4,0.5)  conf 0.438  acc 1.000  n=3  gap -0.562
+
+
+=== massive-en-US  (350 items) ===
+=== lev / Qwen/Qwen3.5-4B ===
+wall time          154.1s  (2.27 items/s)
+calls              350
+latency p50        0.428s
+latency mean       0.440s
+latency p95        0.494s
+input tokens       446,297
+output tokens      0
+total cost         self-hosted (GPU time, not per-token)
+schema retries     0
+transient retries  0
+
+-- massive-en-US
+   accuracy 0.791   log-loss 0.9720   brier 0.3104   ECE 0.0501
+   conf>=0.5: accuracy 0.893 on 77% of items
+   conf>=0.7: accuracy 0.913 on 72% of items
+   conf>=0.9: accuracy 0.958 on 55% of items
+   reliability (confidence bin -> accuracy, n):
+     [0.0,0.1)  conf 0.038  acc 0.222  n=18  gap -0.184
+     [0.1,0.2)  conf 0.152  acc 0.500  n=6  gap -0.348
+     [0.2,0.3)  conf 0.258  acc 0.300  n=10  gap -0.042
+     [0.3,0.4)  conf 0.356  acc 0.417  n=24  gap -0.061
+     [0.4,0.5)  conf 0.429  acc 0.714  n=21  gap -0.285
+     [0.5,0.6)  conf 0.559  acc 0.625  n=8  gap -0.066
+     [0.6,0.7)  conf 0.653  acc 0.636  n=11  gap +0.017
+     [0.7,0.8)  conf 0.757  acc 0.684  n=19  gap +0.072
+     [0.8,0.9)  conf 0.855  acc 0.810  n=42  gap +0.045
+     [0.9,1.0)  conf 0.957  acc 0.958  n=191  gap -0.001
+
+
+=== paws  (250 items) ===
+=== lev / Qwen/Qwen3.5-4B ===
+wall time          107.4s  (2.33 items/s)
+calls              250
+latency p50        0.417s
+latency mean       0.430s
+latency p95        0.487s
+input tokens       44,398
+output tokens      0
+total cost         self-hosted (GPU time, not per-token)
+schema retries     0
+transient retries  0
+
+-- paws
+   accuracy 0.716   log-loss 0.9041   brier 0.5001   ECE 0.2368
+   conf>=0.5: accuracy 0.716 on 100% of items
+   conf>=0.7: accuracy 0.724 on 98% of items
+   conf>=0.9: accuracy 0.737 on 91% of items
+   reliability (confidence bin -> accuracy, n):
+     [0.5,0.6)  conf 0.556  acc 0.000  n=2  gap +0.556
+     [0.6,0.7)  conf 0.627  acc 0.500  n=2  gap +0.127
+     [0.8,0.9)  conf 0.868  acc 0.556  n=18  gap +0.312
+     [0.9,1.0)  conf 0.966  acc 0.737  n=228  gap +0.229
+
+
+=== vitaminc-dev  (599 items) ===
+=== lev / Qwen/Qwen3.5-4B ===
+wall time          260.8s  (2.30 items/s)
+calls              599
+latency p50        0.414s
+latency mean       0.435s
+latency p95        0.536s
+input tokens       160,891
+output tokens      0
+total cost         self-hosted (GPU time, not per-token)
+schema retries     0
+transient retries  0
+
+-- vitaminc-dev
+   accuracy 0.738   log-loss 0.7283   brier 0.3964   ECE 0.2069
+   conf>=0.5: accuracy 0.833 on 63% of items
+   conf>=0.7: accuracy 0.910 on 26% of items
+   conf>=0.9: accuracy 0.000 on 0% of items
+   reliability (confidence bin -> accuracy, n):
+     [0.0,0.1)  conf 0.057  acc 0.529  n=17  gap -0.472
+     [0.1,0.2)  conf 0.165  acc 0.500  n=36  gap -0.335
+     [0.2,0.3)  conf 0.251  acc 0.508  n=63  gap -0.257
+     [0.3,0.4)  conf 0.350  acc 0.533  n=45  gap -0.183
+     [0.4,0.5)  conf 0.452  acc 0.733  n=60  gap -0.281
+     [0.5,0.6)  conf 0.549  acc 0.755  n=98  gap -0.206
+     [0.6,0.7)  conf 0.655  acc 0.798  n=124  gap -0.143
+     [0.7,0.8)  conf 0.744  acc 0.899  n=139  gap -0.155
+     [0.8,0.9)  conf 0.818  acc 1.000  n=17  gap -0.182
+
+eval exit 0

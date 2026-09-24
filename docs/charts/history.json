@@ -1,0 +1,24 @@
+{
+  "_about": "Values recorded in docs/FINDINGS.md at the time of measurement. The final lev numbers are not here: build.py reads them from logs/lev-s1bench-final.txt.",
+  "macro_accuracy": [
+    {"label": "run 1\nBase, 9 sources", "value": 0.489, "source": "FINDINGS §12"},
+    {"label": "run 2\ninstruct, 23 src", "value": 0.612, "source": "FINDINGS §15"},
+    {"label": "run 2\n+ Mode A to limit", "value": 0.697, "source": "FINDINGS §15, ADR-025"},
+    {"label": "run 3\nchat, 29 sources", "value": 0.725, "source": "FINDINGS §16"}
+  ],
+  "frozen_backbone": 0.710,
+  "speed": {
+    "source": "FINDINGS §13, ADR-023 (modal run modal/app.py::profile_engine, 3-question request)",
+    "container_compute_ms": [
+      {"label": "prefill + fork (original)", "value": 169.0},
+      {"label": "prefill + fork, conv kernel", "value": 139.7},
+      {"label": "single batched forward", "value": 81.4},
+      {"label": "single + conv kernel (served)", "value": 69.1}
+    ],
+    "benchmark_throughput": [
+      {"label": "original path, sequential", "value": 1.02, "wall": "1,999 items in 32m34s (full suite)"},
+      {"label": "new path, concurrency 1", "value": 2.23, "wall": "250 items in 112.0s"},
+      {"label": "new path, concurrency 4", "value": 6.36, "wall": "250 items in 39.3s"}
+    ]
+  }
+}
