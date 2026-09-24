@@ -17,7 +17,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+# Artifact names, shared by every module that writes or reads a checkpoint.
 TRAINING_STATE = "training_state.pt"
+MODE_B_HEAD = "mode_b_head.pt"
+CALIBRATION = "calibration.json"
 
 
 def latest_checkpoint(output: str | Path) -> Path | None:
@@ -110,7 +113,7 @@ def load_checkpoint(model, head, path: str | Path) -> None:
     source = resolve_checkpoint(path)
     set_peft_model_state_dict(model, load_file(str(source / "adapter_model.safetensors")))
 
-    head_file = source / "mode_b_head.pt"
+    head_file = source / MODE_B_HEAD
     if head is not None:
         if not head_file.is_file():
             raise FileNotFoundError(
@@ -153,7 +156,7 @@ def save_checkpoint(
     model.save_pretrained(path)
     tokenizer.save_pretrained(path)
     if head is not None:
-        torch.save(head.state_dict(), path / "mode_b_head.pt")
+        torch.save(head.state_dict(), path / MODE_B_HEAD)
     if state is not None:
         torch.save(state, path / TRAINING_STATE)
     if on_checkpoint is not None:

@@ -12,10 +12,13 @@ fitted across both lands between them and improves neither.
 
 from __future__ import annotations
 
+import json
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
-from ..calibrate import CalibrationProfile, fit
+from ..calibrate import CalibrationProfile, fit, fit_for_transfer
+from .checkpoints import CALIBRATION
 
 
 def fit_profile(
@@ -24,12 +27,41 @@ def fit_profile(
     split: str = "calibration",
     on_complete: Callable[[], None] | None = None,
     config=None,
+    method: str = "transfer",
 ) -> dict:
-    """Collect raw logits on `split`, fit one temperature per (type, mode)."""
-    buckets = collect_logits(checkpoint_dir, data_dir, split, config=config)
-    profile = fit(buckets, split_name=split)
+    """Collect raw logits on `split`, fit one temperature per bucket.
 
-    out = Path(checkpoint_dir) / "calibration.json"
+    `method="transfer"` fits each bucket both by rows and by task family and
+    keeps whichever has the lower leave-one-family-out ECE (ADR-028), writing
+    the comparison to `calibration.report.json`. `method="rows"` is the
+    original fit. An existing profile is kept as `calibration.previous.json`.
+    """
+    rows = collect_logits(checkpoint_dir, data_dir, split, config=config)
+    out = Path(checkpoint_dir) / CALIBRATION
+    if out.is_file():
+        shutil.copy2(out, out.with_name("calibration.previous.json"))
+
+    report = None
+    if method == "transfer":
+        profile, report = fit_for_transfer(rows, split_name=split)
+        out.with_name("calibration.report.json").write_text(json.dumps(report, indent=2) + "\n")
+        for bucket, entry in sorted(report.items()):
+            if "lofo_ece_rows" in entry:
+                print(
+                    f"  {bucket:<16} families={entry['families']:<3} "
+                    f"rows T={entry['t_rows']:.3f} lofo ECE {entry['lofo_ece_rows']:.4f} | "
+                    f"family T={entry['t_family']:.3f} lofo ECE {entry['lofo_ece_family']:.4f}"
+                    f"  -> {entry['chosen']}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"  {bucket:<16} families={entry['families']:<3} "
+                    f"rows T={entry['t_rows']:.3f} (too few families)",
+                    flush=True,
+                )
+    else:
+        profile = fit({k: [(lg, y) for lg, y, _ in v] for k, v in rows.items()}, split_name=split)
     profile.save(out)
     if on_complete:
         on_complete()
@@ -38,6 +70,7 @@ def fit_profile(
         "profile": str(out),
         "temperatures": profile.temperatures,
         "n_samples": profile.n_samples,
+        "report": report,
     }
 
 
@@ -48,7 +81,7 @@ def collect_logits(
     config=None,
     batch_size: int = 16,
     limit: int | None = None,
-) -> dict[str, list[tuple[list[float], int]]]:
+) -> dict[str, list[tuple[list[float], int, str]]]:
     """Raw (pre-softmax) candidate logits per bucket, keyed `"{type}:{mode}"`.
 
     Runs the *trained* engine over the calibration split under `no_grad`. The
@@ -56,11 +89,13 @@ def collect_logits(
     temperature on already-tempered scores would measure the previous fit.
 
     Abstain rows are skipped: they have no single correct answer, and a
-    temperature is fitted against a gold index.
+    temperature is fitted against a gold index. Each sample carries its task
+    family (`sources.family_of`) for the transfer-selected fit.
     """
     import torch
 
     from ..data.build import load_split
+    from ..data.sources import family_of
     from ..data.splits import Split
     from ..prompt import Style
     from ..train.checkpoints import load_checkpoint
@@ -85,14 +120,14 @@ def collect_logits(
     batcher = ModeBatcher(tokenizer, batch_size=batch_size, routes=routes)
     device = device_of(model)
 
-    buckets: dict[str, list[tuple[list[float], int]]] = {}
+    buckets: dict[str, list[tuple[list[float], int, str]]] = {}
     with torch.no_grad():
         for group in batcher(rows):
             batch = to_device(collator(group), device)
             logits = candidate_logits(model, batch, head)
             for i, example in enumerate(group):
                 width = int((~batch.candidate_mask[i]).sum())
-                sample = (logits[i, :width].tolist(), example.target)
+                sample = (logits[i, :width].tolist(), example.target, family_of(example.source))
                 # Banded and unbanded both: the banded bucket is what serving
                 # reads; the unbanded one is the fallback for bands too thin to fit.
                 for key in {

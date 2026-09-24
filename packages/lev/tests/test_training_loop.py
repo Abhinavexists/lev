@@ -245,3 +245,40 @@ class TestFreshSetsAsideThePreviousRun:
         saved, _, summary = runner.run(tmp_path, monkeypatch, max_steps=6, fresh=True)
         assert saved == [3, 6] and summary["history"][0]["step"] == 0
         assert latest_checkpoint(tmp_path / "out").name == "step-6"
+
+
+class TestModeAProjectsOnlyTheAnswerPositions:
+    def test_logits_to_keep_selects_distinct_positions_and_rows_read_their_own(self):
+        """Mode A must not materialise (B, seq, V): the model is asked for the
+        distinct answer positions only, and each row reads its own column."""
+        from types import SimpleNamespace
+
+        from lev.router import Mode
+        from lev.train.loop import candidate_logits
+
+        seen = {}
+
+        class FakeModel:
+            def __call__(self, input_ids, attention_mask, logits_to_keep):
+                seen["keep"] = logits_to_keep.tolist()
+                b, v = input_ids.shape[0], 10
+                # logits[row, j, tok] = 100*row + 10*keep[j] + tok, so the value
+                # read identifies which row and position it came from.
+                keep = logits_to_keep.float()
+                rows = torch.arange(b).float()[:, None, None] * 100
+                pos = keep[None, :, None] * 10
+                tok = torch.arange(v).float()[None, None, :]
+                return SimpleNamespace(logits=rows + pos + tok)
+
+        batch = SimpleNamespace(
+            mode=Mode.LABEL_TOKEN,
+            size=3,
+            input_ids=torch.zeros(3, 8, dtype=torch.long),
+            attention_mask=torch.ones(3, 8, dtype=torch.long),
+            last_positions=torch.tensor([7, 4, 7]),
+            candidate_token_ids=torch.tensor([[1, 2], [1, 2], [3, 4]]),
+            candidate_mask=torch.zeros(3, 2, dtype=torch.bool),
+        )
+        out = candidate_logits(FakeModel(), batch)
+        assert seen["keep"] == [4, 7], "only the distinct answer positions are projected"
+        assert out.tolist() == [[71.0, 72.0], [141.0, 142.0], [273.0, 274.0]]

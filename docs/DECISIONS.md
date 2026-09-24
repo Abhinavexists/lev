@@ -931,7 +931,8 @@ The head is excellent on the taxonomies it trained on (clinc_oos 0.976,
 banking77 0.922) and weak on one it has not seen; the backbone's zero-shot
 label-token reading survives the LoRA well enough to be worth 51 points on
 an unseen one. So serving now routes Mode A whenever the tokenizer expresses
-the codes (`EngineConfig.max_label_options = None`; 76 for this tokenizer),
+the codes (`EngineConfig.max_label_options = None`; 68 for this tokenizer --
+the 69th code, `BQ`, is two tokens; this ADR first said 76, which was wrong),
 and Mode B above that. Training kept `LABEL_OPTION_CAP = 26` at the time this
 was written; ADR-026 moves training to the same tokenizer-limit routing and
 feeds the head from the large sources' full option sets instead. `LEV_SERVE_MAX_LABEL_OPTIONS`
@@ -940,7 +941,7 @@ reproduces any other policy; `/health` reports the one in effect.
 Two costs, stated. The LoRA gave back ~8 points against the frozen backbone
 in this regime (0.746 vs 0.83) -- Mode A was trained on at most 14 options,
 so the regime is under-trained rather than untrained, and option subsampling
-into the 15-76 range for the Mode B sources would close it. And calibration
+into the 15-68 range for the Mode B sources would close it. And calibration
 there is unfitted: `choice:A`'s temperature comes from ≤26-option questions,
 and at 60 options the model is under-confident (ECE 0.20, accuracy 0.953 on
 the 60% of items it puts above 0.5). A temperature bucket keyed on option
@@ -1015,6 +1016,55 @@ unless `/health` confirms the style it was asked for.
 **Expected for the ADR-026 run:** the adapter starts from 0.710 rather than
 0.653 and trains in the format it will be served in, which is the most likely
 cure for the 8 points it gave back against the frozen backbone on massive.
+
+---
+
+## ADR-028 — Skip split label codes when serving; calibrate for families the model has not seen
+
+**Accepted.**
+
+**Codes.** The label-code scheme is A..Z, AA..ZZ, and the router required the
+*first n* codes all to be single tokens. For Qwen3.5 the 69th, `BQ`, is two
+tokens, so the Mode A limit was 68 (not 76, as ADR-025 first said; its
+cap-76 experiment was unaffected -- massive has 60 options). banking77's 77
+options therefore went to the Mode B head. `skip_multi_token_codes` passes over
+codes that split and takes the next single-token ones. Measured on the same
+400 held-out rows of each, production against a separately deployed variant:
+
+    banking77   77 options   Mode B 0.818   Mode A, skipped codes 0.980
+    clinc_oos  151 options   Mode B 0.953   Mode A, skipped codes 0.968
+
+Serving now skips by default; training does not, so Mode B keeps its data.
+Mode A reads 151 options well although training never showed it more than 68.
+The ADR-026 training cuts of 69-76 options went to Mode B, not Mode A as that
+ADR implied.
+
+**Calibration for new families.** Temperatures fitted on held-out rows are
+fitted where the model is most reliable, and transfer badly: ECE 0.06
+in-distribution against ~0.14 across the six S1Bench subsets. Two fits per
+bucket -- every row weighted equally, and every task family (an `ADJACENT`
+group, else a source) weighted equally -- are compared by leave-one-family-out
+ECE on the calibration split: fit on all families but one, measure on that one,
+average. **Selection rule, fixed before S1Bench was consulted:** per bucket, the
+fit with the lower leave-one-family-out ECE is kept; buckets drawn from fewer
+than three families keep the row fit. S1Bench is reported for the result, and
+for the previous profile (`calibration.previous.json`) beside it, but is not
+used to choose. A per-bucket temperature cannot fix a model that is
+confidently wrong through a learned shortcut (paws, vitaminc); the expectation
+is a partial improvement, not Jev's 0.08.
+
+**Result.** The rule chose the family fit in the three buckets drawn from at
+least three families (`choice:A`, `choice:A:small`, `noul:A`), and it barely
+differs from the row fit: T 1.924 → 1.790, 1.826 → 1.767, 2.363 → 2.333, with
+leave-one-family-out ECE 0.032 → 0.028, 0.028 → 0.027, 0.047 → 0.046. Across
+the mixture's own families the row fit already transfers well. On S1Bench,
+reported after the choice: accuracy unchanged to four decimals (0.7248), mean
+ECE 0.1415 → 0.1359, almost all from vitaminc (0.246 → 0.207). S1Bench is
+further from training than any held-out family the calibration split can
+simulate, so the remaining out-of-distribution overconfidence is a property of
+the model on unfamiliar tasks, not of the temperature -- the lever for it is
+data (as paws showed: +10 points and a large ECE drop from training on its
+failure mode), not refitting.
 
 ---
 

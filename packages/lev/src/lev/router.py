@@ -54,6 +54,7 @@ def route(
     max_label_options: int | None = None,
     noul_binary: bool = False,
     label_prefix: str = " ",
+    skip_multi_token: bool = False,
 ) -> Route:
     """Pick a mode for one question.
 
@@ -84,7 +85,7 @@ def route(
             return Route(Mode.CANDIDATE_PATH, None, "rating tokens are not single tokens")
         return Route(Mode.LABEL_TOKEN, codes, "rating scale")
 
-    codes = single_token_codes(tokenizer, n, prefix=label_prefix)
+    codes = single_token_codes(tokenizer, n, prefix=label_prefix, skip_multi_token=skip_multi_token)
     if codes is None:
         return Route(Mode.CANDIDATE_PATH, None, f"{n} options exceed single-token codes")
     return Route(Mode.LABEL_TOKEN, codes, f"{n} options fit single-token codes")
@@ -96,8 +97,9 @@ def route_all(
     max_label_options: int | None = None,
     noul_binary: bool = False,
     label_prefix: str = " ",
+    skip_multi_token: bool = False,
 ) -> dict[str, Route]:
     return {
-        name: route(q, tokenizer, max_label_options, noul_binary, label_prefix)
+        name: route(q, tokenizer, max_label_options, noul_binary, label_prefix, skip_multi_token)
         for name, q in questions.items()
     }

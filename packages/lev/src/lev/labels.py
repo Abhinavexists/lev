@@ -39,22 +39,47 @@ def label_codes(n: int) -> list[str]:
     return codes[:n]
 
 
-def single_token_codes(tokenizer, n: int, prefix: str = " ") -> list[str] | None:
+def single_token_codes(
+    tokenizer, n: int, prefix: str = " ", skip_multi_token: bool = False
+) -> list[str] | None:
     """Return `n` codes that are each one token, or None if that is impossible.
 
     `prefix` matters: the model predicts the token *after* `Answer:`, which for most
     tokenizers is space-prefixed. Verifying the bare code would pass while the actual
     scored token differs — a silent correctness bug, so we verify what is really read.
 
+    By default the codes are exactly the first `n` of the scheme, so one question
+    always gets the same codes. For Qwen3.5 the 69th, `BQ`, is two tokens, which
+    makes 68 options the Mode A limit. `skip_multi_token` passes over codes that
+    split and takes the next single-token ones instead, lifting the limit to
+    several hundred; a server opts in and pairs it with an explicit option cap
+    (ADR-028), because training never shows Mode A a set above 68.
+
     Returning None is not a failure. It is the signal to use Mode B.
     """
-    try:
-        codes = label_codes(n)
-    except ValueError:
-        return None
+    if not skip_multi_token:
+        try:
+            codes = label_codes(n)
+        except ValueError:
+            return None
+        verified = [c for c in codes if _is_single_token(tokenizer, prefix + c)]
+        return verified[:n] if len(verified) >= n else None
 
-    verified = [c for c in codes if _is_single_token(tokenizer, prefix + c)]
-    return verified[:n] if len(verified) >= n else None
+    picked: list[str] = []
+    for code in _all_codes():
+        if _is_single_token(tokenizer, prefix + code):
+            picked.append(code)
+            if len(picked) == n:
+                return picked
+    return None
+
+
+def _all_codes():
+    """A..Z, AA..ZZ, AAA..ZZZ, lazily -- the same order as `label_codes`."""
+    yield from ascii_uppercase
+    for width in (2, 3):
+        for t in product(ascii_uppercase, repeat=width):
+            yield "".join(t)
 
 
 def _is_single_token(tokenizer, text: str) -> bool:

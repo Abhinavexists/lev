@@ -738,7 +738,7 @@ the same question to the Mode B head, which is now excellent on the taxonomies
 it trained on (clinc_oos 0.976, banking77 0.922) and still weak on one it has
 not seen. The cap was set when the Base model collapsed above 14 options; the
 instruct model evidently does not. Measured, one redeploy later, same items:
-**cap 26 → 0.231; cap 76 → 0.746.** The serving default is now the tokenizer
+**cap 26 → 0.231; Mode A up to the tokenizer limit → 0.746.** The serving default is now the tokenizer
 limit (ADR-025), the macro is **0.697**, and the 8 points still short of the
 frozen backbone's 0.83 mark the regime Mode A was under-trained in, not one it
 cannot do.
@@ -798,4 +798,61 @@ Calibration: Jev is better on five of six; we are better on helpsteer2, where
 Jev is confidently wrong at 0.29. The temperatures were fitted on the training
 mixture's held-out split and these subsets are out of distribution for it;
 fitting on a held-out *task family* remains open (ADR-020).
+
+---
+
+## 16. Third run: the four gaps, in the backbone's chat format
+
+ADR-026 mixture (29 sources: FEVER, word-swapped paraphrase negatives, parade,
+yes/no recasts, StrategyQA, large lettered sets in Mode A) trained in the
+`chat` prompt style (ADR-027), resumed once from step 6,000 after the Mode A
+logits OOM (fixed by projecting only answer positions). Same 1,999 S1Bench
+items, same harness, 314 s wall at concurrency 4.
+
+| subset | run 2 | **run 3** | Δ | frozen (chat) | Jev | ECE run 3 | ECE Jev |
+|---|---|---|---|---|---|---|---|
+| aegis2 | 0.832 | **0.864** | +3.2 | 0.776 | 0.832 | 0.080 | 0.031 |
+| massive-en-US | 0.746 | **0.791** | +4.5 | 0.734 | 0.814 | **0.050** | 0.082 |
+| boolq | 0.863 | 0.880 | +1.7 | 0.860 | 0.910 | 0.083 | 0.028 |
+| paws | 0.612 | 0.716 | +10.4 | 0.756 | 0.820 | 0.235 | 0.038 |
+| vitaminc-dev | 0.751 | 0.738 | −1.3 | 0.733 | 0.846 | 0.246 | 0.069 |
+| helpsteer2 | 0.380 | 0.360 | −2.0 | 0.400 | 0.304 | 0.155 | 0.293 |
+| **macro** | 0.697 | **0.725** | +2.8 | 0.710 | 0.754 | | |
+
+Past the frozen backbone and past reflex (0.719) for the first time; above
+Jev on aegis2 and helpsteer2, better calibrated than Jev on massive (the
+option-count bands: `choice:A:large` T=1.66 fitted on 1,515 rows). Held-out
+weighted 0.807, ECE 0.180 → 0.061, on a harder 29-source split.
+
+What worked, by target: word-swapped negatives took paws from 0.612 to 0.716
+(the shortcut is mostly unlearned, not gone -- still 4 under frozen, and
+confidently wrong at ECE 0.235); large lettered sets took massive to within
+2.3 of Jev; the yes/no recasts moved boolq +1.7.
+
+What did not: **vitaminc did not move** despite FEVER learning well held-out
+(nli_fever 0.872). VitaminC is contrastive -- pairs of near-identical evidence
+revisions with opposite verdicts -- and FEVER's evidence never differs by one
+number or date. That is the remaining 10.8 points, and a data gap of a
+specific kind: minimal-edit evidence pairs.
+
+And one held-out regression the S1Bench subsets do not show: **banking77
+0.922 → 0.765** in Mode B (clinc_oos 0.976 → 0.939). With half the
+large-taxonomy rows cut into Mode A, the head saw fewer full sets and its loss
+ended at 1.16 against 0.53. banking77's 77 options sit past this
+tokenizer's single-token limit of 68 (the 69th code, `BQ`, splits), so it is
+served in Mode B; a code scheme that skips split codes routes it to Mode A.
+Measured: 0.818 → 0.980 on 400 held-out rows (ADR-028).
+
+### After ADR-028: skipped label codes and transfer-selected calibration
+
+Same checkpoint, redeployed. Serving skips split label codes, so 77- and
+151-option questions read in Mode A: banking77 0.818 → **0.980** and clinc_oos
+0.953 → 0.968 on 400 held-out rows each. Calibration chosen by
+leave-one-family-out ECE moved the temperatures little and S1Bench mean ECE
+from 0.1415 to 0.1359 (vitaminc 0.246 → 0.207); S1Bench accuracy is unchanged
+(no subset exceeds 68 options). Run sequentially from the same laptop as the
+Jev run, per-call p50 is 414–463 ms against Jev's 344–357 ms.
+
+Comparison charts: `docs/charts/lev-vs-jev.html`, rendered by
+`docs/charts/build.py` from `docs/charts/logs/`.
 

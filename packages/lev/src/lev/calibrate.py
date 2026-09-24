@@ -34,15 +34,22 @@ def softmax(logits: Logits, temperature: float = 1.0) -> list[float]:
     return [e / total for e in exps]
 
 
-def nll(samples: Sequence[tuple[Logits, int]], temperature: float) -> float:
-    """Mean negative log-likelihood of the true class. The fitting objective."""
+def nll(
+    samples: Sequence[tuple[Logits, int]],
+    temperature: float,
+    weights: Sequence[float] | None = None,
+) -> float:
+    """Mean (optionally weighted) negative log-likelihood of the true class."""
     if not samples:
         return 0.0
     total = 0.0
-    for logits, truth in samples:
+    weight_sum = 0.0
+    for i, (logits, truth) in enumerate(samples):
+        w = 1.0 if weights is None else weights[i]
         p = softmax(logits, temperature)[truth]
-        total -= math.log(max(p, 1e-15))
-    return total / len(samples)
+        total -= w * math.log(max(p, 1e-15))
+        weight_sum += w
+    return total / weight_sum
 
 
 def fit_temperature(
@@ -50,6 +57,7 @@ def fit_temperature(
     lo: float = 0.05,
     hi: float = 10.0,
     tol: float = 1e-4,
+    weights: Sequence[float] | None = None,
 ) -> float:
     """Minimise NLL over temperature by ternary search.
 
@@ -61,11 +69,96 @@ def fit_temperature(
     while hi - lo > tol:
         m1 = lo + (hi - lo) / 3
         m2 = hi - (hi - lo) / 3
-        if nll(samples, m1) < nll(samples, m2):
+        if nll(samples, m1, weights) < nll(samples, m2, weights):
             hi = m2
         else:
             lo = m1
     return (lo + hi) / 2
+
+
+# --- Calibration for data the model has not seen -------------------------
+#
+# A temperature fitted on held-out *rows* is fitted on the training
+# distribution, where the model is at its most reliable; on a new task family
+# it is overconfident (S1Bench ECE ~0.14 against 0.06 in-distribution). Two
+# fits are compared by how well each transfers to a family it never saw:
+#
+#   rows    every calibration row weighted equally (the original fit)
+#   family  every task family weighted equally, so the large, easy, familiar
+#           families stop setting the temperature for the small, hard ones
+#
+# Transfer is measured leave-one-family-out: fit on all families but one,
+# measure ECE on that one, average over families. The chosen fit is the one
+# with the lower leave-one-family-out ECE, per bucket. That rule is fixed here,
+# before any external benchmark is consulted (ADR-028).
+
+MIN_FAMILIES_FOR_TRANSFER = 3
+
+
+def family_weights(families: Sequence[str]) -> list[float]:
+    """Each family's rows share a total weight of 1."""
+    counts: dict[str, int] = {}
+    for f in families:
+        counts[f] = counts.get(f, 0) + 1
+    return [1.0 / counts[f] for f in families]
+
+
+def _fit(samples, families, method: str) -> float:
+    return fit_temperature(
+        samples, weights=family_weights(families) if method == "family" else None
+    )
+
+
+def leave_one_family_out_ece(
+    samples: Sequence[tuple[Logits, int]], families: Sequence[str], method: str
+) -> float:
+    """Mean over families of the ECE on that family, at the temperature `method`
+    fits on every other family. Families weigh equally, as a new task would."""
+    eces = []
+    for held_out in sorted(set(families)):
+        train = [(s, f) for s, f in zip(samples, families, strict=True) if f != held_out]
+        test = [s for s, f in zip(samples, families, strict=True) if f == held_out]
+        t = _fit([s for s, _ in train], [f for _, f in train], method)
+        probs = [softmax(logits, t) for logits, _ in test]
+        eces.append(expected_calibration_error(probs, [y for _, y in test]))
+    return sum(eces) / len(eces)
+
+
+def fit_for_transfer(
+    buckets: dict[str, Sequence[tuple[Logits, int, str]]],
+    split_name: str,
+    min_samples: int = 50,
+) -> tuple[CalibrationProfile, dict[str, dict]]:
+    """Per bucket, fit both ways and keep the one that transfers better.
+
+    Buckets drawn from fewer than `MIN_FAMILIES_FOR_TRANSFER` families have no
+    meaningful leave-one-out, and keep the row fit. Returns the profile and a
+    per-bucket report of both temperatures, both transfer ECEs and the choice.
+    """
+    if split_name.lower() in {"test", "eval", "holdout"}:
+        raise ValueError(f"refusing to fit calibration on split {split_name!r}")
+    profile = CalibrationProfile(fitted_on=f"{split_name} (transfer-selected)")
+    report: dict[str, dict] = {}
+    for bucket, rows in buckets.items():
+        if len(rows) < min_samples:
+            continue
+        samples = [(logits, y) for logits, y, _ in rows]
+        families = [f for _, _, f in rows]
+        entry: dict = {"n": len(rows), "families": len(set(families))}
+        entry["t_rows"] = _fit(samples, families, "rows")
+        if entry["families"] >= MIN_FAMILIES_FOR_TRANSFER:
+            entry["t_family"] = _fit(samples, families, "family")
+            entry["lofo_ece_rows"] = leave_one_family_out_ece(samples, families, "rows")
+            entry["lofo_ece_family"] = leave_one_family_out_ece(samples, families, "family")
+            entry["chosen"] = (
+                "family" if entry["lofo_ece_family"] < entry["lofo_ece_rows"] else "rows"
+            )
+        else:
+            entry["chosen"] = "rows"
+        profile.temperatures[bucket] = entry[f"t_{entry['chosen']}"]
+        profile.n_samples[bucket] = len(rows)
+        report[bucket] = entry
+    return profile, report
 
 
 def expected_calibration_error(

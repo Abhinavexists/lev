@@ -695,6 +695,18 @@ ADJACENT: tuple[frozenset[str], ...] = (
 )
 
 
+def family_of(source: str) -> str:
+    """The task family a source belongs to: its `ADJACENT` group, else itself.
+
+    Holding out mrpc while qqp stays in is not a new task, so calibration
+    transfer is measured over families, not sources.
+    """
+    for group in ADJACENT:
+        if source in group:
+            return "+".join(sorted(group))
+    return source
+
+
 def adjacency_map() -> dict[str, frozenset[str]]:
     """source -> the sources whose states must not be used to make it unanswerable."""
     return {

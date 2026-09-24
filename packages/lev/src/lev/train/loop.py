@@ -19,7 +19,13 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..prompt import Style
-from .checkpoints import latest_checkpoint, load_checkpoint, load_training_state, save_checkpoint
+from .checkpoints import (
+    CALIBRATION,
+    latest_checkpoint,
+    load_checkpoint,
+    load_training_state,
+    save_checkpoint,
+)
 from .collate import DecisionCollator, ModeBatcher, RouteCache
 from .config import TrainConfig
 from .progress import ProgressLog, hms
@@ -156,9 +162,19 @@ def candidate_logits(model, batch, head=None):
     from ..router import Mode
 
     if batch.mode is Mode.LABEL_TOKEN:
-        out = model(input_ids=batch.input_ids, attention_mask=batch.attention_mask)
+        # Project only the positions that are read. The full (B, seq, V)
+        # logits tensor at V=248,320 is ~28 GiB for a 32 x 1,900-token batch
+        # -- the OOM the chat-style prompts hit at step 6,075 -- when Mode A
+        # needs one position per row. `logits_to_keep` takes the distinct
+        # answer positions; each row then picks its own column.
+        keep, column = torch.unique(batch.last_positions, return_inverse=True)
+        out = model(
+            input_ids=batch.input_ids,
+            attention_mask=batch.attention_mask,
+            logits_to_keep=keep,
+        )
         rows = torch.arange(batch.size, device=out.logits.device)
-        vocab = out.logits[rows, batch.last_positions]  # (B, V)
+        vocab = out.logits[rows, column.to(out.logits.device)]  # (B, V)
         logits = vocab.gather(1, batch.candidate_token_ids)  # (B, K)
     else:
         if head is None:
@@ -469,7 +485,7 @@ def set_aside_previous_run(output: Path) -> Path | None:
     """Move `step-*`, `history.json` and `calibration.json` into a sibling
     `superseded-<utc>` directory. Returns it, or None if there was nothing."""
     stale = list(output.glob("step-*")) + [
-        output / name for name in ("history.json", "calibration.json") if (output / name).exists()
+        output / name for name in ("history.json", CALIBRATION) if (output / name).exists()
     ]
     if not stale:
         return None

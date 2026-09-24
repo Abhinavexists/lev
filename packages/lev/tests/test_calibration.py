@@ -148,3 +148,66 @@ class TestOptionBands:
         assert profile.temperature("choice", "A", 60) == 1.2
         assert profile.temperature("choice", "A", 5) == 2.0, "small band unfitted -> old bucket"
         assert profile.temperature("score", "A", 5) == 1.0
+
+
+class TestTransferSelectedCalibration:
+    def make(self):
+        """Two confident, accurate 'easy' families dominate by size; one small
+        'hard' family is confidently wrong half the time. The row fit is set by
+        the easy families and is overconfident on the hard one."""
+        rows = []
+        for fam, n, acc in (
+            ("easy1", 400, 0.97),
+            ("easy2", 400, 0.95),
+            ("hard", 60, 0.55),
+            ("mid", 120, 0.8),
+        ):
+            for i in range(n):
+                correct = (i / n) < acc
+                rows.append(([4.0, 0.0] if correct else [0.0, 4.0], 0, fam))
+        return rows
+
+    def test_family_weights_give_each_family_equal_total(self):
+        from lev.calibrate import family_weights
+
+        w = family_weights(["a", "a", "a", "b"])
+        assert sum(w[:3]) == pytest.approx(1.0) and w[3] == pytest.approx(1.0)
+
+    def test_family_fit_is_softer_when_small_families_are_harder(self):
+        from lev.calibrate import _fit
+
+        rows = self.make()
+        samples = [(lg, y) for lg, y, _ in rows]
+        fams = [f for _, _, f in rows]
+        assert _fit(samples, fams, "family") > _fit(samples, fams, "rows")
+
+    def test_selection_reports_both_and_picks_lower_transfer_ece(self):
+        from lev.calibrate import fit_for_transfer
+
+        profile, report = fit_for_transfer({"choice:A:small": self.make()}, "calibration")
+        entry = report["choice:A:small"]
+        assert entry["families"] == 4
+        better = "family" if entry["lofo_ece_family"] < entry["lofo_ece_rows"] else "rows"
+        assert entry["chosen"] == better
+        assert profile.temperatures["choice:A:small"] == entry[f"t_{better}"]
+
+    def test_too_few_families_keeps_the_row_fit(self):
+        from lev.calibrate import fit_for_transfer
+
+        rows = [r for r in self.make() if r[2] in ("easy1", "hard")]
+        _, report = fit_for_transfer({"choice:B": rows}, "calibration")
+        assert report["choice:B"]["chosen"] == "rows" and "lofo_ece_rows" not in report["choice:B"]
+
+    def test_refuses_the_test_split(self):
+        from lev.calibrate import fit_for_transfer
+
+        with pytest.raises(ValueError):
+            fit_for_transfer({}, "test")
+
+
+def test_family_of_groups_adjacent_sources():
+    from lev.data.sources import family_of
+
+    assert family_of("mrpc") == family_of("qqp") == family_of("parade")
+    assert family_of("imdb") == family_of("sst5")
+    assert family_of("ultrafeedback") == "ultrafeedback"
