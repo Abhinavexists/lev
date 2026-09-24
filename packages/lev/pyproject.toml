@@ -1,7 +1,7 @@
 [project]
 name = "lev"
 version = "0.1.0"
-description = "A typed, calibrated decision model: prefill once, read logits, never generate"
+description = "A typed, calibrated decision model: one forward pass, read logits, never generate"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
 # The core package is dependency-light on purpose: the schema, prompt layouts,

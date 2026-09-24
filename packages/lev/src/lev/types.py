@@ -64,6 +64,16 @@ class Score(BaseModel):
 type Question = Annotated[Noul | Choice | Score, Field(discriminator="type")]
 
 
+def question_payload(question: Question) -> dict:
+    """The question as a levbench task file carries it. `criteria` is required on
+    a Choice and a Score and optional on a Noul, so an absent Noul criteria map
+    stays absent rather than round-tripping as an empty one."""
+    payload: dict = {"type": question.type, "instructions": question.instructions}
+    if isinstance(question, Choice | Score) or question.criteria:
+        payload["criteria"] = question.criteria
+    return payload
+
+
 class NoulAnswer(BaseModel):
     type: Literal["noul"] = "noul"
     noul: float

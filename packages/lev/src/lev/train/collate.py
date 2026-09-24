@@ -239,8 +239,6 @@ class DecisionCollator:
         return batch
 
     def _encode(self, prompts: list[str]) -> dict:
-        import torch
-
         out = self.tokenizer(
             prompts,
             return_tensors="pt",
@@ -254,7 +252,7 @@ class DecisionCollator:
         out["last_positions"] = out["attention_mask"].sum(dim=1).long() - 1
         if (out["last_positions"] < 0).any():
             raise ValueError("a prompt encoded to zero tokens")
-        return {k: v if isinstance(v, torch.Tensor) else v for k, v in out.items()}
+        return dict(out)
 
     def _label_token_ids(self, routes, k_max: int):
         import torch

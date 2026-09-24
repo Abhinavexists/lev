@@ -71,12 +71,10 @@ class TestTemperatureFitting:
         for other in (t * 0.5, t * 1.5, 1.0):
             assert best <= nll(samples, other) + 1e-6
 
-    def test_perfectly_calibrated_logits_need_no_change(self):
-        # Two classes, true 50/50 — the optimal temperature keeps them at 50/50.
+    def test_a_flat_objective_returns_the_identity(self):
+        # All-equal logits: every temperature gives the same NLL, so none is fitted.
         samples = [([0.0, 0.0], i % 2) for i in range(400)]
-        assert fit_temperature(samples) == pytest.approx(fit_temperature(samples))
-        p = softmax([0.0, 0.0], fit_temperature(samples))
-        assert p[0] == pytest.approx(0.5)
+        assert fit_temperature(samples) == 1.0
 
     def test_empty_input_is_the_identity(self):
         assert fit_temperature([]) == 1.0

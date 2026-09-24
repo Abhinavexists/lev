@@ -107,7 +107,7 @@ def _preset_names() -> list[str]:
     return sorted(PRESETS)
 
 
-def cmd_build_parser(args: argparse.Namespace) -> None:
+def cmd_data_build(args: argparse.Namespace) -> None:
     """Download every source, split it, and write the mixture to disk."""
     from .data.build import build_dataset
 
@@ -132,7 +132,7 @@ def cmd_build_parser(args: argparse.Namespace) -> None:
     print(f"  sources      {len(manifest['sources'])} ({', '.join(sorted(manifest['sources']))})")
 
 
-def cmd_eval_parser(args: argparse.Namespace) -> None:
+def cmd_data_eval(args: argparse.Namespace) -> None:
     """Export the held-out split as levbench task files."""
     from .data.export_eval import export
     from .data.splits import Split
@@ -312,14 +312,14 @@ def main(argv: list[str] | None = None) -> None:
     build_parser.add_argument("--abstain-fraction", type=float, default=0.1)
     build_parser.add_argument("--seed", type=int, default=17)
     build_parser.add_argument("--cache-dir", default=None)
-    build_parser.set_defaults(func=cmd_build_parser)
+    build_parser.set_defaults(func=cmd_data_build)
 
     eval_parser = data_sub.add_parser("eval", help="export a held-out split as levbench task files")
     eval_parser.add_argument("--data", default="data/mixture")
     eval_parser.add_argument("--out", default="data/eval")
     eval_parser.add_argument("--split", default="test", choices=["test", "calibration"])
     eval_parser.add_argument("--limit-per-source", type=int, default=None)
-    eval_parser.set_defaults(func=cmd_eval_parser)
+    eval_parser.set_defaults(func=cmd_data_eval)
 
     s1_parser = sub.add_parser(
         "s1bench", help="export the S1Bench evaluation subsets (evaluation only)"

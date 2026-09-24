@@ -59,8 +59,6 @@ class EngineConfig:
     # Must match the style the adapter trained under (`TrainConfig.prompt_style`,
     # recorded in the release manifest). See `prompt.Style`.
     prompt_style: Literal["plain", "chat"] = "plain"
-    device: str = "auto"
-    dtype: str = "bfloat16"
     # "rating" is the trained 0-8 scale; "binary" is two lettered options for a
     # checkpoint that was never trained on the scale (ADR-007).
     noul_readout: Literal["rating", "binary"] = "rating"

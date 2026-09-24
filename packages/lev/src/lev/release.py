@@ -102,7 +102,7 @@ tags:
 
 # {manifest["name"]}
 
-A typed, calibrated decision model: prefill once, read logits, never generate.
+A typed, calibrated decision model: one forward pass, read logits, never generate.
 LoRA adapter (r={manifest["lora_rank"]}) over `{manifest["base_model"]}`, with the
 candidate-path (Mode B) head that removes the single-token option ceiling.
 Wire-compatible with TypeSafe's `/v1/systemone`.

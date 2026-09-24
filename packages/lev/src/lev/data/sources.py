@@ -39,9 +39,6 @@ from ..types import Choice, Noul, Question, Score
 from .contamination import assert_clean
 from .mixture import Augment, Example
 
-# Above this many options a source is a large taxonomy (`labels.LABEL_OPTION_CAP`).
-SINGLE_TOKEN_CODE_CEILING = LABEL_OPTION_CAP
-
 # Large taxonomies whose label names are read at load time, so the registry
 # cannot count them.
 _LARGE_OPTION_SETS = frozenset({"banking77", "clinc_oos"})
@@ -95,7 +92,7 @@ class SourceSpec:
         """True for a large taxonomy (more than 26 options)."""
         if self.name in _LARGE_OPTION_SETS:
             return True
-        return bool(self.label_names) and len(self.label_names) > SINGLE_TOKEN_CODE_CEILING
+        return bool(self.label_names) and len(self.label_names) > LABEL_OPTION_CAP
 
 
 # Per-row readers return `(state, options, target)`, a list of them, or None to

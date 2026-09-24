@@ -17,7 +17,7 @@ import json
 from pathlib import Path
 
 from ..labels import noul_probability
-from ..types import Choice, Noul, Score
+from ..types import Noul, Score, question_payload
 from .build import _group_by_source, load_split
 from .splits import Split
 
@@ -33,16 +33,6 @@ def truth_for(question, target: int):
     if isinstance(question, Score):
         return target
     return list(question.criteria)[target]
-
-
-def question_payload(question) -> dict:
-    """The question as levbench will rebuild it. `criteria` is required on a
-    Choice and a Score and optional on a Noul, so an absent Noul criteria map
-    must stay absent rather than round-tripping as an empty one."""
-    payload: dict = {"type": question.type, "instructions": question.instructions}
-    if isinstance(question, Choice | Score) or question.criteria:
-        payload["criteria"] = question.criteria
-    return payload
 
 
 def export(

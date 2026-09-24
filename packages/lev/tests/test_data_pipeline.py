@@ -12,7 +12,6 @@ from lev.data.mixture import Example, MixtureSpec, build_mixture
 from lev.data.sources import (
     MODE_B_SOURCES,
     REGISTRY,
-    SINGLE_TOKEN_CODE_CEILING,
     build_question,
     default_weights,
     humanise,
@@ -271,9 +270,11 @@ class TestAbstain:
         assert 0.17 < rate < 0.23
 
 
-class TestModeBCeiling:
-    def test_the_ceiling_matches_the_alphabet(self):
-        assert SINGLE_TOKEN_CODE_CEILING == 26
+class TestLargeTaxonomyThreshold:
+    def test_the_threshold_is_the_single_letter_alphabet(self):
+        from lev.labels import LABEL_OPTION_CAP
+
+        assert LABEL_OPTION_CAP == 26
 
 
 class TestAbstainDonors:
@@ -648,7 +649,7 @@ class TestAugmentation:
         assert all(e.question is pool[0].question for e in out)
 
 
-class TestNewReaders:
+class TestPairAndEvidenceReaders:
     def test_nli_fever_uses_the_string_label_not_the_integer(self):
         import random
 

@@ -61,7 +61,8 @@ def fit_temperature(
     """Minimise NLL over temperature by ternary search.
 
     NLL is unimodal in temperature for fixed logits, so this needs no gradients
-    and no torch.
+    and no torch. Returns the identity, 1.0, when no temperature beats it (a flat
+    objective, e.g. all-equal logits).
     """
     if not samples:
         return 1.0
@@ -72,7 +73,10 @@ def fit_temperature(
             hi = m2
         else:
             lo = m1
-    return (lo + hi) / 2
+    fitted = (lo + hi) / 2
+    if nll(samples, fitted, weights) >= nll(samples, 1.0, weights) - 1e-12:
+        return 1.0
+    return fitted
 
 
 # Calibration for task families the model has not seen. A temperature fitted on

@@ -23,7 +23,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..types import Choice, Noul, Question, Score
+from ..types import Choice, Noul, Question, Score, question_payload
 from .contamination import assert_eval_only
 
 
@@ -295,15 +295,6 @@ def load_eval_subset(
     return question, items
 
 
-def _question_payload(question: Question) -> dict:
-    """Mirrors `export_eval.question_payload`: a Noul's criteria is optional and
-    must stay absent rather than round-tripping as an empty map."""
-    payload: dict = {"type": question.type, "instructions": question.instructions}
-    if isinstance(question, Choice | Score) or question.criteria:
-        payload["criteria"] = question.criteria
-    return payload
-
-
 def export(
     out_dir: str | Path, subsets: Iterable[str] | None = None, limit: int | None = None
 ) -> dict:
@@ -320,7 +311,7 @@ def export(
         spec = get_subset(name)
         question, items = load_eval_subset(name, limit)
         payload = {
-            "questions": {spec.name: _question_payload(question)},
+            "questions": {spec.name: question_payload(question)},
             "items": [{"state": item.state, "labels": {spec.name: item.truth}} for item in items],
         }
         (out / f"{spec.name}.json").write_text(json.dumps(payload, indent=2) + "\n")

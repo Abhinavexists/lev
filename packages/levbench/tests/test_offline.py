@@ -44,7 +44,6 @@ def test_metrics_are_arithmetically_right() -> None:
     bad = [({True: 1.0, False: 0.0}, True, True, 1.0)] * 5
     bad += [({True: 1.0, False: 0.0}, True, False, 1.0)] * 5
     assert abs(metrics.calibration(bad).ece - 0.5) < 1e-12
-    print("metrics maths OK")
 
 
 def test_every_primitive_flattens_to_a_distribution() -> None:
@@ -66,14 +65,11 @@ def test_every_primitive_flattens_to_a_distribution() -> None:
     by_level = metrics.to_distribution(score)
     expected = sum(level * p for level, p in by_level.items())
     assert abs(score.score - expected) < 1e-2, "score must equal the probability-weighted mean"
-    print("answer flattening OK (all three primitives)")
 
 
 def test_ece_bins_on_the_top_probability_not_the_vendor_confidence_field() -> None:
-    """Backends define `confidence` differently -- Gini concentration for lev,
-    chance-corrected max probability for Jev -- so binning on that field makes
-    two servers' ECE incomparable. ECE must bin on the answer's own top
-    probability, whatever the server reports alongside it."""
+    """lev's `confidence` is Gini concentration and Jev's is chance-corrected max
+    probability, so ECE bins on the answer's own top probability instead."""
     from types import SimpleNamespace
 
     from levbench.runner import run_eval
@@ -107,18 +103,11 @@ def test_eval_runs_end_to_end_over_the_built_in_fixture() -> None:
     assert report.total_cost > 0
     text = runner.format_report(report)
     assert "accuracy" in text and "ECE" in text
-    print(f"eval ran over {len(items)} items, cost ${report.total_cost:.6f}")
 
 
 def test_sweep_arithmetic_over_a_fixed_billing_shape() -> None:
-    """Validate SweepRow arithmetic, NOT Jev's real billing behaviour.
-
-    The fake transport hardcodes per-request input billing, so the growing
-    cost ratio below is baked in by construction and this assertion cannot
-    fail on a real-world billing change. It checks that `batching.py` divides
-    and accumulates correctly given a known billing shape. Whether Jev
-    actually bills that way is only answerable by a live `levbench sweep`.
-    """
+    """SweepRow arithmetic over the fake transport's per-request billing, not
+    Jev's real billing, which only a live `levbench sweep` can measure."""
     state = (ROOT / "data" / "sample_policy.md").read_text()
     rows = batching.sweep(fake_client(), "jev-latest", state, [1, 2, 4, 8, 13])
 
@@ -130,15 +119,14 @@ def test_sweep_arithmetic_over_a_fixed_billing_shape() -> None:
     assert rows[-1].cost_ratio > 5, (
         f"at N=13 expected a large saving, got {rows[-1].cost_ratio:.1f}x"
     )
-    print(batching.format_sweep(rows, "jev-latest (FAKE transport)", len(state)))
+    assert "batching sweep" in batching.format_sweep(rows, "jev-latest", len(state))
 
 
 def test_confidence_identifier_recovers_a_planted_formula() -> None:
     """Known-answer test: plant each formula, demand it be identified uniquely.
 
-    Validates the identifier before it is pointed at a real server, where the
-    answer is unknown. Ambiguity here would mean a match against Jev proves
-    nothing.
+    If planted formulas were ambiguous, a match against a real server would
+    prove nothing.
     """
     import json
 
@@ -186,7 +174,6 @@ def test_confidence_identifier_recovers_a_planted_formula() -> None:
         fits = confidence_id.identify(confidence_id.collect(answers))
         winners = [f.name for f in fits if f.matches]
         assert winners == [planted], f"planted {planted}, identified {winners}"
-    print(f"confidence identifier uniquely recovers all {len(confidence_id.CANDIDATES)} formulas")
 
 
 def test_base_url_routes_to_a_local_clone() -> None:
@@ -217,16 +204,11 @@ def test_base_url_routes_to_a_local_clone() -> None:
     )
     runner.call_once(client, "hi", {"q": Noul(instructions="test")})
     assert seen["url"] == "http://127.0.0.1:8000/v1/systemone", seen["url"]
-    print(f"base_url routes to {seen['url']}")
 
 
 def test_local_base_url_never_forwards_the_real_key() -> None:
-    """Pointing at a third-party server must not hand it your Jev credential.
-
-    The SDK always sends `Authorization: Bearer <key>`, so reusing
-    TYPESAFE_API_KEY for a `--base-url` run would leak it to whatever host the
-    user named. The hosted path must still authenticate normally.
-    """
+    """A `--base-url` server must not receive TYPESAFE_API_KEY (the SDK always
+    sends `Authorization: Bearer <key>`); the hosted path still authenticates."""
     import os
 
     previous = os.environ.get("TYPESAFE_API_KEY")
@@ -243,17 +225,14 @@ def test_local_base_url_never_forwards_the_real_key() -> None:
             del os.environ["TYPESAFE_API_KEY"]
         else:
             os.environ["TYPESAFE_API_KEY"] = previous
-    print("local base_url uses a placeholder; hosted path still authenticates")
 
 
 def test_empty_local_key_env_var_falls_back() -> None:
-    """A variable that is *set but empty* must not become the credential.
+    """`LEVBENCH_LOCAL_API_KEY=` (as copied from `.env.example`) must fall back.
 
-    Copying `.env.example` produces `LEVBENCH_LOCAL_API_KEY=`, which sets the
-    variable to "". `os.environ.get(var, "local")` returns "" in that case, and
-    the SDK then sends a malformed `Authorization: Bearer ` header, failing with
-    `LocalProtocolError: Illegal header value`. Same bug class as the token
-    accounting: "set but empty" is not "present".
+    `os.environ.get(var, "local")` returns "" there, and the SDK then sends a
+    malformed `Authorization: Bearer ` header (`LocalProtocolError: Illegal
+    header value`).
     """
     import os
 
@@ -269,14 +248,6 @@ def test_empty_local_key_env_var_falls_back() -> None:
             os.environ.pop("LEVBENCH_LOCAL_API_KEY", None)
         else:
             os.environ["LEVBENCH_LOCAL_API_KEY"] = previous
-    print("empty LEVBENCH_LOCAL_API_KEY falls back to the placeholder")
-
-
-if __name__ == "__main__":
-    # Delegate rather than list the tests by hand: the hand-written list had
-    # already drifted to 8 of the 15 in this file, so running the module
-    # directly quietly checked less than running pytest did.
-    raise SystemExit(pytest.main([__file__, "-v"]))
 
 
 def _write_task_file(path, question_type="choice", n=5):
@@ -304,11 +275,8 @@ def _write_task_file(path, question_type="choice", n=5):
 
 
 def test_eval_runs_over_a_generated_task_file(tmp_path) -> None:
-    """The lev -> levbench seam, exercised rather than assumed.
-
-    `lev data eval` writes these files; this is the harness reading one back and
-    scoring it. Without this the handoff is only checked on the writing side.
-    """
+    """The lev -> levbench seam: the harness reads back and scores the kind of
+    file `lev data eval` writes."""
     from levbench.tasks import dataset as load
 
     items, questions = load(_write_task_file(tmp_path / "gen.json"))
@@ -329,8 +297,8 @@ def test_every_primitive_round_trips_through_a_task_file(tmp_path, question_type
 
 
 def test_a_task_file_labelling_an_undefined_question_raises(tmp_path) -> None:
-    """A truth with no question to score it against is silently dropped
-    otherwise, and the eval reports on fewer items than it was given."""
+    """Otherwise the label is silently dropped and the eval scores fewer items
+    than it was given."""
     import json
 
     path = tmp_path / "bad.json"
@@ -405,9 +373,8 @@ def test_diagnosis_reports_whether_distributions_are_complete() -> None:
 def test_tolerance_accounts_for_how_much_a_statistic_amplifies_rounding() -> None:
     """A flat threshold rejects correct formulas that divide by (K-1).
 
-    Jev rounds to 2dp. `max_prob` passes that error straight through, but
-    `norm_max_prob` multiplies it by K/(K-1) and lands at 0.010 -- twice the
-    flat 5e-3 this once used, so the right answer was reported as no match.
+    Jev rounds to 2 dp. `max_prob` passes that error through, but
+    `norm_max_prob` multiplies it by K/(K-1) to 0.010, twice a flat 5e-3.
     """
     import random
 
@@ -502,3 +469,8 @@ class TestCostAccounting:
         assert "requested 'jev-latest' but server served ['jev-1.13.0']" in runner.format_report(
             report
         )
+
+
+if __name__ == "__main__":
+    # Delegate to pytest so running the module directly runs every test.
+    raise SystemExit(pytest.main([__file__, "-v"]))

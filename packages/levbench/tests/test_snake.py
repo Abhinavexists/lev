@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import deque
 from types import SimpleNamespace
 
 import pytest
@@ -95,10 +96,13 @@ class TestRules:
             game.step(max((m for m in game.moves() if m.safe), key=lambda m: m.advance).direction)
         assert len(game.body) == length + 1 and game.score == 1
 
-    def test_reverse_and_wall_are_illegal(self):
-        game = SnakeGame()
-        reasons = {m.direction: m.reason for m in game.moves()}
-        assert "reverse" in reasons.values()
+    def test_wall_and_reverse_are_illegal(self):
+        game = SnakeGame(width=8, height=6, initial_length=3)
+        game.body = deque([(0, 0), (1, 0), (2, 0)])  # head in the top-left corner
+        assert game.legal_reason("LEFT") == "wall"
+        assert game.legal_reason("UP") == "wall"
+        assert game.legal_reason("RIGHT") == "reverse"
+        assert game.legal_reason("DOWN") == "legal"
 
 
 class TestPrompts:

@@ -143,7 +143,7 @@ def build_client(
         )
         return client, resolved
 
-    raise ValueError(f"Unknown backend {backend!r} (expected 'jev' or 'anthropic')")
+    raise ValueError(f"Unknown backend {backend!r} (expected 'jev', 'lev' or 'anthropic')")
 
 
 def _token_count(usage: Any, total_field: str, base_field: str) -> int:

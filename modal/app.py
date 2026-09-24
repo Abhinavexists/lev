@@ -669,7 +669,7 @@ def profile_engine(preset: str = "4b", rounds: int = 20) -> dict:
         "8 nouls": {
             f"q{i}": Noul(instructions=f"Question {i} about the ticket?") for i in range(8)
         },
-        "60-option choice (Mode B)": {
+        "60-option choice": {
             "intent": Choice(
                 instructions="What is the user's intent?",
                 criteria={f"intent number {i}": None for i in range(60)},
