@@ -21,6 +21,7 @@ from __future__ import annotations
 import html
 import json
 import math
+from dataclasses import dataclass
 from pathlib import Path
 
 from levbench_log import parse
@@ -232,30 +233,62 @@ def size_label(params_m) -> str:
     return f"{params_m / 1000:g}B" if params_m >= 1000 else f"{params_m}M"
 
 
-def main() -> None:
+@dataclass
+class Inputs:
+    lev: dict  # subset -> levbench scores
+    jev: dict
+    lev_served_by: str
+    jev_log_name: str
+    history: dict
+    board: dict
+    lev_acc: float
+    jev_acc: float
+    lev_ece: float
+    jev_ece: float
+    lev_p50_ms: float
+    jev_p50_ms: float
+
+
+def load_inputs() -> Inputs:
     jev_log = sorted(HERE.glob("logs/jev-s1bench-*.txt"))[-1]
     jev = parse(jev_log.read_text())["subsets"]
     lev_parsed = parse((HERE / "logs/lev-s1bench-final.txt").read_text())
     lev = lev_parsed["subsets"]
-    hist = json.loads((HERE / "history.json").read_text())
-    board = json.loads(SNAPSHOT.read_text())
 
-    mean = lambda d, k: sum(d[s][k] for s in SUBSETS) / len(SUBSETS)  # noqa: E731
-    median = lambda xs: sorted(xs)[len(xs) // 2]  # noqa: E731
-    lev_acc, jev_acc = mean(lev, "accuracy"), mean(jev, "accuracy")
-    lev_ece, jev_ece = mean(lev, "ece"), mean(jev, "ece")
-    lev_p50 = median([lev[s]["p50_s"] for s in SUBSETS]) * 1000
-    jev_p50 = median([jev[s]["p50_s"] for s in SUBSETS]) * 1000
+    def mean(scores, key):
+        return sum(scores[s][key] for s in SUBSETS) / len(SUBSETS)
 
-    # The board: every model that completed all six subsets. A model stopped
-    # after one subset reports a one-subset macro and is not comparable.
-    done = [
+    def median_p50_ms(scores):
+        return sorted(scores[s]["p50_s"] for s in SUBSETS)[len(SUBSETS) // 2] * 1000
+
+    return Inputs(
+        lev=lev,
+        jev=jev,
+        lev_served_by=lev_parsed.get("served_by", "?"),
+        jev_log_name=jev_log.name,
+        history=json.loads((HERE / "history.json").read_text()),
+        board=json.loads(SNAPSHOT.read_text()),
+        lev_acc=mean(lev, "accuracy"),
+        jev_acc=mean(jev, "accuracy"),
+        lev_ece=mean(lev, "ece"),
+        jev_ece=mean(jev, "ece"),
+        lev_p50_ms=median_p50_ms(lev),
+        jev_p50_ms=median_p50_ms(jev),
+    )
+
+
+def completed_targets(board: dict) -> list[dict]:
+    """Board models that completed all six subsets; a model stopped after one
+    subset reports a one-subset macro and is not comparable."""
+    return [
         t
         for t in board["targets"]
         if sum(t["subsets"].get(s, {}).get("acc") is not None for s in SUBSETS) == 6
     ]
-    jev_board = next(t for t in done if t["target"] == "jev")
 
+
+def leaderboard_rows(done: list[dict], data: Inputs) -> list[dict]:
+    """Board models plus lev and Jev as measured here, best first."""
     rows = []
     for t in done:
         is_jev = t["target"] == "jev"
@@ -273,74 +306,78 @@ def main() -> None:
     rows.append(
         {
             "name": "lev (measured here)",
-            "value": lev_acc,
+            "value": data.lev_acc,
             "var": LEV,
-            "meta": f"4B  ·  ECE {lev_ece:.3f}",
+            "meta": f"4B  ·  ECE {data.lev_ece:.3f}",
             "bold": True,
         }
     )
     rows.append(
         {
             "name": "Jev (measured here)",
-            "value": jev_acc,
+            "value": data.jev_acc,
             "var": JEV,
-            "meta": f"TypeSafe API  ·  ECE {jev_ece:.3f}",
+            "meta": f"TypeSafe API  ·  ECE {data.jev_ece:.3f}",
             "bold": True,
         }
     )
     rows.sort(key=lambda r: -r["value"])
-    rank = next(i for i, r in enumerate(rows) if r["name"].startswith("lev")) + 1
-    open_models = [r for r in rows if r["var"] == CTX]
-    above = [r for r in open_models if r["value"] > lev_acc]
+    return rows
 
-    show = {
-        "reflex-4b",
-        "decider-2b",
-        "simplejev-qwen38-27b",
-        "djev-full",
-        "laya-gpu",
-        "open-jev-deberta",
-        "qwen3-8b-full",
-        "jeff-gpu-full",
-    }
-    offsets = {  # direct-label positions, set by eye to avoid collisions
-        "cal": {
-            "simplejev-qwen38-27b": (10, 4, "start"),
-            "djev-full": (10, 0, "start"),
-            "reflex-4b": (10, 14, "start"),
-            "decider-2b": (-10, 4, "end"),
-            "open-jev-deberta": (-10, 4, "end"),
-        },
-        "size": {
-            "reflex-4b": (0, 18, "middle"),
-            "decider-2b": (-10, 4, "end"),
-            "simplejev-qwen38-27b": (-10, 14, "end"),
-            "open-jev-deberta": (-10, 4, "end"),
-        },
-    }
 
-    def place(p, chart):
-        if p["name"] in offsets[chart]:
-            p["dx"], p["dy"], p["anchor"] = offsets[chart][p["name"]]
-        return p
+# Board models that get a direct label in the scatter charts.
+LABELLED = {
+    "reflex-4b",
+    "decider-2b",
+    "simplejev-qwen38-27b",
+    "djev-full",
+    "laya-gpu",
+    "open-jev-deberta",
+    "qwen3-8b-full",
+    "jeff-gpu-full",
+}
+# Direct-label positions (dx, dy, anchor) per chart, set by eye to avoid collisions.
+LABEL_OFFSETS = {
+    "cal": {
+        "simplejev-qwen38-27b": (10, 4, "start"),
+        "djev-full": (10, 0, "start"),
+        "reflex-4b": (10, 14, "start"),
+        "decider-2b": (-10, 4, "end"),
+        "open-jev-deberta": (-10, 4, "end"),
+    },
+    "size": {
+        "reflex-4b": (0, 18, "middle"),
+        "decider-2b": (-10, 4, "end"),
+        "simplejev-qwen38-27b": (-10, 14, "end"),
+        "open-jev-deberta": (-10, 4, "end"),
+    },
+}
 
-    cal_pts = [
+
+def place(point: dict, chart: str) -> dict:
+    if point["name"] in LABEL_OFFSETS[chart]:
+        point["dx"], point["dy"], point["anchor"] = LABEL_OFFSETS[chart][point["name"]]
+    return point
+
+
+def calibration_points(done: list[dict], data: Inputs) -> list[dict]:
+    points = [
         place(
             {
                 "x": t["macro_acc"],
                 "y": t["ece"],
                 "name": "Jev" if t["target"] == "jev" else t["target"],
                 "var": JEV if t["target"] == "jev" else CTX,
-                "label": t["target"] in show or t["target"] == "jev",
+                "label": t["target"] in LABELLED or t["target"] == "jev",
             },
             "cal",
         )
         for t in done
     ]
-    cal_pts.append(
+    points.append(
         {
-            "x": lev_acc,
-            "y": lev_ece,
+            "x": data.lev_acc,
+            "y": data.lev_ece,
             "name": "lev",
             "var": LEV,
             "label": True,
@@ -349,24 +386,28 @@ def main() -> None:
             "anchor": "end",
         }
     )
-    size_pts = [
+    return points
+
+
+def size_points(done: list[dict], data: Inputs) -> list[dict]:
+    points = [
         place(
             {
                 "x": t["params_m"] / 1000,
                 "y": t["macro_acc"],
                 "name": t["target"],
                 "var": CTX,
-                "label": t["target"] in show and t["target"] != "djev-full",
+                "label": t["target"] in LABELLED and t["target"] != "djev-full",
             },
             "size",
         )
         for t in done
         if t.get("params_m") and t["target"] != "jev"
     ]
-    size_pts.append(
+    points.append(
         {
             "x": 4.0,
-            "y": lev_acc,
+            "y": data.lev_acc,
             "name": "lev",
             "var": LEV,
             "label": True,
@@ -375,18 +416,25 @@ def main() -> None:
             "anchor": "middle",
         }
     )
+    return points
 
-    sections: list[str] = []
 
-    def section(kicker, title, sub, body, data, note=""):
-        sections.append(
-            f'<section><div class="kicker">{esc(kicker)}</div><h2>{esc(title)}</h2>'
-            f'<p class="sub">{esc(sub)}</p>{body}'
-            + (f'<p class="note">{esc(note)}</p>' if note else "")
-            + f"{data}</section>"
-        )
+def section(kicker, title, sub, body, data, note="") -> str:
+    return (
+        f'<section><div class="kicker">{esc(kicker)}</div><h2>{esc(title)}</h2>'
+        f'<p class="sub">{esc(sub)}</p>{body}'
+        + (f'<p class="note">{esc(note)}</p>' if note else "")
+        + f"{data}</section>"
+    )
 
-    section(
+
+LEV_AND_JEV = [("lev", LEV), ("Jev", JEV)]
+
+
+def leaderboard_section(rows: list[dict], jev_board: dict, data: Inputs) -> str:
+    rank = next(i for i, r in enumerate(rows) if r["name"].startswith("lev")) + 1
+    above = [r for r in rows if r["var"] == CTX and r["value"] > data.lev_acc]
+    return section(
         "Where lev stands",
         f"#{rank} of {len(rows)} — behind only Jev and {len(above)} open models of 26B and up",
         "Macro accuracy over the six S1Bench subsets that every listed model completed.",
@@ -405,16 +453,19 @@ def main() -> None:
             ],
         ),
         f"Board models were scored by S1Bench's own harness, lev by ours. On the same model our harness scores Jev "
-        f"{(jev_board['macro_acc'] - jev_acc) * 100:.1f} points lower than the board, so lev's placement is conservative. "
+        f"{(jev_board['macro_acc'] - data.jev_acc) * 100:.1f} points lower than the board, so lev's placement is conservative. "
         "† self-declared training contamination on an evaluation subset. Models stopped after one subset are omitted. "
         "Gemini, Claude and GPT have not been run on these subsets, so they are not shown.",
     )
-    section(
+
+
+def calibration_section(points: list[dict]) -> str:
+    return section(
         "Accuracy and calibration",
         "Further right is more accurate; lower is better calibrated",
         "Macro accuracy against calibration error (ECE). The ideal model sits in the bottom-right corner.",
         scatter(
-            cal_pts,
+            points,
             (0.28, 0.86),
             (0.0, 0.46),
             pct,
@@ -428,17 +479,20 @@ def main() -> None:
             ["model", "macro accuracy", "ECE"],
             [
                 [p["name"], pct(p["x"]), f"{p['y']:.3f}"]
-                for p in sorted(cal_pts, key=lambda p: -p["x"])
+                for p in sorted(points, key=lambda p: -p["x"])
             ],
         ),
         "lev's point uses our harness for both axes; the others use the board's.",
     )
-    section(
+
+
+def size_section(points: list[dict], jev_board: dict) -> str:
+    return section(
         "Accuracy per parameter",
         "lev matches open models six times its size",
         "Macro accuracy against parameter count, log scale. Jev's size is not published, so it is drawn as a line.",
         scatter(
-            size_pts,
+            points,
             (0.06, 40),
             (0.3, 0.8),
             lambda v: f"{v:g}B" if v >= 1 else f"{v * 1000:.0f}M",
@@ -458,23 +512,30 @@ def main() -> None:
             ["model", "parameters", "macro accuracy"],
             [
                 [p["name"], f"{p['x']:g}B", pct(p["y"])]
-                for p in sorted(size_pts, key=lambda p: p["x"])
+                for p in sorted(points, key=lambda p: p["x"])
             ],
         ),
     )
 
-    two = [("lev", LEV), ("Jev", JEV)]
-    section(
+
+def per_subset_series(data: Inputs, value) -> list[dict]:
+    """lev and Jev as grouped-bar series, `value(scores)` per subset."""
+    return [
+        {"name": "lev", "var": LEV, "values": [value(data.lev[s]) for s in SUBSETS]},
+        {"name": "Jev", "var": JEV, "values": [value(data.jev[s]) for s in SUBSETS]},
+    ]
+
+
+def accuracy_by_subset_section(data: Inputs) -> str:
+    lev, jev = data.lev, data.jev
+    return section(
         "Head to head",
         "Accuracy by subset",
         "lev and Jev on the same 1,999 task files, same harness, same laptop.",
-        legend(two)
+        legend(LEV_AND_JEV)
         + grouped_bars(
             SUBSETS,
-            [
-                {"name": "lev", "var": LEV, "values": [lev[s]["accuracy"] for s in SUBSETS]},
-                {"name": "Jev", "var": JEV, "values": [jev[s]["accuracy"] for s in SUBSETS]},
-            ],
+            per_subset_series(data, lambda r: r["accuracy"]),
             1.0,
             pct,
             [0, 0.25, 0.5, 0.75, 1.0],
@@ -494,17 +555,18 @@ def main() -> None:
         ),
         "Per-subset 95% intervals are roughly ±3–5 points at these sizes.",
     )
-    section(
+
+
+def ece_by_subset_section(data: Inputs) -> str:
+    lev, jev = data.lev, data.jev
+    return section(
         "Head to head",
         "Calibration error by subset",
         "The gap between stated confidence and observed accuracy. Lower is better; 0 is perfect.",
-        legend(two)
+        legend(LEV_AND_JEV)
         + grouped_bars(
             SUBSETS,
-            [
-                {"name": "lev", "var": LEV, "values": [lev[s]["ece"] for s in SUBSETS]},
-                {"name": "Jev", "var": JEV, "values": [jev[s]["ece"] for s in SUBSETS]},
-            ],
+            per_subset_series(data, lambda r: r["ece"]),
             0.32,
             lambda v: f"{v:.3f}",
             [0, 0.1, 0.2, 0.3],
@@ -523,19 +585,27 @@ def main() -> None:
             ],
         ),
     )
-    runs = hist["macro_accuracy"]
+
+
+def progress_section(data: Inputs) -> str:
+    runs = data.history["macro_accuracy"]
     xs = [r["label"] for r in runs] + ["final\nserving fixes"]
-    vals = [r["value"] for r in runs] + [lev_acc]
-    section(
+    vals = [r["value"] for r in runs] + [data.lev_acc]
+    return section(
         "Progress",
-        f"From {pct(vals[0])} to {pct(lev_acc)} across four iterations",
+        f"From {pct(vals[0])} to {pct(data.lev_acc)} across four iterations",
         "lev's macro accuracy per model iteration, against Jev and the frozen backbone it was trained from.",
         line(
             xs,
             vals,
             [
-                {"name": "Jev", "var": JEV, "value": jev_acc, "dy": -3},
-                {"name": "frozen 4B", "var": CTX, "value": hist["frozen_backbone"], "dy": 7},
+                {"name": "Jev", "var": JEV, "value": data.jev_acc, "dy": -3},
+                {
+                    "name": "frozen 4B",
+                    "var": CTX,
+                    "value": data.history["frozen_backbone"],
+                    "dy": 7,
+                },
             ],
             0.4,
             0.8,
@@ -543,20 +613,21 @@ def main() -> None:
         table(
             ["iteration", "macro accuracy", "recorded in"],
             [[r["label"].replace("\n", " "), pct(r["value"]), r["source"]] for r in runs]
-            + [["final, serving fixes", pct(lev_acc), "logs/lev-s1bench-final.txt"]],
+            + [["final, serving fixes", pct(data.lev_acc), "logs/lev-s1bench-final.txt"]],
         ),
     )
-    section(
+
+
+def latency_section(data: Inputs) -> str:
+    lev, jev = data.lev, data.jev
+    return section(
         "Speed",
         "Per-call latency from the same laptop",
         "Median round trip per subset, one request at a time. Both include the network to each provider.",
-        legend(two)
+        legend(LEV_AND_JEV)
         + grouped_bars(
             SUBSETS,
-            [
-                {"name": "lev", "var": LEV, "values": [lev[s]["p50_s"] * 1000 for s in SUBSETS]},
-                {"name": "Jev", "var": JEV, "values": [jev[s]["p50_s"] * 1000 for s in SUBSETS]},
-            ],
+            per_subset_series(data, lambda r: r["p50_s"] * 1000),
             600,
             lambda v: f"{v:.0f} ms",
             [0, 200, 400, 600],
@@ -576,18 +647,22 @@ def main() -> None:
         ),
         "lev: one Modal H100 behind Modal's ingress. Jev: TypeSafe's hosted API.",
     )
-    c, t = hist["speed"]["container_compute_ms"], hist["speed"]["benchmark_throughput"]
-    section(
+
+
+def compute_section(data: Inputs) -> str:
+    compute = data.history["speed"]["container_compute_ms"]
+    throughput = data.history["speed"]["benchmark_throughput"]
+    return section(
         "Speed",
-        f"lev compute per call: {c[0]['value']:.0f} ms → {c[-1]['value']:.0f} ms",
+        f"lev compute per call: {compute[0]['value']:.0f} ms → {compute[-1]['value']:.0f} ms",
         "Inside the container on one H100, before any network. lev only; Jev's internals are not observable.",
         grouped_bars(
-            [r["label"] for r in c],
+            [r["label"] for r in compute],
             [
                 {
                     "name": "lev",
-                    "values": [r["value"] for r in c],
-                    "vars": [CTX] * (len(c) - 1) + [LEV],
+                    "values": [r["value"] for r in compute],
+                    "vars": [CTX] * (len(compute) - 1) + [LEV],
                 }
             ],
             200,
@@ -595,43 +670,72 @@ def main() -> None:
             [0, 50, 100, 150, 200],
             label_w=196,
         ),
-        table(["engine path", "ms per call"], [[r["label"], f"{r['value']:.0f}"] for r in c]),
-        f"Benchmark throughput rose from {t[0]['value']:.2f} to {t[-1]['value']:.2f} items/s "
-        f"({t[-1]['label']}); a question costs the same whether a request asks one or eight.",
+        table(["engine path", "ms per call"], [[r["label"], f"{r['value']:.0f}"] for r in compute]),
+        f"Benchmark throughput rose from {throughput[0]['value']:.2f} to {throughput[-1]['value']:.2f} items/s "
+        f"({throughput[-1]['label']}); a question costs the same whether a request asks one or eight.",
     )
 
-    tiles = "".join(
+
+def headline_tiles(data: Inputs) -> str:
+    return "".join(
         f'<div class="tile"><div class="tl">{esc(label)}</div>'
         f'<div class="tv"><b style="color:var({LEV})">{esc(a)}</b><span>lev</span></div>'
         f'<div class="tv j"><b>{esc(b)}</b><span>Jev</span></div>'
         f'<div class="tn">{esc(note)}</div></div>'
         for label, a, b, note in (
-            ("Accuracy", pct(lev_acc), pct(jev_acc), "macro, 6 subsets · higher is better"),
-            ("Calibration error", f"{lev_ece:.3f}", f"{jev_ece:.3f}", "mean ECE · lower is better"),
+            (
+                "Accuracy",
+                pct(data.lev_acc),
+                pct(data.jev_acc),
+                "macro, 6 subsets · higher is better",
+            ),
+            (
+                "Calibration error",
+                f"{data.lev_ece:.3f}",
+                f"{data.jev_ece:.3f}",
+                "mean ECE · lower is better",
+            ),
             (
                 "Latency",
-                f"{lev_p50:.0f} ms",
-                f"{jev_p50:.0f} ms",
+                f"{data.lev_p50_ms:.0f} ms",
+                f"{data.jev_p50_ms:.0f} ms",
                 "median, same laptop · lower is better",
             ),
         )
     )
+
+
+def main() -> None:
+    data = load_inputs()
+    done = completed_targets(data.board)
+    jev_board = next(t for t in done if t["target"] == "jev")
+    rows = leaderboard_rows(done, data)
+
+    sections = [
+        leaderboard_section(rows, jev_board, data),
+        calibration_section(calibration_points(done, data)),
+        size_section(size_points(done, data), jev_board),
+        accuracy_by_subset_section(data),
+        ece_by_subset_section(data),
+        progress_section(data),
+        latency_section(data),
+        compute_section(data),
+    ]
+    provenance = (
+        f"lev: logs/lev-s1bench-final.txt ({data.lev_served_by}) · "
+        f"Jev: logs/{data.jev_log_name} · board: data/s1bench-snapshot.json (build {data.board.get('build', '?')}) · "
+        "iterations and speed: history.json"
+    )
     page = (
-        TEMPLATE.replace("{{TILES}}", tiles)
+        TEMPLATE.replace("{{TILES}}", headline_tiles(data))
         .replace("{{SECTIONS}}", "".join(sections))
-        .replace(
-            "{{PROVENANCE}}",
-            esc(
-                f"lev: logs/lev-s1bench-final.txt ({lev_parsed.get('served_by', '?')}) · "
-                f"Jev: logs/{jev_log.name} · board: data/s1bench-snapshot.json (build {board.get('build', '?')}) · "
-                "iterations and speed: history.json"
-            ),
-        )
+        .replace("{{PROVENANCE}}", esc(provenance))
     )
     (HERE / "lev-vs-jev.html").write_text(page)
+    rank = next(i for i, r in enumerate(rows) if r["name"].startswith("lev")) + 1
     print(
-        f"wrote lev-vs-jev.html  rank {rank}/{len(rows)}  lev {pct(lev_acc)} ECE {lev_ece:.3f} {lev_p50:.0f} ms"
-        f"  Jev {pct(jev_acc)} ECE {jev_ece:.3f} {jev_p50:.0f} ms"
+        f"wrote lev-vs-jev.html  rank {rank}/{len(rows)}  lev {pct(data.lev_acc)} ECE {data.lev_ece:.3f} {data.lev_p50_ms:.0f} ms"
+        f"  Jev {pct(data.jev_acc)} ECE {data.jev_ece:.3f} {data.jev_p50_ms:.0f} ms"
     )
 
 
