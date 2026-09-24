@@ -36,7 +36,7 @@ client.system_one(state: JSONContent, questions: Mapping[str, Noul|Choice|Score]
 The plan proposes `Boolean()`, `Choice(options=[...])`, `Score(min=0, max=1)`. None of the three match. [SDK]
 
 | Plan | Reality | What's different |
-|---|---|---|
+| --- | --- | --- |
 | `Boolean()` | **`Noul`** | Returns a *probability of yes* (float 0–1), not a boolean or a yes/no distribution |
 | `Choice(options=["a","b"])` | `Choice(criteria={"a": "desc", ...})` | `criteria` is a **required** option→description *map*. A bare list of option names is not accepted |
 | `Score(min=0, max=1)` | `Score(criteria=["level 0 desc", "level 1 desc", ...])` | **Not** a min/max range. An ordered array of 2–10 *descriptive levels* |
@@ -92,7 +92,7 @@ The plan's §16 describes encoding a 10k-token state once and reusing the repres
 **(a) Intra-request amortization — documented and measurable today.** [DOCS] One call, one state, N questions. The GDPR cookbook (13 questions over a 54k-character article):
 
 | | cost | latency |
-|---|---|---|
+| --- | --- | --- |
 | Batched, 1 call | $0.000497 | 0.27s |
 | Individual, 13 calls | $0.006090 | 2.71s |
 | | **12.2x cheaper** | **10.0x faster** |
@@ -188,7 +188,7 @@ state + all questions
 The plan's §13 proposes training a state encoder, a question encoder, cross-attention, and a decision head. In the convergent design **none of those are new components**:
 
 | Plan's proposed component | What actually plays that role |
-|---|---|
+| --- | --- |
 | State encoder | the base LLM |
 | Question encoder | the base LLM (question text is just more prefill) |
 | Cross-attention interaction | ordinary causal attention from branch to cached state |
@@ -211,7 +211,7 @@ This is why `Choice.criteria` is a **map**: your keys are arbitrary strings, the
 Existence, language, licence and last-push confirmed via the GitHub API on 2026-09-20.
 
 | Project | Base model | Serves `/v1/systemone` | Notes |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | [`zhengxuyu/litjev`](https://github.com/zhengxuyu/litjev) | Qwen3.8-27B | **Yes** | Apache-2.0. Cleanest architecture write-up. H100 80GB tested |
 | [`ekzhang/openjev-sglang`](https://github.com/ekzhang/openjev-sglang) | Qwen3.6-35B-A3B | **Yes** | Prefill + first-token readout; N+1 single-token calls for N questions |
 | [`razorback16/openjev`](https://github.com/razorback16/openjev) | DiffusionGemma 26B-A4B | **Yes** | Apache-2.0, vLLM |
@@ -231,7 +231,7 @@ levbench eval --backend lev --base-url http://127.0.0.1:8000  # any local clone
 Bespoke Nimble, 324 held-out examples. Read the caveat before the table:
 
 | Model | Agreement |
-|---|---|
+| --- | --- |
 | Jev 1.13.0 | 93.21% (302/324) |
 | Bespoke-Nimble-9B | 90.12% (292/324) |
 | Qwen3.8-27B (untuned) | 84.88% (275/324) |
@@ -252,7 +252,7 @@ Bespoke Nimble, 324 held-out examples. Read the caveat before the table:
 The strongest thing in the dataset is a sanity check. S1Bench's measured Jev accuracy against TypeSafe's own published per-subset figures:
 
 | subset | measured | published | diff |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | vitaminc-dev | 0.8030 | 0.8010 | +0.0020 |
 | massive-en-US | 0.8743 | 0.8740 | +0.0003 |
 | boolq | 0.8933 | 0.8970 | −0.0037 |
@@ -269,7 +269,7 @@ The `jev` target here is the real hosted API (`device: api`, `price_per_1k: 0.04
 Only these 20 targets finished the suite. Thirteen more were stopped after `vitaminc-dev` alone (599 rows); **their macro scores are one subset, not six, and are not comparable** — LitJev's entry, for instance, was explicitly halted.
 
 | target | macro | Δ vs Jev | ECE | dec/s | contaminated |
-|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- |
 | **jev** (hosted API) | **0.7751** | — | **0.0764** | 2.39 | |
 | simplejev-qwen38-27b | 0.7582 | −0.0100 | 0.1214 | 1.63 | |
 | djev-full | 0.7485 | −0.0196 | 0.1661 | 3.70 | |
@@ -306,7 +306,7 @@ Only these 20 targets finished the suite. Thirteen more were stopped after `vita
 ## 10. Corrected roadmap
 
 | Plan stage | Verdict |
-|---|---|
+| --- | --- |
 | V0 API abstraction | **Skip.** Vendor ships the types. Re-implementing under wrong names bakes in the errors. Import `typesafe_sdk`. |
 | V1 Parallel interface | **Already exists** — it's the `questions` map. Measure it instead of building it. |
 | V2 Teacher dataset | **Use `system-one-adapter`.** Don't rebuild. |
@@ -328,7 +328,7 @@ The shift from the original: the win is **intra-request fan-out over a shared st
 
 [SDK] unless noted.
 
-```
+```text
 Endpoint      POST https://api.typesafe.ai/v1/systemone     [DOCS]
 Auth          Authorization: Bearer <key>                    [DOCS]
 Env var       TYPESAFE_API_KEY
@@ -354,7 +354,7 @@ Run 2026-09-22. 1,999 items across the six S1Bench subsets that actually execute
 **The harness reproduces Jev.** Jev on our task files against its own recorded accuracy, with the 95% band for a difference of two independent samples:
 
 | subset | n | Jev here | S1Bench | delta pp | band |
-|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- |
 | aegis2 | 250 | 0.832 | 0.836 | -0.4 | ±6.5 |
 | boolq | 300 | 0.910 | 0.893 | +1.7 | ±4.8 |
 | helpsteer2 | 250 | 0.304 | 0.348 | -4.4 | ±8.2 |
@@ -367,7 +367,7 @@ Four sit inside sampling noise; `massive` and `paws` fall marginally outside, so
 **The comparison.** Macro 0.489 against Jev's 0.754, on identical files. Jev's own published macro is 0.768, a third sign the harness is sound.
 
 | subset | lev | Jev | gap |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | boolq | 0.803 | 0.910 | -10.7 |
 | paws | 0.712 | 0.820 | -10.8 |
 | helpsteer2 | 0.240 | 0.304 | -6.4 |
@@ -381,14 +381,18 @@ The two collapses are separate defects, both isolated by follow-up probes rather
 
 aegis2's 0.312 is below *every* constant predictor (always-safe scores 0.388, always-unsafe 0.612), and confidence runs backwards: accuracy 0.574 in the [0.5,0.6) bin against 0.034 in [0.9,1.0). Asking the same 120 states both ways through one request:
 
+```text
     "Is this prompt unsafe?"  accuracy 0.308
     "Is this prompt safe?"    accuracy 0.775
+```
 
 Accuracy alone cannot explain that. The two sum to 1.083, and a model that ignores the instruction entirely -- emitting one state-dependent score into both slots -- sums to exactly 1.000 by construction, since each item contributes one correct answer between the two framings. Only the per-item probabilities separate "reads polarity but inverted" from "ignores the question":
 
+```text
     mean(p_unsafe + p_safe)   0.713    1.00 would mean complementary
     mean|p_unsafe - p_safe|   0.079    0.00 means the question is ignored
     89/120 items differ by <0.10;  23/120 sum to within 0.10 of 1.0
+```
 
 The pairs are near-identical rather than complementary. The model returns roughly the same number whichever way it is asked, so it is not reading the polarity and inverting it -- on this subset it is not conditioning on `instructions` at all.
 
@@ -402,8 +406,10 @@ The 0.291 was read as a Mode B result -- 60 options is over the 26 single-letter
 
 The router is tokenizer-verified, not count-based, and Qwen3.5's 248k vocabulary encodes every two-letter code up to `BP` as one token:
 
+```text
     n=60   single-token codes 60/60  -> Mode A
     n=77   single-token codes 76/77  -> Mode B   (`BQ` is the first that splits)
+```
 
 The live server confirms it: a 60-option Choice cost 839 input tokens (the options were listed in the prompt, which only Mode A does) and a 77-option one cost 28 (Mode B lists nothing). So massive ran in Mode A, with two-letter codes the model had never seen, over a candidate set four times larger than any it had trained on in that mode (dbpedia_14, 14 options). The Mode B head sat idle.
 
@@ -432,7 +438,7 @@ Measured 2026-09-23 against the deployed `4b/step-18750`, with the engine profil
 The hypothesis was that an inference-side error -- a prompt or readout mismatch between training and serving -- was costing accuracy on top of what the mixture failed to teach. The test: in-distribution test-split rows, scored through the deployed HTTP path, against the in-container `evaluate` numbers (ADR-018), which go through the training collator. n=25 per source.
 
 | source | HTTP | evaluate | | source | HTTP | evaluate |
-|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- |
 | banking77 (Mode B) | 0.920 | 0.870 | | imdb | 0.960 | 0.975 |
 | clinc_oos (Mode B) | 0.880 | 0.865 | | rotten_tomatoes | 1.000 | 0.915 |
 | sst5 | 0.760 | 0.545 | | yelp_review_full | 0.680 | 0.680 |
@@ -444,17 +450,21 @@ Every source lands at or above its `evaluate` figure, within the noise n=25 allo
 
 Client side, fresh connection, from this machine:
 
+```text
     dns 0.003   tcp connect 0.28   tls done 0.58   first byte 0.91-1.27   (health, no model)
     real 1-Noul call: first byte 1.17-1.27
+```
 
 A 280 ms TCP round trip means the container is a continent away; TLS is two more of them. With the SDK's persistent connection the benchmark still saw ~0.9-1.2 s per call, so roughly 0.3-0.4 s of Modal ingress remains per request on top of the compute.
 
 Inside the container, CUDA-synchronised medians over 20 calls:
 
+```text
     fork (prefill + cache fork + suffix forward)   159-169 ms   flat: 1 noul = 8 nouls = 60-option Mode B
       of which cache fork (deepcopy)                  4.5 ms
       render + tokenise                               0.2-0.9 ms
     single batched forward over prefix+suffix       73-84 ms   also flat
+```
 
 Flat in the number of questions is the diagnosis: the forward is launch-bound -- ~200 kernel launches per pass through 32 layers, twice per call -- not FLOP-bound. The prefill-and-fork design saves prefix FLOPs that cost nothing to recompute and pays for them with a second full forward. One batched forward halves the compute at every shape measured, so it is now the default (ADR-023); the fork stays available for long states with many questions.
 
@@ -464,17 +474,21 @@ Two further measurements. `causal_conv1d` was never installed -- every training 
 
 Deployed with the single forward and the conv kernel (`prefix_mode: single`, `compiled: false` in `/health`), timed from the same laptop over the SDK's persistent connection -- the path the benchmark uses:
 
+```text
     1 noul                  p50 464 ms   min 399 ms
     8 nouls, shared state   p50 457 ms   min 416 ms
     60-option Mode B        p50 489 ms   min 447 ms
+```
 
 Against 930-1,270 ms p50 in the S1Bench runs on the old path: about 2x end to end, with the compute share now ~75 ms of it and the rest the route. The three shapes still cost the same -- eight questions remain free.
 
 The same subset through the benchmark, paws (250 items), same checkpoint:
 
+```text
     old path, sequential          p50 928 ms   ~232 s wall
     new path, --concurrency 1     p50 417 ms    112 s wall   2.23 items/s
     new path, --concurrency 4     p50 604 ms     39 s wall   6.36 items/s
+```
 
 accuracy 0.712, log-loss 0.7535, ECE 0.1787 in all three -- identical to four decimals, which is the point: nothing here touched a probability. Under concurrency the per-call latency rises because forwards are serialised on the one GPU; wall time falls 2.85x because everything else overlaps. The full 1,999-item S1Bench pass now takes about five minutes instead of thirty.
 
@@ -489,7 +503,7 @@ Two of the three reasons are not engineering. laya is a 421M-parameter *encoder*
 `4b-instruct` (ADR-020 mixture, 18,750 steps) on the held-out split, calibrated: weighted 0.706 ±0.005, ECE 0.2135 → 0.1133. Not comparable to the first run's 0.856 -- the mixture is 23 sources and deliberately harder -- and the per-source picture is what matters:
 
 | learned (new sources) | | regressed | |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | sciq 0.975, arc_easy 0.927, openbookqa 0.917 | QA with per-row options | clinc_oos **0.055** (was 0.865) | Mode B, 151 options |
 | snli 0.852, anli 0.758 | NLI | emotion **0.605** (was ≥0.865) | 6 options |
 | toxic_chat 0.976, toxigen 0.871, beavertails 0.818 | safety, both polarities | | |
@@ -511,7 +525,7 @@ Held-out, calibrated: **weighted 0.836 ±0.004, ECE 0.1273 → 0.0459** -- on a 
 Same 1,999 task files, same harness, run 2026-09-23 against the deployed `4b-instruct/step-18750` at concurrency 4 (321 s wall for the whole pass).
 
 | subset | first 4b | **instruct** | Δ | frozen 4B | Jev | ECE instruct | ECE Jev |
-|---|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | aegis2 | 0.312 | **0.832** | +52.0 | 0.82 | 0.832 | 0.093 | 0.031 |
 | helpsteer2 | 0.216 | **0.380** | +16.4 | 0.33 | 0.304 | 0.150 | 0.293 |
 | vitaminc-dev | 0.588 | 0.751 | +16.3 | 0.75 | 0.846 | 0.129 | 0.069 |
@@ -535,7 +549,7 @@ Two subsets carry the remaining gap to the frozen backbone, and they are differe
 `Qwen/Qwen3.5-4B` with no adapter -- binary Noul, Mode A to the tokenizer limit, two-order averaging, no calibration -- on the same files:
 
 | subset | frozen, our prompts | frozen, reflex | LoRA | LoRA − frozen |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | vitaminc-dev | 0.715 | 0.75 | 0.751 | +3.6 |
 | massive-en-US | 0.657 | 0.83 | 0.746 | +8.9 |
 | boolq | 0.843 | 0.82 | 0.863 | +2.0 |
@@ -549,7 +563,7 @@ Two things this separates. The LoRA adds 2–14 points on five subsets and costs
 Most of that is the dressing. Rendering the same request as the ChatML turns the instruct model was trained on -- system prompt, `# Evidence` / `# Criterion` / `# Options`, `A. option` lines, "respond with only the letter", an empty think block opening the assistant turn -- and reading the bare letter that follows:
 
 | subset | frozen, plain | frozen, chat | Δ | ECE plain → chat |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | vitaminc-dev | 0.715 | 0.733 | +1.8 | 0.444 → 0.164 |
 | massive-en-US | 0.657 | 0.734 | +7.7 | 0.494 → 0.116 |
 | boolq | 0.843 | 0.860 | +1.7 | 0.058 → 0.051 |
@@ -569,7 +583,7 @@ Calibration: Jev is better on five of six; we are better on helpsteer2, where Je
 ADR-026 mixture (29 sources: FEVER, word-swapped paraphrase negatives, parade, yes/no recasts, StrategyQA, large lettered sets in Mode A) trained in the `chat` prompt style (ADR-027), resumed once from step 6,000 after the Mode A logits OOM (fixed by projecting only answer positions). Same 1,999 S1Bench items, same harness, 314 s wall at concurrency 4.
 
 | subset | run 2 | **run 3** | Δ | frozen (chat) | Jev | ECE run 3 | ECE Jev |
-|---|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | aegis2 | 0.832 | **0.864** | +3.2 | 0.776 | 0.832 | 0.080 | 0.031 |
 | massive-en-US | 0.746 | **0.791** | +4.5 | 0.734 | 0.814 | **0.050** | 0.082 |
 | boolq | 0.863 | 0.880 | +1.7 | 0.860 | 0.910 | 0.083 | 0.028 |
@@ -605,7 +619,7 @@ Both backends were run sequentially from the same laptop, through the same task 
 **The harness reproduces Jev.** On every subset our Jev run lands within 0.8 points of TypeSafe's published figure; its 13-subset macro is 0.761 against the published 0.760. Against the board's own measurements, five of the six measured subsets agree within 0.7 points. The exception is aegis2: 0.804 here, exactly the published figure, against the board's 0.836 -- the board is the outlier there, already +3.2 against published in §9.
 
 | subset | n | lev | Jev | Jev published | majority label | ECE lev | ECE Jev |
-|---|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | vitaminc-dev | 599 | 0.668 | **0.801** | 0.801 | 0.503 | 0.141 | 0.099 |
 | massive-en-US | 350 | 0.857 | **0.874** | 0.874 | 0.163 | **0.056** | 0.071 |
 | massive-de-DE | 350 | 0.823 | **0.871** | 0.869 | 0.163 | 0.067 | 0.059 |
@@ -641,4 +655,3 @@ The serving path is not the cause and training is. Run on Modal over the same 14
 **Latency is not comparable across these two runs.** lev's per-call p50 was 600–654 ms against 414–463 ms in §16, on the same checkpoint and configuration; Jev's was 335–346 ms, unchanged. A bare `GET /health` from the laptop took 0.42 s median, and Modal's request log records about 108 ms of execution even for that handler, which does no work. Twenty warm sequential aegis2 calls afterwards (states of about 470 tokens): 589 ms at the laptop, 381 ms of request duration and 287 ms of execution in Modal's log. The 69 ms compute figure (ADR-023) is for `profile_engine`'s short reference state, measured inside the container; it is not the per-call cost on S1Bench's longer states. Why the end-to-end path moved by ~180 ms between runs is open.
 
 Logs: `docs/charts/logs/{jev,lev}-s1bench-2026-09-24.txt`. Comparison charts: `docs/charts/lev-vs-jev.html`, rendered by `docs/charts/build.py` from those logs.
-

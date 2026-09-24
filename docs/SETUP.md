@@ -3,7 +3,7 @@
 Two environments, and you only need the first to do useful work.
 
 | | What it runs | Needs |
-|---|---|---|
+| --- | --- | --- |
 | **Local (any machine)** | tests, the benchmark, the router, calibration fitting, budget planning | Python 3.12, `uv`; the `train` extra for CPU tensor tests |
 | **H100 via Modal** | training, calibration over a real model, GPU serving | a Modal account |
 
@@ -38,7 +38,7 @@ cp .env.example .env
 ```
 
 | Variable | Needed for |
-|---|---|
+| --- | --- |
 | `TYPESAFE_API_KEY` | `levbench eval --backend jev`. Get one at <https://console.typesafe.ai/settings/keys> |
 | `ANTHROPIC_API_KEY` | `levbench compare`, the LLM baseline |
 | `LEVBENCH_LOCAL_API_KEY` | Only if you front a local server with auth |
@@ -75,7 +75,7 @@ export LEV_HF_SECRET=huggingface
 Read on the machine where `modal deploy` runs — from the environment or from `.env` — never inside the container. The first group travels to the container as a Secret; the second sets decorator arguments, which are fixed at import.
 
 | Variable | Default | Effect |
-|---|---|---|
+| --- | --- | --- |
 | `LEV_SERVE_PRESET` | `4b` | Which preset's newest checkpoint to serve. `make deploy PRESET=...` sets it |
 | `LEV_SERVE_MODEL` | unset | Serve this model frozen instead — no adapter, binary Noul, the zero-shot baseline |
 | `LEV_SERVE_COMPILE` | `0` | `torch.compile`. Off unless asked: measured slower than eager here (ADR-023) |
@@ -119,7 +119,7 @@ make smoke-local STEPS=20     # 0.8B on CPU; slow, but it is the real loop
 ### Volumes
 
 | Volume | Holds | Why not in the image |
-|---|---|---|
+| --- | --- | --- |
 | `lev-models` | downloaded backbones | ~8 GB per checkpoint; baking it in makes every rebuild slow |
 | `lev-checkpoints` | adapters, calibration profiles | written *during* training so a preemption is survivable |
 | `lev-data` | prepared mixtures | reused across runs and ablations |
@@ -146,7 +146,7 @@ run_training(PRESETS['4b-instruct'], data_dir='data/mixture', model_cache='~/.ca
 ## Troubleshooting
 
 | Symptom | Cause |
-|---|---|
+| --- | --- |
 | `FileNotFoundError: data/` | Run from the repo root, or check `repo_data_dir()` can walk up to it |
 | `ContaminationError` | Working as designed. A source collides with an evaluation subset — remove it ([ADR-009](DECISIONS.md#adr-009--all-thirteen-evaluation-subsets-are-banned-from-training)) |
 | `refusing to fit calibration on split 'test'` | Working as designed. Use a third split, disjoint from train and test |

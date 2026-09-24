@@ -8,7 +8,7 @@ Read [`ARCHITECTURE.md`](ARCHITECTURE.md) §5 for _why_ the pipeline looks like 
 
 Steps 1 and 2 need **no training at all** and deliver most of the value. Do them first.
 
-```
+```text
 1  Mode A readout on a stock checkpoint, serving /v1/systemone     no GPU training
 2  Fit a temperature                                               ECE 0.43 -> ~0.08
 3  Add Mode B + the router                                         the differentiator
@@ -164,7 +164,7 @@ make train PRESET=4b-instruct       # ~2 h
 
 ### The budget, with the arithmetic visible
 
-```
+```text
 cost/token   8 x N FLOPs      (6 x N fwd+bwd, +33% for gradient checkpointing)
              8 x 4e9        = 3.2e10 FLOP/token
 data         200,000 examples x 128 tokens x 3 epochs = 7.7e7 tokens
@@ -186,7 +186,7 @@ This arithmetic assumes the model computes on the real tokens; it computes on th
 
 Cross-entropy alone optimises the argmax and tolerates overconfidence. So the loss is a **proper scoring rule**:
 
-```
+```text
 loss = CE  +  0.50 * Brier  +  0.25 * ordinal   (ordinal: Score and Noul rows)
 ```
 
@@ -196,7 +196,7 @@ The ordinal term weights probability mass by its squared distance from the true 
 
 The loop prints a flushed progress line every `log_every` steps (25 by default) and a line per checkpoint, so `modal app logs` shows a live run rather than nothing until it finishes:
 
-```
+```text
 training 200,000 examples x 3 epochs = 18,750 steps at batch 32 | 32.8M trainable params on cuda:0
 step     25/18750    0.1%  A=2.7413  B=4.9902  lr=1.71e-05  3.14 it/s  12,861 tok/s  elapsed 0:00:08  eta 1:39:28  mem 22.4G
 ...

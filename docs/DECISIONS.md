@@ -36,7 +36,7 @@ Our server speaks TypeSafe's exact request/response schema.
 
 Asked directly, and the answer is not preference — **Qwen3.8 has no 4B**. Enumerating the family on the Hub returns exactly:
 
-```
+```text
 Qwen3.8-2.4T-A95B     Qwen3.8-27B     Qwen3.8-Flash-Next    (+ FP8 variants)
 ```
 
@@ -55,7 +55,7 @@ max_position_embeddings 262144 · image_token_id 248056 (natively multimodal)
 ### What that config buys, for free
 
 | Property | Consequence |
-|---|---|
+| --- | --- |
 | Only 8 of 32 layers hold K/V | decider's persistent prefix cache **without pretraining a hybrid** — the other 24 carry small conv/recurrent state |
 | 262 k context | The 512-token trap that caps laya and open-jev-deberta cannot occur |
 | Native image/video tokens | Multimodal states at no extra cost |
@@ -70,7 +70,7 @@ Measured, on S1Bench's completed runs: reflex-4b (Qwen3.5-4B) **0.7189**; decide
 ### Feasibility table, one H100 80 GB, bf16
 
 | backbone | weights | full-FT state | LoRA state | headroom | h / 3 epochs | verdict |
-|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- |
 | Qwen3.5-2B-Base | 4 GB | 32 GB | 4.3 GB | 75.7 GB | 8 | fallback |
 | **Qwen3.5-4B-Base** | **8 GB** | 64 GB | **8.3 GB** | **71.7 GB** | **16** | **chosen** |
 | Qwen3.5-9B-Base | 18 GB | 144 GB | 18.3 GB | 61.7 GB | 36 | if 4B underfits |
@@ -117,7 +117,7 @@ Every implementation surveyed picks exactly one readout family:
 S1Bench, completed runs only:
 
 | | macro | ECE |
-|---|---|---|
+| --- | --- | --- |
 | jev | 0.7751 | **0.0764** |
 | simplejev-qwen38-27b | 0.7582 | 0.1214 |
 | djev-full | 0.7485 | 0.1661 |
@@ -136,7 +136,7 @@ Two readings settle the project's direction:
 Jev `jev-1.13.0` against lev on `Qwen3.5-4B-Base` (untuned, Mode A, no calibration), same 24 items, same questions, `levbench eval`:
 
 | question | type | Jev acc | lev acc | Jev ECE | lev ECE |
-|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- |
 | department | Choice | 0.958 | **0.958** | **0.0250** | 0.2320 |
 | frustration | Score | 0.750 | 0.500 | 0.1350 | 0.4635 |
 | is_urgent | Noul | 0.917 | 0.292 | 0.0804 | 0.5261 |
@@ -166,7 +166,7 @@ Following simple-jev, we read Noul from a **9-level rating scale** and report `p
 First real run, `Qwen3.5-4B-Base`, Mode A, no fine-tune, no calibration, on the 24-item triage set:
 
 | question | type | accuracy | ECE |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | department | Choice | **0.958** | 0.232 |
 | frustration | Score | 0.500 | 0.464 |
 | is_urgent | Noul | **0.292** | 0.526 |
@@ -192,7 +192,7 @@ This is the clearest empirical support so far for ADR-011's "shipping untuned is
 Random layout per example buys the choice at inference. decider's measured cost of schema-first is inherited as a **routing rule**, not a preference:
 
 | workload | cost |
-|---|---|
+| --- | --- |
 | fixed label set | −1.5 pts (median −0.7, calibration equal) |
 | options vary per example | −5 pts |
 | 50–219 options, or multi-thousand-token states | −5 to −24 pts |
@@ -234,7 +234,7 @@ The lev **core** (schema, prompt, router, calibration, contamination) imports wi
 **Accepted.** Each refusal has evidence; see [`ARCHITECTURE.md`](ARCHITECTURE.md) §4.
 
 | Rejected | Evidence |
-|---|---|
+| --- | --- |
 | 512-token context | Structurally destroys the shared-state premise. kotoba measured DeBERTa-v3-large as not fitting 100 questions in 512 |
 | Diffusion backbone | djev: accuracy 0.7485 at ECE 0.166–0.178 (2.2× Jev). kotoba clocked a dLLM at 846 ms vs 19–34 ms for ModernBERT-base |
 | Pure linear/recurrent | simplejev-rwkv holds the bottom three slots (0.313–0.380). Hybrid yes, pure RWKV no |
@@ -304,7 +304,7 @@ The exporter lives in `lev`, not in `levbench`. levbench must not import the thi
 `avg_tokens_per_example` was `1200`. It was a guess, made before any data existed. The measured mean over 1,500 rendered prompts from the real mixture is **121 tokens** — median 73, p95 390, longest 1,104.
 
 | Source | Mean tokens |
-|---|---|
+| --- | --- |
 | clinc_oos | 38 |
 | banking77 | 39 |
 | rotten_tomatoes | 65 |
@@ -342,7 +342,7 @@ step 25/18750  0.1%  A=5.7621  B=5.1222  lr=4.45e-06  0.22 it/s  826 tok/s  eta 
 **Padding, 4.4x.** A batch is padded to its longest row, so the model computes on the rectangle rather than on the real tokens. The mixture is bimodal — a banking intent is ~39 tokens and an imdb review reaches 1,300 — so one long row in a batch of 32 drags the whole batch up to it. Through the real collator on the real mixture:
 
 | batching | real tokens | padded | waste |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | random | 380,794 | 1,686,163 | **4.43x** |
 | length-bucketed | 380,794 | 542,779 | **1.43x** |
 
@@ -367,7 +367,7 @@ step 25/18750  0.1%  A=5.7621  B=5.1222  lr=4.45e-06  0.22 it/s  826 tok/s  eta 
 Training: 18,750 steps, ~4h50 on one H100, every loss finite. Mode A 1.754 → 0.233, Mode B 4.843 → 0.813 from an `ln(151) = 5.02` chance start.
 
 | | uncalibrated | calibrated |
-|---|---|---|
+| --- | --- | --- |
 | accuracy | 0.856 ±0.016 | 0.856 ±0.016 |
 | ECE | 0.1162 | **0.0529** |
 
@@ -471,8 +471,10 @@ What a checkpoint now carries beside the weights: optimiser moments, scheduler p
 
 The engine was built around prefill-once-fork-per-question: compute the state prefix once, fork the hybrid cache, run every question's suffix against it. The argument was FLOPs -- N questions cost one prefix instead of N. Profiled in the container on the 4B checkpoint (`modal run modal/app.py::profile_engine`), CUDA-synchronised, medians of 20:
 
+```text
     fork    1 noul 167 ms   3 mixed 169 ms   8 nouls 159 ms   60-option Mode B 159 ms
     single  1 noul  73 ms   3 mixed  81 ms   8 nouls  84 ms   60-option Mode B  78 ms
+```
 
 Both are flat in the number of questions, which says the forward is bound by kernel launches, not arithmetic, at these sizes. The fork's saved prefix FLOPs are therefore worth nothing, and its second forward costs a full second pass. A single right-padded batch of prefix+suffix rows halves the latency at every shape measured, and the two strategies agree on every probability (checked in the same profile).
 
@@ -510,8 +512,10 @@ ADR-020 capped Mode A at 26 options on both sides because the Base model, sent 6
 
 Measured on the retrained instruct LoRA, same deployment, same 350 items, only the serving cap changed:
 
+```text
     cap 26  → Mode B head      massive-en-US 0.231
     cap 76  → Mode A, 60 codes massive-en-US 0.746   (two-order averaged)
+```
 
 The head is excellent on the taxonomies it trained on (clinc_oos 0.976, banking77 0.922) and weak on one it has not seen; the backbone's zero-shot label-token reading survives the LoRA well enough to be worth 51 points on an unseen one. So serving now routes Mode A whenever the tokenizer expresses the codes (`EngineConfig.max_label_options = None`; 68 for this tokenizer -- the 69th code, `BQ`, is two tokens; this ADR first said 76, which was wrong), and Mode B above that. Training kept `LABEL_OPTION_CAP = 26` at the time this was written; ADR-026 moves training to the same tokenizer-limit routing and feeds the head from the large sources' full option sets instead. `LEV_SERVE_MAX_LABEL_OPTIONS` reproduces any other policy; `/health` reports the one in effect.
 
@@ -526,7 +530,7 @@ Macro on the six S1Bench subsets with this policy: **0.697**, from 0.612.
 **Accepted.** Every point still short of Jev after ADR-025 is data (FINDINGS §15), so this run changes the mixture and nothing about the model.
 
 | gap | source of the error | change |
-|---|---|---|
+| --- | --- | --- |
 | paws −20.8 | paraphrase training rewarded lexical overlap | mrpc/qqp positives also yield a word-swapped negative (60%); `tasksource/parade` |
 | vitaminc −9.5 | no fact-verification data | `pietrolesci/nli_fever`, FEVER's own labels |
 | massive −6.8 vs Jev, −8 vs frozen | Mode A never trained above 14 options | large-taxonomy sources cut to 15+ options half the time; routing by tokenizer in training too |
@@ -546,7 +550,9 @@ The frozen instruct backbone scored 0.653 on S1Bench through our prompts and 0.7
 
 `prompt.Style` now offers both. Measured on the same frozen weights, same 1,999 items, the style changed and nothing else:
 
+```text
     plain  0.653     chat  0.710     (reflex 0.719; our trained plain LoRA 0.697)
+```
 
 Every subset rose; helpsteer2 by 15.6 points to 0.400, above Jev. Zero-shot calibration changed more than accuracy did: ECE 0.49 → 0.12 on massive-en-US, 0.44 → 0.16 on vitaminc. A backbone answering in its native format is also a backbone that knows how sure it is.
 
@@ -562,8 +568,10 @@ Consequences. The style is a property of the weights: `TrainConfig.prompt_style`
 
 **Codes.** The label-code scheme is A..Z, AA..ZZ, and the router required the *first n* codes all to be single tokens. For Qwen3.5 the 69th, `BQ`, is two tokens, so the Mode A limit was 68 (not 76, as ADR-025 first said; its cap-76 experiment was unaffected -- massive has 60 options). banking77's 77 options therefore went to the Mode B head. `skip_multi_token_codes` passes over codes that split and takes the next single-token ones. Measured on the same 400 held-out rows of each, production against a separately deployed variant:
 
+```text
     banking77   77 options   Mode B 0.818   Mode A, skipped codes 0.980
     clinc_oos  151 options   Mode B 0.953   Mode A, skipped codes 0.968
+```
 
 Serving now skips by default; training does not, so Mode B keeps its data. Mode A reads 151 options well although training never showed it more than 68. The ADR-026 training cuts of 69-76 options went to Mode B, not Mode A as that ADR implied.
 
@@ -576,7 +584,7 @@ Serving now skips by default; training does not, so Mode B keeps its data. Mode 
 ## Open questions
 
 | # | Question | How it gets settled |
-|---|---|---|
+| --- | --- | --- |
 | ~~Q1~~ | ~~Is Jev's `confidence` normalised Gini?~~ | **Closed: no.** It is chance-corrected *max probability*, `(K·max − 1)/(K − 1)`, rounded to 2dp — mean abs error 0.0026 over 48 live answers. Gini shares the wrapper and has the wrong inner statistic. See FINDINGS.md §confidence |
 | **Q2** | Do Mode A and Mode B agree where both are valid? | Explicit eval ([ADR-005](#adr-005--dual-mode-readout-the-differentiator)). A correctness gate, not a nice-to-have |
 | **Q3** | Can a *state* cache persist across requests? | decider persists a **schema** cache; persisting state is unclaimed and is the genuinely novel direction |
