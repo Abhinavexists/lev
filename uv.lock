@@ -1045,6 +1045,7 @@ name = "levbench"
 version = "0.1.0"
 source = { editable = "packages/levbench" }
 dependencies = [
+    { name = "python-dotenv" },
     { name = "system-one-adapter", extra = ["anthropic"] },
     { name = "typesafe-sdk" },
 ]
@@ -1056,6 +1057,7 @@ demo = [
 
 [package.metadata]
 requires-dist = [
+    { name = "python-dotenv", specifier = ">=1.2.3" },
     { name = "rich", marker = "extra == 'demo'", specifier = ">=13" },
     { name = "system-one-adapter", extras = ["anthropic"], specifier = ">=0.2.0" },
     { name = "typesafe-sdk", specifier = ">=0.7.0" },

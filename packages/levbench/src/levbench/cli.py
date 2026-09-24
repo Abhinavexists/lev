@@ -27,9 +27,6 @@ def repo_data_dir() -> Path:
     raise FileNotFoundError("could not locate the repo's data/ directory")
 
 
-DEFAULT_STATE = repo_data_dir() / "sample_policy.md"
-
-
 def _require_key(backend: str, base_url: str | None = None) -> None:
     if backend == "lev":
         return  # A local /v1/systemone server needs no credential.
@@ -81,7 +78,7 @@ def cmd_eval(args: argparse.Namespace) -> None:
 
 def cmd_sweep(args: argparse.Namespace) -> None:
     _require_key(args.backend, args.base_url)
-    state = Path(args.state).read_text()
+    state = Path(args.state or repo_data_dir() / "sample_policy.md").read_text()
     client, model = runner.build_client(args.backend, args.model, args.base_url)
     counts = [int(c) for c in args.counts.split(",")]
     errors: list[tuple[int, str]] = []
@@ -245,7 +242,9 @@ def main(argv: list[str] | None = None) -> None:
     sweep_parser = sub.add_parser("sweep", help="batched vs split cost and latency")
     sweep_parser.add_argument("--backend", choices=BACKENDS, default="jev")
     sweep_parser.add_argument("--model", default=None)
-    sweep_parser.add_argument("--state", default=str(DEFAULT_STATE))
+    sweep_parser.add_argument(
+        "--state", default=None, help="a state file; default data/sample_policy.md in the repo"
+    )
     sweep_parser.add_argument("--counts", default="1,2,4,8,13")
     _add_base_url(sweep_parser)
     sweep_parser.set_defaults(func=cmd_sweep)

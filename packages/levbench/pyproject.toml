@@ -7,6 +7,7 @@ license = { text = "Apache-2.0" }
 dependencies = [
     "typesafe-sdk>=0.7.0",
     "system-one-adapter[anthropic]>=0.2.0",
+    "python-dotenv>=1.2.3",
 ]
 
 [project.optional-dependencies]
