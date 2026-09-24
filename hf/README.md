@@ -18,9 +18,23 @@ tags:
   - lora
 ---
 
-# lev
+<p align="center">
+  <img src="assets/hero.png" alt="lev: one state, many typed decisions, one forward pass" width="100%">
+</p>
 
-**A calibrated System One decision model.** You give it a **state** (text, a ticket, an email, or JSON) and a set of **typed questions**. It returns typed answers with calibrated probabilities, all in one forward pass (about 69 ms on an H100). It never generates text, so there is nothing to parse and no label outside your option set.
+lev answers typed questions about a piece of context in a single forward pass. You give it a **state** (text, a ticket, an email, or JSON) and a set of yes/no, choice, and score questions. It reads each answer from the logits it already computed and returns calibrated probabilities over exactly the options you supplied. It is a LoRA adapter on Qwen3.5-4B, and it speaks TypeSafe's `/v1/systemone` protocol, so code written for the TypeSafe SDK works against it once you change the base URL.
+
+<div align="center" style="line-height: 1;"><img src="https://img.shields.io/badge/license-Apache--2.0-2a78d6?style=flat-square" alt="Apache-2.0" style="display: inline-block; vertical-align: middle; margin: 2px;"> <img src="https://img.shields.io/badge/base-Qwen3.5--4B-2a78d6?style=flat-square" alt="Qwen3.5-4B" style="display: inline-block; vertical-align: middle; margin: 2px;"> <img src="https://img.shields.io/badge/output%20tokens-0-2a78d6?style=flat-square" alt="Zero output tokens" style="display: inline-block; vertical-align: middle; margin: 2px;"> <img src="https://img.shields.io/badge/API-%2Fv1%2Fsystemone-2a78d6?style=flat-square" alt="/v1/systemone compatible" style="display: inline-block; vertical-align: middle; margin: 2px;"> <a href="https://github.com/Abhinavexists/lev"><img src="https://img.shields.io/badge/code-GitHub-14181f?style=flat-square&logo=github" alt="GitHub" style="display: inline-block; vertical-align: middle; margin: 2px;"></a></div>
+
+<h2 align="center">72.5% on S1Bench. 69 ms of compute. 4B parameters.</h2>
+
+<p align="center"><strong>Qwen3.5-4B + LoRA · one H100 · six S1Bench subsets, 1,999 items.</strong><br>Sixth of 22 on the S1Bench board over these subsets, ahead of every model its size or smaller.<br>69 ms is compute inside the container. End to end from a laptop it is 414–463 ms.<br><a href="#benchmarks">Benchmarks</a> · <a href="#speed">Speed</a> · <a href="#boundaries-worth-understanding">Boundaries</a></p>
+
+<p align="center"><a href="#quickstart"><strong>Quickstart</strong></a> · <a href="#self-hosting-a-jev-compatible-http-server">Self-hosting</a> · <a href="#benchmarks">Benchmarks</a> · <a href="#why-it-works">Why it works</a> · <a href="#training">Training</a> · <a href="https://github.com/Abhinavexists/lev">GitHub</a></p>
+
+**No generated tokens. No JSON to parse. No retries until it validates.**
+
+**lev cannot return a label outside your options.** The answer space is the option set you send, so every response is well-formed by construction. lev can still pick the wrong option: this is a structural guarantee, not a guarantee of correctness.
 
 | Question | You give | You get |
 |---|---|---|
@@ -28,10 +42,7 @@ tags:
 | `choice` | instructions + options (name → description or `null`) | `choice`, `probabilities`, `confidence` |
 | `score` | instructions + 2–10 ordered levels | `score` (expected level), `probabilities`, `confidence` |
 
-The request and response contract matches TypeSafe's `POST /v1/systemone`.
-Code written for the TypeSafe SDK works against lev-4b once you change the
-base URL. It is built for routing, moderation, intent detection, triage,
-grading, and verifying LLM output.
+It is built for the high-volume judgement calls inside a product: routing, moderation, intent detection, triage, grading, and checking LLM output.
 
 ## Installation
 
@@ -83,10 +94,10 @@ All the questions share one forward pass, so asking three questions costs about 
 
 Because the probabilities are calibrated, you can gate on them. For example, act automatically above 0.9 and send anything lower to a person.
 
-## Self-hosting: Jev-compatible HTTP server
+## Self-hosting: a Jev-compatible HTTP server
 
 ```bash
-lev serve --checkpoint interfaze-ai/lev-4b --host 0.0.0.0 --port 8000
+lev serve --checkpoint interfaze-ai/lev --host 0.0.0.0 --port 8000
 ```
 
 ```bash
@@ -118,33 +129,39 @@ print(response.answers["team"].choice, response.answers["bug"].noul)  # technica
 
 `GET /health` reports the loaded checkpoint, whether calibration is active, and the routing settings. The server batches every question in a request into one forward pass, accepts concurrent requests, and returns 422 with the reason for a malformed question.
 
-## How it works
-
-- **Backbone:** Qwen/Qwen3.5-4B, adapted with LoRA (r=32, α=64) on the q/k/v/o attention and MLP projections.
-- **Label-token readout.** Each option gets a short code, and the answer isread from the next-token logits over those codes. Codes that would split into two tokens are skipped, so every option stays one token. This handles yes/no, scores, and choice lists up to several hundred options. Choices are read in two option orders and averaged, which cancels position bias.
-- **Candidate-path head.** Past that point, a small learned head matches the state against each option's text, so the number of options has no fixed ceiling.
-- **Calibration.** Temperatures fitted after training are applied at load time.
-There is one per question type, readout mode, and choice option-count band.
-  They were selected by how well they carry over to task families left out of
-  the fit, not only by how well they fit held-out rows.
-
 ## Benchmarks
 
 ### S1Bench
 
-Six S1Bench subsets. Every row uses the same items and harness. Accuracy:
+Six S1Bench subsets, 1,999 items. lev and TypeSafe Jev were run through the same harness on the same task files. Accuracy, best in each row in bold:
 
-| subset | task | **lev** | Qwen3.5-4B, untuned |
-|---|---|---|---|
-| aegis2 | safety moderation | **0.864** | 0.776 |
-| boolq | yes/no reading comprehension | **0.880** | 0.860 |
-| massive-en-US | intent, 60 classes | **0.791** | 0.734 |
-| vitaminc-dev | claim verification | **0.738** | 0.733 |
-| paws | adversarial paraphrase | 0.716 | **0.756** |
-| helpsteer2 | helpfulness rating | 0.360 | **0.400** |
-| **macro** | | **0.725** | 0.710 |
+<p align="center"><img src="assets/accuracy-by-subset.png" alt="lev and Jev accuracy on each S1Bench subset" width="100%"></p>
 
-Against the 20 other models on the S1Bench board over these subsets, only a commercial decision API and three open models of 26B parameters or more score higher.
+| subset | task | **lev** | Jev | Qwen3.5-4B, untuned |
+|---|---|--:|--:|--:|
+| aegis2 | safety moderation | **0.864** | 0.832 | 0.776 |
+| boolq | yes/no reading comprehension | 0.880 | **0.910** | 0.860 |
+| massive-en-US | intent, 60 classes | 0.791 | **0.814** | 0.734 |
+| vitaminc-dev | claim verification | 0.738 | **0.846** | 0.733 |
+| paws | adversarial paraphrase | 0.716 | **0.820** | 0.756 |
+| helpsteer2 | helpfulness rating | 0.360 | 0.304 | **0.400** |
+| **macro** | | 0.725 | **0.754** | 0.710 |
+
+> **What the headline means:** accuracy on 6 of S1Bench's 13 subsets, not all of them. At these sizes each subset figure carries roughly ±3–5 points. Our harness scores Jev 2.1 points below its figure on the public board, so lev's placement there is conservative. Jev leads on macro accuracy.
+
+<p align="center"><img src="assets/leaderboard.png" alt="S1Bench leaderboard: lev ranks sixth of 22" width="100%"></p>
+
+On the S1Bench board over these subsets, lev ranks sixth of 22. Only Jev and three open models of 26B–35B parameters score higher.
+
+<p align="center"><img src="assets/accuracy-per-parameter.png" alt="Macro accuracy against parameter count" width="100%"></p>
+
+#### Where Jev leads
+
+- **Minimal-edit pairs:** paws (−10.4 points) and vitaminc (−10.8), where two inputs differ by one swapped word or one changed number.
+- **boolq and 60-class intent:** 3.0 and 2.3 points behind.
+- **End-to-end latency from a laptop:** Jev's hosted API answered in 344–357 ms median, lev on one Modal H100 in 414–463 ms.
+
+lev leads on safety moderation (+3.2) and helpfulness rating (+5.6).
 
 ### Held-out split
 
@@ -162,24 +179,40 @@ A held-out split of the 29 training sources, with no row shared with training:
 
 ### Speed
 
-| | |
-|---|---|
-| compute per call, one H100 | **69 ms** |
-| from 1 question to a 60-option choice | flat: one forward pass either way |
-| output tokens | 0 |
-| end to end from a laptop to a hosted endpoint, median | 414–463 ms (mostly network) |
+<p align="center"><img src="assets/compute.png" alt="lev compute per call on one H100: 169 ms to 69 ms" width="100%"></p>
+
+A call is one batched forward pass over every question, so compute stays flat from one question to eight, and a 60-option choice costs the same as a yes/no.
+
+<p align="center"><img src="assets/latency.png" alt="Per-call latency from the same laptop, lev and Jev" width="100%"></p>
+
+Most of lev's round trip from a laptop is network and Modal's ingress; its compute is 69 ms. Self-hosted next to your application, that network hop disappears.
+
+## Why it works
+
+<p align="center"><img src="assets/how-it-works.png" alt="State and questions go through one forward pass, then label-token readout or the candidate-path head, then per-bucket temperatures, then typed answers" width="460"></p>
+
+- **Label-token readout.** Each option gets a short code, and the answer is read from the next-token logits over those codes. Codes that would split into two tokens are skipped, so every option stays one token. This handles yes/no, scores, and choice lists up to several hundred options. Choices are read in two option orders and averaged, which cancels position bias.
+- **Candidate-path head.** Past that point, a small learned head matches the state against each option's text, so the number of options has no fixed ceiling.
+- **Calibration.** Temperatures fitted after training are applied at load time. There is one per question type, readout mode, and choice option-count band. They were selected by how well they carry over to task families left out of the fit, not only by how well they fit held-out rows.
+
+### The optimizations that mattered
+
+- **One batched forward instead of prefill-and-fork: 169 → 69 ms.** At this size the forward pass is bound by kernel launches, not arithmetic, so forking the cache saved FLOPs and cost time. One batched forward plus the depthwise-conv kernel cut compute by 59%. [ADR-023](https://github.com/Abhinavexists/lev/blob/main/docs/DECISIONS.md#adr-023--one-batched-forward-not-prefill-and-fork)
+- **Label-token readout up to the tokenizer's limit: +51 points on massive-en-US.** Serving 60 options through label codes instead of the learned head took 60-class intent from 0.231 to 0.746. [ADR-025](https://github.com/Abhinavexists/lev/blob/main/docs/DECISIONS.md#adr-025--serving-routes-mode-a-up-to-the-tokenizer-limit-training-keeps-its-cap)
+- **Skipping codes that split: banking77 0.818 → 0.980.** Passing over codes that tokenize to two tokens lifts label-token readout from 68 options to several hundred. [ADR-028](https://github.com/Abhinavexists/lev/blob/main/docs/DECISIONS.md#adr-028--skip-split-label-codes-when-serving-calibrate-for-families-the-model-has-not-seen)
 
 ## Training
 
-- **Data:** 200,000 examples from 29 sources built on 26 public Hugging Face datasets. The tasks cover topic, sentiment, and emotion classification; intent detection (banking77, clinc_oos, snips); NLI (SNLI, ANLI, FEVER); paraphrase (MRPC, QQP, PARADE, plus word-swapped hard negatives); multiple-choice QA (RACE, ARC, SciQ, OpenBookQA, CommonsenseQA, StrategyQA);toxicity and safety (ToxiGen, ToxicChat, BeaverTails); and helpfulness (UltraFeedback). Questions are paraphrased, negated, and recast between types, and option sets are shuffled and resized, so the model learns the question format and not one wording.
+- **Data:** 200,000 examples from 29 sources built on 26 public Hugging Face datasets. The tasks cover topic, sentiment, and emotion classification; intent detection (banking77, clinc_oos, snips); NLI (SNLI, ANLI, FEVER); paraphrase (MRPC, QQP, PARADE, plus word-swapped hard negatives); multiple-choice QA (RACE, ARC, SciQ, OpenBookQA, CommonsenseQA, StrategyQA); toxicity and safety (ToxiGen, ToxicChat, BeaverTails); and helpfulness (UltraFeedback). Questions are paraphrased, negated, and recast between types, and option sets are shuffled and resized, so the model learns the question format and not one wording.
 - **Contamination guard:** the data build refuses any source that resolves to one of the 13 S1Bench subsets.
-- **Recipe:** 3 epochs, 18,750 steps, batch size 32, learning rate 5e-5, in the base model's chat format, on one H100.
+- **Recipe:** LoRA r=32, α=64 on the q/k/v/o attention and MLP projections; 3 epochs, 18,750 steps, batch size 32, learning rate 5e-5, in the base model's chat format, on one H100.
 
-## Limitations
+## Boundaries worth understanding
 
 - **Minimal-edit pairs.** On paws and vitaminc, two inputs can differ by one swapped word or one changed number. Here the model can be confidently wrong. It scores below the untuned backbone on paws and only matches it on vitaminc.
 - **Fine-grained quality ratings are weak.** Helpfulness scoring (helpsteer2) sits at 0.36. Treat such scores as a rough signal.
 - **Calibration is fitted on the training distribution.** Temperatures are chosen to transfer across task families. Even so, a task very unlike the training mix may be less well calibrated. Check on your own data before you gate on the probabilities.
+- **Questions are answered independently.** Answers in one request do not condition on each other. Encode a joint decision as one choice, or ask in stages.
 - **Partial benchmark coverage.** S1Bench results cover 6 of its 13 subsets.
 - **English only.**
 - **Needs a GPU for real-time use.** It runs on CPU, but a 4B backbone there takes seconds per call, not milliseconds.
@@ -197,5 +230,7 @@ A held-out split of the 29 training sources, with no row shared with training:
 ## License
 
 The adapter is released under Apache-2.0, the same license as the base model. Some of the training datasets have their own terms, including non-commercial licenses. Review them before commercial use.
+
+Not affiliated with or endorsed by TypeSafe AI.
 
 Apache 2.0 · Interfaze

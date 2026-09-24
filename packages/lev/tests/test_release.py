@@ -75,10 +75,10 @@ class TestBuildRelease:
 
     def test_model_card_names_the_base_and_serving_command(self, tmp_path):
         out = fake_checkpoint(tmp_path)
-        manifest = build_release(out, tmp_path / "release", preset="4b", name="lev-4b-test")
+        manifest = build_release(out, tmp_path / "release", preset="4b", name="lev-test")
         card = model_card(manifest)
         assert card.startswith("---\nlicense: apache-2.0\nbase_model: Qwen/Qwen3.5-4B-Base")
-        assert "# lev-4b-test" in card and "lev serve --checkpoint" in card
+        assert "# lev-test" in card and "lev serve --checkpoint" in card
 
 
 class TestResolvingAReleaseBack:

@@ -356,7 +356,7 @@ def main(argv: list[str] | None = None) -> None:
     build_release_parser.set_defaults(func=cmd_release_build)
     publish_parser = release_sub.add_parser("publish", help="upload a release dir to the Hub")
     publish_parser.add_argument("release", help="a directory written by `lev release build`")
-    publish_parser.add_argument("--repo", required=True, help="Hub id, e.g. org/lev-4b")
+    publish_parser.add_argument("--repo", required=True, help="Hub id, e.g. org/lev")
     publish_parser.add_argument("--private", action="store_true")
     publish_parser.set_defaults(func=cmd_release_publish)
 

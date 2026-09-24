@@ -112,7 +112,7 @@ class TrainConfig:
     # How often to print progress. A silent run is indistinguishable from a
     # hung one, and on Modal the only thing you can see is stdout.
     log_every: int = 25
-    output_dir: str = "checkpoints/lev-4b"
+    output_dir: str = "checkpoints/lev"
 
     @property
     def tokens_per_epoch(self) -> int:
@@ -215,7 +215,7 @@ PRESETS: dict[str, TrainConfig] = {
         # The format the instruct backbone was trained on. Frozen, it scores
         # 0.710 on S1Bench in this style against 0.653 in `plain` (ADR-027).
         prompt_style="chat",
-        output_dir="checkpoints/lev-4b-instruct",
+        output_dir="checkpoints/lev-instruct",
     ),
     "2b": TrainConfig(
         model_id="Qwen/Qwen3.5-2B-Base",

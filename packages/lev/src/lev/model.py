@@ -557,7 +557,7 @@ def load(
     """Load a checkpoint -- a release directory, a training output or a Hub id --
     into a ready `DecisionEngine`. With no checkpoint, serves `model_id` frozen.
 
-        engine = lev.load("interfaze-ai/lev-4b")
+        engine = lev.load("interfaze-ai/lev")
         engine.system_one(state, {"urgent": {"type": "noul", "instructions": "..."}})
 
     A release's `lev_release.json` names the base model and prompt style its
