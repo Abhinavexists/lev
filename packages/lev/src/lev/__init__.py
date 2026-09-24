@@ -1,12 +1,6 @@
-"""lev — a typed, calibrated decision model.
+"""Typed, calibrated decisions without token generation.
 
-State in, typed probabilistic decisions out. One prefill, many questions, no
-generated tokens. Wire-compatible with TypeSafe's `/v1/systemone`.
-
-The pure-Python core (schema, prompt layouts, router, calibration, contamination
-guard) imports without torch, so it is testable on any machine. Anything needing a
-model -- `lev.load`, `lev.server` -- imports torch only when called and needs
-the `[train]` extra.
+The core imports without Torch; loading a model requires the train extra.
 """
 
 from .calibrate import CalibrationProfile
@@ -27,7 +21,7 @@ from .types import (
     Usage,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     "Answer",

@@ -1,31 +1,47 @@
 [project]
 name = "lev"
-version = "0.1.0"
-description = "A typed, calibrated decision model: one forward pass, read logits, never generate"
+version = "0.1.1"
+description = "An open System One decision model: typed, calibrated answers from one forward pass"
+readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
-# The core package is dependency-light on purpose: the schema, prompt layouts,
-# router and calibration are pure Python and testable without a GPU or torch.
+keywords = ["decision model", "classification", "calibration", "llm", "system one", "lora"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+# Keep the core importable and testable without Torch.
 dependencies = [
     "pydantic>=2.12",
 ]
 
 [project.optional-dependencies]
-# Everything that needs a model. Split out so the test suite and local
-# development install without torch.
+# Optional model dependencies; the core needs none of them.
+# transformers 5.x: the prefix-cache fork calls `reorder_cache` on a hybrid cache.
 train = [
     "torch>=2.6",
-    "transformers>=4.57",
+    "transformers>=5.0",
     "peft>=0.14",
     "accelerate>=1.2",
     "datasets>=3.2",
+    "huggingface-hub>=1.0",
+    "safetensors>=0.4",
 ]
 serve = [
     "lev[train]",
     "fastapi>=0.115",
     "uvicorn>=0.34",
 ]
-modal = ["modal>=0.67"]
+modal = ["modal>=1.0"]
+
+[project.urls]
+Homepage = "https://github.com/Abhinavexists/lev"
+Weights = "https://huggingface.co/interfaze-ai/lev"
+Issues = "https://github.com/Abhinavexists/lev/issues"
 
 [project.scripts]
 lev = "lev.cli:main"

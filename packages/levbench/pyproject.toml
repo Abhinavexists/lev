@@ -2,8 +2,18 @@
 name = "levbench"
 version = "0.1.0"
 description = "Benchmark harness for System One decision models (Jev and compatible servers)"
+readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
+keywords = ["benchmark", "calibration", "decision model", "system one", "jev"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "typesafe-sdk>=0.7.0",
     "system-one-adapter[anthropic]>=0.2.0",
@@ -11,8 +21,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# The Snake demo's terminal display. Without it the demo prints status lines.
 demo = ["rich>=13"]
+
+[project.urls]
+Homepage = "https://github.com/Abhinavexists/lev"
+Issues = "https://github.com/Abhinavexists/lev/issues"
 
 [project.scripts]
 levbench = "levbench.cli:main"

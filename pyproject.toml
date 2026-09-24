@@ -1,6 +1,6 @@
 [project]
 name = "lev-workspace"
-version = "0.1.0"
+version = "0.1.1"
 description = "lev — umbrella workspace: the `lev` decision model and the `levbench` harness"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -8,13 +8,9 @@ license = { text = "Apache-2.0" }
 dependencies = [
     "levbench",
     "lev",
-    "python-dotenv>=1.2.3",
 ]
 
 [project.optional-dependencies]
-# Forwarded from the `lev` package so `uv sync --extra <x>` works from the repo
-# root, which is where every documented command is run. None of these are needed
-# to run the benchmark or the test suite.
 train = ["lev[train]"]
 serve = ["lev[serve]"]
 modal = ["lev[modal]"]
@@ -24,6 +20,8 @@ demo = ["levbench[demo]"]
 dev = [
     "pytest>=8.3",
     "ruff>=0.14",
+    # Resolve the SDK rather than the local modal/ directory during type checking.
+    "modal>=1.0",
 ]
 
 [tool.uv.sources]
