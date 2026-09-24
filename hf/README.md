@@ -26,9 +26,9 @@ lev answers typed questions about a piece of context in a single forward pass. Y
 
 <div align="center" style="line-height: 1;"><img src="https://img.shields.io/badge/license-Apache--2.0-2a78d6?style=flat-square" alt="Apache-2.0" style="display: inline-block; vertical-align: middle; margin: 2px;"> <img src="https://img.shields.io/badge/base-Qwen3.5--4B-2a78d6?style=flat-square" alt="Qwen3.5-4B" style="display: inline-block; vertical-align: middle; margin: 2px;"> <img src="https://img.shields.io/badge/output%20tokens-0-2a78d6?style=flat-square" alt="Zero output tokens" style="display: inline-block; vertical-align: middle; margin: 2px;"> <img src="https://img.shields.io/badge/API-%2Fv1%2Fsystemone-2a78d6?style=flat-square" alt="/v1/systemone compatible" style="display: inline-block; vertical-align: middle; margin: 2px;"> <a href="https://github.com/Abhinavexists/lev"><img src="https://img.shields.io/badge/code-GitHub-14181f?style=flat-square&logo=github" alt="GitHub" style="display: inline-block; vertical-align: middle; margin: 2px;"></a></div>
 
-<h2 align="center">72.5% on S1Bench. 69 ms of compute. 4B parameters.</h2>
+<h2 align="center">68.9% on all 13 S1Bench subsets. 69 ms of compute. 4B parameters.</h2>
 
-<p align="center"><strong>Qwen3.5-4B + LoRA · one H100 · six S1Bench subsets, 1,999 items.</strong><br>Sixth of 22 on the S1Bench board over these subsets, ahead of every model its size or smaller.<br>69 ms is compute inside the container. End to end from a laptop it is 414–463 ms.<br><a href="#benchmarks">Benchmarks</a> · <a href="#speed">Speed</a> · <a href="#boundaries-worth-understanding">Boundaries</a></p>
+<p align="center"><strong>Qwen3.5-4B + LoRA · one H100 · 13 S1Bench subsets, 3,880 items.</strong><br>On the six subsets the public board completed, level with reflex-4b and behind only Jev and three open models of 26B–35B.<br>69 ms is engine compute for a short request, inside the container; S1Bench's longer states take more. End to end from a laptop, lev answered in 414–654 ms across two runs.<br><a href="#benchmarks">Benchmarks</a> · <a href="#speed">Speed</a> · <a href="#boundaries-worth-understanding">Boundaries</a></p>
 
 <p align="center"><a href="#quickstart"><strong>Quickstart</strong></a> · <a href="#self-hosting-a-jev-compatible-http-server">Self-hosting</a> · <a href="#benchmarks">Benchmarks</a> · <a href="#why-it-works">Why it works</a> · <a href="#training">Training</a> · <a href="https://github.com/Abhinavexists/lev">GitHub</a></p>
 
@@ -37,7 +37,7 @@ lev answers typed questions about a piece of context in a single forward pass. Y
 **lev cannot return a label outside your options.** The answer space is the option set you send, so every response is well-formed by construction. lev can still pick the wrong option: this is a structural guarantee, not a guarantee of correctness.
 
 | Question | You give | You get |
-|---|---|---|
+| --- | --- | --- |
 | `noul` | a yes/no question | `noul` = p(yes) |
 | `choice` | instructions + options (name → description or `null`) | `choice`, `probabilities`, `confidence` |
 | `score` | instructions + 2–10 ordered levels | `score` (expected level), `probabilities`, `confidence` |
@@ -133,42 +133,49 @@ print(response.answers["team"].choice, response.answers["bug"].noul)  # technica
 
 ### S1Bench
 
-Six S1Bench subsets, 1,999 items. lev and TypeSafe Jev were run through the same harness on the same task files. Accuracy, best in each row in bold:
+All 13 S1Bench subsets, 3,880 items: every item S1Bench scores, pinned by [Nimble](https://github.com/bespokelabsai/nimble)'s manifests. lev and TypeSafe Jev were run through the same harness on the same task files, and the Jev run lands within 0.8 points of TypeSafe's published figure on every subset. Accuracy, best of lev and Jev in bold:
 
 <p align="center"><img src="assets/accuracy-by-subset.png" alt="lev and Jev accuracy on each S1Bench subset" width="100%"></p>
 
-| subset | task | **lev** | Jev | Qwen3.5-4B, untuned |
-|---|---|--:|--:|--:|
-| aegis2 | safety moderation | **0.864** | 0.832 | 0.776 |
-| boolq | yes/no reading comprehension | 0.880 | **0.910** | 0.860 |
-| massive-en-US | intent, 60 classes | 0.791 | **0.814** | 0.734 |
-| vitaminc-dev | claim verification | 0.738 | **0.846** | 0.733 |
-| paws | adversarial paraphrase | 0.716 | **0.820** | 0.756 |
-| helpsteer2 | helpfulness rating | 0.360 | 0.304 | **0.400** |
-| **macro** | | 0.725 | **0.754** | 0.710 |
+| subset | task | **lev** | Jev | always the most common label |
+| --- | --- | --: | --: | --: |
+| vitaminc-dev | claim verification | 0.668 | **0.801** | 0.503 |
+| massive-en-US | intent routing, 18 scenarios | 0.857 | **0.874** | 0.163 |
+| massive-de-DE | intent routing, German | 0.823 | **0.871** | 0.163 |
+| boolq | yes/no reading comprehension | 0.827 | **0.893** | 0.580 |
+| squad2 | answerability | 0.813 | **0.836** | 0.502 |
+| paws | adversarial paraphrase | 0.776 | **0.900** | 0.516 |
+| multinli | natural language inference | **0.890** | 0.836 | 0.361 |
+| civil_comments | toxicity | 0.760 | **0.803** | 0.893 |
+| aegis2 | safety moderation | 0.800 | **0.804** | 0.568 |
+| helpsteer2 | helpfulness, 5 levels | **0.386** | 0.341 | 0.422 |
+| summeval-relevance | summary relevance, 5 levels | 0.358 | 0.358 | 0.458 |
+| summeval-consistency | summary faithfulness, 5 levels | 0.271 | **0.812** | 0.840 |
+| pubmedqa | biomedical yes/no/maybe | 0.732 | **0.764** | 0.532 |
+| **macro** | | 0.689 | **0.761** | |
 
-> **What the headline means:** accuracy on 6 of S1Bench's 13 subsets, not all of them. At these sizes each subset figure carries roughly ±3–5 points. Our harness scores Jev 2.1 points below its figure on the public board, so lev's placement there is conservative. Jev leads on macro accuracy.
+> **What the headline means:** at these sizes a per-subset difference needs roughly 5–9 points to clear sampling noise. Jev leads on 10 of 13 subsets and on macro accuracy by 7.2 points. Mean calibration error (ECE) is 0.115 for lev against Jev's 0.091; lev is better calibrated on 5 of 13.
 
-<p align="center"><img src="assets/leaderboard.png" alt="S1Bench leaderboard: lev ranks sixth of 22" width="100%"></p>
+<p align="center"><img src="assets/leaderboard.png" alt="S1Bench leaderboard over the six subsets every listed model completed" width="100%"></p>
 
-On the S1Bench board over these subsets, lev ranks sixth of 22. Only Jev and three open models of 26B–35B parameters score higher.
+The public S1Bench board has complete results on six of the subsets. There lev scores 0.719, level with reflex-4b (0.719, the same backbone) and behind only Jev and three open models of 26B–35B parameters.
 
 <p align="center"><img src="assets/accuracy-per-parameter.png" alt="Macro accuracy against parameter count" width="100%"></p>
 
 #### Where Jev leads
 
-- **Minimal-edit pairs:** paws (−10.4 points) and vitaminc (−10.8), where two inputs differ by one swapped word or one changed number.
-- **boolq and 60-class intent:** 3.0 and 2.3 points behind.
-- **End-to-end latency from a laptop:** Jev's hosted API answered in 344–357 ms median, lev on one Modal H100 in 414–463 ms.
+- **Minimal-edit pairs:** paws (−12.4 points) and vitaminc (−13.3), where two inputs differ by one swapped word or one changed number.
+- **Summary faithfulness:** summeval-consistency (−54.1). 121 of 144 summaries are rated fully faithful, and lev mostly answers one level lower. Fine-tuning introduced this: the untuned backbone scores 0.826.
+- **End-to-end latency from a laptop:** Jev's hosted API answered in 335–346 ms median, lev on one Modal H100 in 600–654 ms.
 
-lev leads on safety moderation (+3.2) and helpfulness rating (+5.6).
+lev leads on natural language inference (multinli, +5.4) and helpfulness rating (helpsteer2, +4.5), both at the edge of sampling noise. On civil_comments and the three 5-level rating subsets, always answering the most common label beats both models.
 
 ### Held-out split
 
 A held-out split of the 29 training sources, with no row shared with training:
 
 | metric | value |
-|---|---|
+| --- | --- |
 | weighted accuracy | 0.807\* |
 | expected calibration error | 0.061\* (0.180 before calibration) |
 | banking77 (77 intents) | 0.980 |
@@ -183,9 +190,7 @@ A held-out split of the 29 training sources, with no row shared with training:
 
 A call is one batched forward pass over every question, so compute stays flat from one question to eight, and a 60-option choice costs the same as a yes/no.
 
-<p align="center"><img src="assets/latency.png" alt="Per-call latency from the same laptop, lev and Jev" width="100%"></p>
-
-Most of lev's round trip from a laptop is network and Modal's ingress; its compute is 69 ms. Self-hosted next to your application, that network hop disappears.
+The 69 ms is for a short request (a three-sentence state), measured inside the container. On S1Bench's aegis2 states, about 470 tokens each, Modal logged a median of 287 ms of execution per call and the laptop saw 589 ms.
 
 ## Why it works
 
@@ -198,7 +203,7 @@ Most of lev's round trip from a laptop is network and Modal's ingress; its compu
 ### The optimizations that mattered
 
 - **One batched forward instead of prefill-and-fork: 169 → 69 ms.** At this size the forward pass is bound by kernel launches, not arithmetic, so forking the cache saved FLOPs and cost time. One batched forward plus the depthwise-conv kernel cut compute by 59%. [ADR-023](https://github.com/Abhinavexists/lev/blob/main/docs/DECISIONS.md#adr-023--one-batched-forward-not-prefill-and-fork)
-- **Label-token readout up to the tokenizer's limit: +51 points on massive-en-US.** Serving 60 options through label codes instead of the learned head took 60-class intent from 0.231 to 0.746. [ADR-025](https://github.com/Abhinavexists/lev/blob/main/docs/DECISIONS.md#adr-025--serving-routes-mode-a-up-to-the-tokenizer-limit-training-keeps-its-cap)
+- **Label-token readout up to the tokenizer's limit: +51 points on 60-class intent.** Serving 60 options through label codes instead of the learned head took 60-class intent from 0.231 to 0.746. [ADR-025](https://github.com/Abhinavexists/lev/blob/main/docs/DECISIONS.md#adr-025--serving-routes-mode-a-up-to-the-tokenizer-limit-training-keeps-its-cap)
 - **Skipping codes that split: banking77 0.818 → 0.980.** Passing over codes that tokenize to two tokens lifts label-token readout from 68 options to several hundred. [ADR-028](https://github.com/Abhinavexists/lev/blob/main/docs/DECISIONS.md#adr-028--skip-split-label-codes-when-serving-calibrate-for-families-the-model-has-not-seen)
 
 ## Training
@@ -209,18 +214,17 @@ Most of lev's round trip from a laptop is network and Modal's ingress; its compu
 
 ## Boundaries worth understanding
 
-- **Minimal-edit pairs.** On paws and vitaminc, two inputs can differ by one swapped word or one changed number. Here the model can be confidently wrong. It scores below the untuned backbone on paws and only matches it on vitaminc.
-- **Fine-grained quality ratings are weak.** Helpfulness scoring (helpsteer2) sits at 0.36. Treat such scores as a rough signal.
+- **Minimal-edit pairs.** On paws and vitaminc, two inputs can differ by one swapped word or one changed number. Here the model can be confidently wrong, and Jev leads by 12–13 points.
+- **Fine-grained quality ratings are weak.** On helpsteer2 and both summeval subsets, always answering the most common level beats lev, and lev under-rates faithful summaries. Treat such scores as a rough signal.
 - **Calibration is fitted on the training distribution.** Temperatures are chosen to transfer across task families. Even so, a task very unlike the training mix may be less well calibrated. Check on your own data before you gate on the probabilities.
 - **Questions are answered independently.** Answers in one request do not condition on each other. Encode a joint decision as one choice, or ask in stages.
-- **Partial benchmark coverage.** S1Bench results cover 6 of its 13 subsets.
 - **English only.**
 - **Needs a GPU for real-time use.** It runs on CPU, but a 4B backbone there takes seconds per call, not milliseconds.
 
 ## Files
 
 | file | role |
-|---|---|
+| --- | --- |
 | `adapter_model.safetensors`, `adapter_config.json` | LoRA adapter |
 | `mode_b_head.pt` | candidate-path head (tensor state dict, loaded with `weights_only=True`) |
 | `tokenizer*`, `chat_template.jinja` | the tokenizer that the label codes were verified against |

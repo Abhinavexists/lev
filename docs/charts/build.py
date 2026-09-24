@@ -4,8 +4,10 @@
     uv run python docs/charts/build.py
 
 Inputs, all checked in:
-  logs/jev-s1bench-*.txt            Jev on the S1Bench task files, through levbench
-  logs/lev-s1bench-final.txt        lev on the same files, same laptop
+  logs/jev-s1bench-*.txt            Jev on the 13 S1Bench task files, through levbench
+  logs/lev-s1bench-*.txt            lev on the same files, same laptop
+  logs/pre-nimble/                  both runs on the earlier six-subset definitions,
+                                    the scale the iterations in history.json were on
   history.json                      lev iterations and speed measurements, each
                                     with the FINDINGS section it was recorded in
   ../../data/s1bench-snapshot.json  the public S1Bench board: every other model
@@ -24,11 +26,14 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
+from lev.data.s1bench import EVAL_SUBSETS, definition
 from levbench_log import parse
 
 HERE = Path(__file__).parent
 SNAPSHOT = HERE.parent.parent / "data" / "s1bench-snapshot.json"
+# The six subsets every model on the board completed; the leaderboard is over these.
 SUBSETS = ["aegis2", "boolq", "helpsteer2", "massive-en-US", "paws", "vitaminc-dev"]
+ALL_SUBSETS = list(EVAL_SUBSETS)
 W = 760
 
 LEV, JEV, CTX = "--series-1", "--series-2", "--context"
@@ -238,33 +243,41 @@ class Inputs:
     lev: dict  # subset -> levbench scores
     jev: dict
     lev_served_by: str
+    lev_log_name: str
     jev_log_name: str
     history: dict
     board: dict
-    lev_acc: float
+    lev_acc: float  # macro over the board's six
     jev_acc: float
     lev_ece: float
     jev_ece: float
-    lev_p50_ms: float
-    jev_p50_ms: float
+    lev_acc_all: float  # macro over all thirteen
+    jev_acc_all: float
+    lev_ece_all: float
+    jev_ece_all: float
+    lev_acc_pre_nimble: float
+    jev_acc_pre_nimble: float
 
 
 def load_inputs() -> Inputs:
     jev_log = sorted(HERE.glob("logs/jev-s1bench-*.txt"))[-1]
     jev = parse(jev_log.read_text())["subsets"]
-    lev_parsed = parse((HERE / "logs/lev-s1bench-final.txt").read_text())
+    lev_log = sorted(HERE.glob("logs/lev-s1bench-*.txt"))[-1]
+    lev_parsed = parse(lev_log.read_text())
     lev = lev_parsed["subsets"]
+    pre_nimble = {
+        name: parse((HERE / f"logs/pre-nimble/{name}").read_text())["subsets"]
+        for name in ("lev-s1bench-final.txt", "jev-s1bench-2026-09-22.txt")
+    }
 
-    def mean(scores, key):
-        return sum(scores[s][key] for s in SUBSETS) / len(SUBSETS)
-
-    def median_p50_ms(scores):
-        return sorted(scores[s]["p50_s"] for s in SUBSETS)[len(SUBSETS) // 2] * 1000
+    def mean(scores, key, subsets=SUBSETS):
+        return sum(scores[s][key] for s in subsets) / len(subsets)
 
     return Inputs(
         lev=lev,
         jev=jev,
         lev_served_by=lev_parsed.get("served_by", "?"),
+        lev_log_name=lev_log.name,
         jev_log_name=jev_log.name,
         history=json.loads((HERE / "history.json").read_text()),
         board=json.loads(SNAPSHOT.read_text()),
@@ -272,9 +285,19 @@ def load_inputs() -> Inputs:
         jev_acc=mean(jev, "accuracy"),
         lev_ece=mean(lev, "ece"),
         jev_ece=mean(jev, "ece"),
-        lev_p50_ms=median_p50_ms(lev),
-        jev_p50_ms=median_p50_ms(jev),
+        lev_acc_all=mean(lev, "accuracy", ALL_SUBSETS),
+        jev_acc_all=mean(jev, "accuracy", ALL_SUBSETS),
+        lev_ece_all=mean(lev, "ece", ALL_SUBSETS),
+        jev_ece_all=mean(jev, "ece", ALL_SUBSETS),
+        lev_acc_pre_nimble=mean(pre_nimble["lev-s1bench-final.txt"], "accuracy"),
+        jev_acc_pre_nimble=mean(pre_nimble["jev-s1bench-2026-09-22.txt"], "accuracy"),
     )
+
+
+def majority_rate(subset: str) -> float:
+    """Accuracy of always answering the most common label."""
+    labels = definition(subset)["labels"]
+    return max(labels.values()) / sum(labels.values())
 
 
 def completed_targets(board: dict) -> list[dict]:
@@ -432,11 +455,10 @@ LEV_AND_JEV = [("lev", LEV), ("Jev", JEV)]
 
 
 def leaderboard_section(rows: list[dict], jev_board: dict, data: Inputs) -> str:
-    rank = next(i for i, r in enumerate(rows) if r["name"].startswith("lev")) + 1
     above = [r for r in rows if r["var"] == CTX and r["value"] > data.lev_acc]
     return section(
         "Where lev stands",
-        f"#{rank} of {len(rows)} — behind only Jev and {len(above)} open models of 26B and up",
+        f"Behind only Jev and {len(above)} open models of 26B and up",
         "Macro accuracy over the six S1Bench subsets that every listed model completed.",
         legend([("lev", LEV), ("Jev", JEV), ("open models on the S1Bench board", CTX)])
         + leaderboard(rows),
@@ -452,8 +474,8 @@ def leaderboard_section(rows: list[dict], jev_board: dict, data: Inputs) -> str:
                 for r in rows
             ],
         ),
-        f"Board models were scored by S1Bench's own harness, lev by ours. On the same model our harness scores Jev "
-        f"{(jev_board['macro_acc'] - data.jev_acc) * 100:.1f} points lower than the board, so lev's placement is conservative. "
+        f"Board models were scored by S1Bench's own harness, lev by ours, on the same pinned items. On the same model our harness scores Jev "
+        f"{(jev_board['macro_acc'] - data.jev_acc) * 100:.1f} points lower than the board, all of it on aegis2. "
         "† self-declared training contamination on an evaluation subset. Models stopped after one subset are omitted. "
         "Gemini, Claude and GPT have not been run on these subsets, so they are not shown.",
     )
@@ -521,8 +543,8 @@ def size_section(points: list[dict], jev_board: dict) -> str:
 def per_subset_series(data: Inputs, value) -> list[dict]:
     """lev and Jev as grouped-bar series, `value(scores)` per subset."""
     return [
-        {"name": "lev", "var": LEV, "values": [value(data.lev[s]) for s in SUBSETS]},
-        {"name": "Jev", "var": JEV, "values": [value(data.jev[s]) for s in SUBSETS]},
+        {"name": "lev", "var": LEV, "values": [value(data.lev[s]) for s in ALL_SUBSETS]},
+        {"name": "Jev", "var": JEV, "values": [value(data.jev[s]) for s in ALL_SUBSETS]},
     ]
 
 
@@ -531,17 +553,18 @@ def accuracy_by_subset_section(data: Inputs) -> str:
     return section(
         "Head to head",
         "Accuracy by subset",
-        "lev and Jev on the same 1,999 task files, same harness, same laptop.",
+        f"lev and Jev on all 13 S1Bench subsets ({sum(lev[s]['n'] for s in ALL_SUBSETS):,} task items), same harness, same laptop.",
         legend(LEV_AND_JEV)
         + grouped_bars(
-            SUBSETS,
+            ALL_SUBSETS,
             per_subset_series(data, lambda r: r["accuracy"]),
             1.0,
             pct,
             [0, 0.25, 0.5, 0.75, 1.0],
+            label_w=150,
         ),
         table(
-            ["subset", "n", "lev", "Jev", "lev − Jev"],
+            ["subset", "n", "lev", "Jev", "lev − Jev", "majority label"],
             [
                 [
                     s,
@@ -549,11 +572,13 @@ def accuracy_by_subset_section(data: Inputs) -> str:
                     pct(lev[s]["accuracy"]),
                     pct(jev[s]["accuracy"]),
                     f"{(lev[s]['accuracy'] - jev[s]['accuracy']) * 100:+.1f} pts",
+                    pct(majority_rate(s)),
                 ]
-                for s in SUBSETS
+                for s in ALL_SUBSETS
             ],
         ),
-        "Per-subset 95% intervals are roughly ±3–5 points at these sizes.",
+        "At these sizes a per-subset difference needs roughly 5–9 points to clear sampling noise. "
+        "On civil_comments, helpsteer2 and both summeval subsets, always answering the most common label beats both models.",
     )
 
 
@@ -565,11 +590,12 @@ def ece_by_subset_section(data: Inputs) -> str:
         "The gap between stated confidence and observed accuracy. Lower is better; 0 is perfect.",
         legend(LEV_AND_JEV)
         + grouped_bars(
-            SUBSETS,
+            ALL_SUBSETS,
             per_subset_series(data, lambda r: r["ece"]),
             0.32,
             lambda v: f"{v:.3f}",
             [0, 0.1, 0.2, 0.3],
+            label_w=150,
         ),
         table(
             ["subset", "lev ECE", "Jev ECE", "lev log-loss", "Jev log-loss"],
@@ -581,7 +607,7 @@ def ece_by_subset_section(data: Inputs) -> str:
                     f"{lev[s]['log_loss']:.3f}",
                     f"{jev[s]['log_loss']:.3f}",
                 ]
-                for s in SUBSETS
+                for s in ALL_SUBSETS
             ],
         ),
     )
@@ -590,16 +616,18 @@ def ece_by_subset_section(data: Inputs) -> str:
 def progress_section(data: Inputs) -> str:
     runs = data.history["macro_accuracy"]
     xs = [r["label"] for r in runs] + ["final\nserving fixes"]
-    vals = [r["value"] for r in runs] + [data.lev_acc]
+    vals = [r["value"] for r in runs] + [data.lev_acc_pre_nimble]
     return section(
         "Progress",
-        f"From {pct(vals[0])} to {pct(data.lev_acc)} across four iterations",
-        "lev's macro accuracy per model iteration, against Jev and the frozen backbone it was trained from.",
+        f"From {pct(vals[0])} to {pct(vals[-1])} across four iterations",
+        "lev's macro accuracy per model iteration, against Jev and the frozen backbone it was trained from. "
+        "Measured on the six subsets as this repo defined them before adopting S1Bench's pinned items, "
+        "so the scale differs from the charts above.",
         line(
             xs,
             vals,
             [
-                {"name": "Jev", "var": JEV, "value": data.jev_acc, "dy": -3},
+                {"name": "Jev", "var": JEV, "value": data.jev_acc_pre_nimble, "dy": -3},
                 {
                     "name": "frozen 4B",
                     "var": CTX,
@@ -613,39 +641,8 @@ def progress_section(data: Inputs) -> str:
         table(
             ["iteration", "macro accuracy", "recorded in"],
             [[r["label"].replace("\n", " "), pct(r["value"]), r["source"]] for r in runs]
-            + [["final, serving fixes", pct(data.lev_acc), "logs/lev-s1bench-final.txt"]],
+            + [["final, serving fixes", pct(vals[-1]), "logs/pre-nimble/lev-s1bench-final.txt"]],
         ),
-    )
-
-
-def latency_section(data: Inputs) -> str:
-    lev, jev = data.lev, data.jev
-    return section(
-        "Speed",
-        "Per-call latency from the same laptop",
-        "Median round trip per subset, one request at a time. Both include the network to each provider.",
-        legend(LEV_AND_JEV)
-        + grouped_bars(
-            SUBSETS,
-            per_subset_series(data, lambda r: r["p50_s"] * 1000),
-            600,
-            lambda v: f"{v:.0f} ms",
-            [0, 200, 400, 600],
-        ),
-        table(
-            ["subset", "lev p50", "Jev p50", "lev p95", "Jev p95"],
-            [
-                [
-                    s,
-                    f"{lev[s]['p50_s'] * 1000:.0f} ms",
-                    f"{jev[s]['p50_s'] * 1000:.0f} ms",
-                    f"{lev[s]['p95_s'] * 1000:.0f} ms",
-                    f"{jev[s]['p95_s'] * 1000:.0f} ms",
-                ]
-                for s in SUBSETS
-            ],
-        ),
-        "lev: one Modal H100 behind Modal's ingress. Jev: TypeSafe's hosted API.",
     )
 
 
@@ -685,21 +682,21 @@ def headline_tiles(data: Inputs) -> str:
         for label, a, b, note in (
             (
                 "Accuracy",
+                pct(data.lev_acc_all),
+                pct(data.jev_acc_all),
+                "macro, all 13 subsets · higher is better",
+            ),
+            (
+                "Accuracy, board subsets",
                 pct(data.lev_acc),
                 pct(data.jev_acc),
-                "macro, 6 subsets · higher is better",
+                "macro, the 6 the board completed",
             ),
             (
                 "Calibration error",
-                f"{data.lev_ece:.3f}",
-                f"{data.jev_ece:.3f}",
-                "mean ECE · lower is better",
-            ),
-            (
-                "Latency",
-                f"{data.lev_p50_ms:.0f} ms",
-                f"{data.jev_p50_ms:.0f} ms",
-                "median, same laptop · lower is better",
+                f"{data.lev_ece_all:.3f}",
+                f"{data.jev_ece_all:.3f}",
+                "mean ECE, 13 subsets · lower is better",
             ),
         )
     )
@@ -718,11 +715,10 @@ def main() -> None:
         accuracy_by_subset_section(data),
         ece_by_subset_section(data),
         progress_section(data),
-        latency_section(data),
         compute_section(data),
     ]
     provenance = (
-        f"lev: logs/lev-s1bench-final.txt ({data.lev_served_by}) · "
+        f"lev: logs/{data.lev_log_name} ({data.lev_served_by}) · "
         f"Jev: logs/{data.jev_log_name} · board: data/s1bench-snapshot.json (build {data.board.get('build', '?')}) · "
         "iterations and speed: history.json"
     )
@@ -734,8 +730,8 @@ def main() -> None:
     (HERE / "lev-vs-jev.html").write_text(page)
     rank = next(i for i, r in enumerate(rows) if r["name"].startswith("lev")) + 1
     print(
-        f"wrote lev-vs-jev.html  rank {rank}/{len(rows)}  lev {pct(data.lev_acc)} ECE {data.lev_ece:.3f} {data.lev_p50_ms:.0f} ms"
-        f"  Jev {pct(data.jev_acc)} ECE {data.jev_ece:.3f} {data.jev_p50_ms:.0f} ms"
+        f"wrote lev-vs-jev.html  rank {rank}/{len(rows)}  board six: lev {pct(data.lev_acc)} Jev {pct(data.jev_acc)}"
+        f"  all 13: lev {pct(data.lev_acc_all)} ECE {data.lev_ece_all:.3f}  Jev {pct(data.jev_acc_all)} ECE {data.jev_ece_all:.3f}"
     )
 
 

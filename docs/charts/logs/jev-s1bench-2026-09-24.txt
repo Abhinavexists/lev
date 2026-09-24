@@ -1,0 +1,368 @@
+# `uv run levbench eval --backend jev --tasks data/s1bench --concurrency 1`, sequential,
+# from the maintainer's laptop on 2026-09-24 against the hosted TypeSafe API (served
+# jev-1.13.0). Task files: all 13 S1Bench subsets as pinned by Nimble's manifests
+# (`lev s1bench export`). Pasted verbatim.
+
+
+=== aegis2  (250 items) ===
+=== jev / jev-latest ===
+wall time          88.5s  (2.83 items/s)
+calls              250
+latency p50        0.345s
+latency mean       0.354s
+latency p95        0.403s
+input tokens       117,246
+output tokens      5,000
+total cost         $0.004924
+schema retries     0
+transient retries  0
+WARNING            requested 'jev-latest' but server served ['jev-1.13.0'] -- cost figures use the requested model's price
+
+-- decision
+   accuracy 0.804   log-loss 0.4137   brier 0.2662   ECE 0.0499
+   conf>=0.5: accuracy 0.804 on 100% of items
+   conf>=0.7: accuracy 0.858 on 84% of items
+   conf>=0.9: accuracy 0.933 on 54% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.5,0.6)  conf 0.546  acc 0.500  n=22  gap +0.046
+     [0.6,0.7)  conf 0.641  acc 0.529  n=17  gap +0.111
+     [0.7,0.8)  conf 0.741  acc 0.571  n=28  gap +0.170
+     [0.8,0.9)  conf 0.849  acc 0.816  n=49  gap +0.033
+     [0.9,1.0)  conf 0.957  acc 0.933  n=134  gap +0.024
+
+
+=== boolq  (300 items) ===
+=== jev / jev-latest ===
+wall time          104.9s  (2.86 items/s)
+calls              300
+latency p50        0.342s
+latency mean       0.349s
+latency p95        0.402s
+input tokens       142,987
+output tokens      6,000
+total cost         $0.006005
+schema retries     0
+transient retries  0
+WARNING            requested 'jev-latest' but server served ['jev-1.13.0'] -- cost figures use the requested model's price
+
+-- decision
+   accuracy 0.893   log-loss 0.2811   brier 0.1704   ECE 0.0348
+   conf>=0.5: accuracy 0.893 on 100% of items
+   conf>=0.7: accuracy 0.904 on 94% of items
+   conf>=0.9: accuracy 0.951 on 75% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.5,0.6)  conf 0.540  acc 0.750  n=12  gap -0.210
+     [0.6,0.7)  conf 0.636  acc 0.714  n=7  gap -0.079
+     [0.7,0.8)  conf 0.748  acc 0.647  n=17  gap +0.101
+     [0.8,0.9)  conf 0.852  acc 0.744  n=39  gap +0.108
+     [0.9,1.0)  conf 0.958  acc 0.951  n=225  gap +0.006
+
+
+=== civil_comments  (300 items) ===
+=== jev / jev-latest ===
+wall time          106.0s  (2.83 items/s)
+calls              300
+latency p50        0.341s
+latency mean       0.353s
+latency p95        0.420s
+input tokens       125,147
+output tokens      6,000
+total cost         $0.005256
+schema retries     0
+transient retries  0
+WARNING            requested 'jev-latest' but server served ['jev-1.13.0'] -- cost figures use the requested model's price
+
+-- decision
+   accuracy 0.803   log-loss 0.4440   brier 0.2837   ECE 0.0437
+   conf>=0.5: accuracy 0.803 on 100% of items
+   conf>=0.7: accuracy 0.872 on 75% of items
+   conf>=0.9: accuracy 0.944 on 30% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.5,0.6)  conf 0.548  acc 0.548  n=42  gap +0.001
+     [0.6,0.7)  conf 0.644  acc 0.656  n=32  gap -0.012
+     [0.7,0.8)  conf 0.749  acc 0.887  n=53  gap -0.138
+     [0.8,0.9)  conf 0.846  acc 0.783  n=83  gap +0.063
+     [0.9,1.0)  conf 0.942  acc 0.944  n=90  gap -0.002
+
+
+=== helpsteer2  (249 items) ===
+=== jev / jev-latest ===
+wall time          87.4s  (2.85 items/s)
+calls              249
+latency p50        0.344s
+latency mean       0.351s
+latency p95        0.389s
+input tokens       220,378
+output tokens      4,233
+total cost         $0.009256
+schema retries     0
+transient retries  0
+WARNING            requested 'jev-latest' but server served ['jev-1.13.0'] -- cost figures use the requested model's price
+
+-- decision
+   accuracy 0.341   log-loss 4.6716   brier 0.8421   ECE 0.2582
+   conf>=0.5: accuracy 0.369 on 80% of items
+   conf>=0.7: accuracy 0.412 on 20% of items
+   conf>=0.9: accuracy 0.250 on 2% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.3,0.4)  conf 0.365  acc 0.267  n=15  gap +0.099
+     [0.4,0.5)  conf 0.457  acc 0.222  n=36  gap +0.235
+     [0.5,0.6)  conf 0.546  acc 0.378  n=74  gap +0.168
+     [0.6,0.7)  conf 0.640  acc 0.329  n=73  gap +0.312
+     [0.7,0.8)  conf 0.739  acc 0.345  n=29  gap +0.394
+     [0.8,0.9)  conf 0.836  acc 0.556  n=18  gap +0.281
+     [0.9,1.0)  conf 0.927  acc 0.250  n=4  gap +0.677
+
+
+=== massive-de-DE  (350 items) ===
+=== jev / jev-latest ===
+wall time          122.1s  (2.87 items/s)
+calls              350
+latency p50        0.341s
+latency mean       0.349s
+latency p95        0.399s
+input tokens       249,182
+output tokens      52,200
+total cost         $0.010466
+schema retries     0
+transient retries  0
+WARNING            requested 'jev-latest' but server served ['jev-1.13.0'] -- cost figures use the requested model's price
+
+-- decision
+   accuracy 0.871   log-loss 1.2185   brier 0.2150   ECE 0.0591
+   conf>=0.5: accuracy 0.878 on 98% of items
+   conf>=0.7: accuracy 0.907 on 89% of items
+   conf>=0.9: accuracy 0.942 on 79% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.3,0.4)  conf 0.343  acc 0.667  n=3  gap -0.323
+     [0.4,0.5)  conf 0.440  acc 0.333  n=3  gap +0.107
+     [0.5,0.6)  conf 0.542  acc 0.556  n=18  gap -0.013
+     [0.6,0.7)  conf 0.655  acc 0.667  n=15  gap -0.012
+     [0.7,0.8)  conf 0.744  acc 0.667  n=18  gap +0.077
+     [0.8,0.9)  conf 0.841  acc 0.588  n=17  gap +0.252
+     [0.9,1.0)  conf 0.990  acc 0.942  n=276  gap +0.048
+
+
+=== massive-en-US  (350 items) ===
+=== jev / jev-latest ===
+wall time          121.4s  (2.88 items/s)
+calls              350
+latency p50        0.341s
+latency mean       0.347s
+latency p95        0.389s
+input tokens       248,210
+output tokens      52,200
+total cost         $0.010425
+schema retries     0
+transient retries  0
+WARNING            requested 'jev-latest' but server served ['jev-1.13.0'] -- cost figures use the requested model's price
+
+-- decision
+   accuracy 0.874   log-loss 1.3766   brier 0.2036   ECE 0.0706
+   conf>=0.5: accuracy 0.887 on 98% of items
+   conf>=0.7: accuracy 0.910 on 92% of items
+   conf>=0.9: accuracy 0.936 on 84% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.3,0.4)  conf 0.350  acc 0.000  n=3  gap +0.350
+     [0.4,0.5)  conf 0.430  acc 0.333  n=3  gap +0.097
+     [0.5,0.6)  conf 0.544  acc 0.500  n=8  gap +0.044
+     [0.6,0.7)  conf 0.641  acc 0.538  n=13  gap +0.102
+     [0.7,0.8)  conf 0.745  acc 0.600  n=10  gap +0.145
+     [0.8,0.9)  conf 0.856  acc 0.667  n=18  gap +0.189
+     [0.9,1.0)  conf 0.993  acc 0.936  n=295  gap +0.057
+
+
+=== multinli  (299 items) ===
+=== jev / jev-latest ===
+wall time          104.6s  (2.86 items/s)
+calls              299
+latency p50        0.341s
+latency mean       0.350s
+latency p95        0.412s
+input tokens       125,340
+output tokens      12,890
+total cost         $0.005264
+schema retries     0
+transient retries  0
+WARNING            requested 'jev-latest' but server served ['jev-1.13.0'] -- cost figures use the requested model's price
+
+-- decision
+   accuracy 0.836   log-loss 0.4618   brier 0.2280   ECE 0.0569
+   conf>=0.5: accuracy 0.839 on 100% of items
+   conf>=0.7: accuracy 0.897 on 84% of items
+   conf>=0.9: accuracy 0.950 on 67% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.4,0.5)  conf 0.460  acc 0.000  n=1  gap +0.460
+     [0.5,0.6)  conf 0.550  acc 0.565  n=23  gap -0.015
+     [0.6,0.7)  conf 0.645  acc 0.478  n=23  gap +0.167
+     [0.7,0.8)  conf 0.742  acc 0.760  n=25  gap -0.018
+     [0.8,0.9)  conf 0.854  acc 0.643  n=28  gap +0.211
+     [0.9,1.0)  conf 0.980  acc 0.950  n=199  gap +0.030
+
+
+=== paws  (250 items) ===
+=== jev / jev-latest ===
+wall time          88.0s  (2.84 items/s)
+calls              250
+latency p50        0.337s
+latency mean       0.352s
+latency p95        0.421s
+input tokens       104,631
+output tokens      5,000
+total cost         $0.004395
+schema retries     0
+transient retries  0
+WARNING            requested 'jev-latest' but server served ['jev-1.13.0'] -- cost figures use the requested model's price
+
+-- decision
+   accuracy 0.900   log-loss 0.2929   brier 0.1714   ECE 0.0280
+   conf>=0.5: accuracy 0.900 on 100% of items
+   conf>=0.7: accuracy 0.917 on 87% of items
+   conf>=0.9: accuracy 0.956 on 64% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.5,0.6)  conf 0.547  acc 0.706  n=17  gap -0.159
+     [0.6,0.7)  conf 0.644  acc 0.867  n=15  gap -0.223
+     [0.7,0.8)  conf 0.744  acc 0.741  n=27  gap +0.003
+     [0.8,0.9)  conf 0.846  acc 0.871  n=31  gap -0.025
+     [0.9,1.0)  conf 0.957  acc 0.956  n=160  gap +0.001
+
+
+=== pubmedqa  (250 items) ===
+=== jev / jev-latest ===
+wall time          86.3s  (2.90 items/s)
+calls              250
+latency p50        0.339s
+latency mean       0.345s
+latency p95        0.390s
+input tokens       179,413
+output tokens      9,500
+total cost         $0.007535
+schema retries     0
+transient retries  0
+WARNING            requested 'jev-latest' but server served ['jev-1.13.0'] -- cost figures use the requested model's price
+
+-- decision
+   accuracy 0.764   log-loss 1.5996   brier 0.3453   ECE 0.1359
+   conf>=0.5: accuracy 0.786 on 97% of items
+   conf>=0.7: accuracy 0.837 on 86% of items
+   conf>=0.9: accuracy 0.887 on 71% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.3,0.4)  conf 0.360  acc 0.000  n=1  gap +0.360
+     [0.4,0.5)  conf 0.453  acc 0.000  n=6  gap +0.453
+     [0.5,0.6)  conf 0.537  acc 0.400  n=15  gap +0.137
+     [0.6,0.7)  conf 0.652  acc 0.385  n=13  gap +0.268
+     [0.7,0.8)  conf 0.747  acc 0.750  n=12  gap -0.003
+     [0.8,0.9)  conf 0.855  acc 0.538  n=26  gap +0.317
+     [0.9,1.0)  conf 0.984  acc 0.887  n=177  gap +0.096
+
+
+=== squad2  (299 items) ===
+=== jev / jev-latest ===
+wall time          102.0s  (2.93 items/s)
+calls              299
+latency p50        0.335s
+latency mean       0.341s
+latency p95        0.384s
+input tokens       177,016
+output tokens      5,980
+total cost         $0.007435
+schema retries     0
+transient retries  0
+WARNING            requested 'jev-latest' but server served ['jev-1.13.0'] -- cost figures use the requested model's price
+
+-- decision
+   accuracy 0.836   log-loss 0.3472   brier 0.2238   ECE 0.0363
+   conf>=0.5: accuracy 0.836 on 100% of items
+   conf>=0.7: accuracy 0.889 on 84% of items
+   conf>=0.9: accuracy 0.958 on 64% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.5,0.6)  conf 0.544  acc 0.520  n=25  gap +0.024
+     [0.6,0.7)  conf 0.658  acc 0.591  n=22  gap +0.067
+     [0.7,0.8)  conf 0.750  acc 0.625  n=24  gap +0.125
+     [0.8,0.9)  conf 0.853  acc 0.694  n=36  gap +0.159
+     [0.9,1.0)  conf 0.959  acc 0.958  n=192  gap +0.000
+
+
+=== summeval-consistency  (144 items) ===
+=== jev / jev-latest ===
+wall time          50.1s  (2.88 items/s)
+calls              144
+latency p50        0.340s
+latency mean       0.348s
+latency p95        0.402s
+input tokens       128,206
+output tokens      2,448
+total cost         $0.005385
+schema retries     0
+transient retries  0
+WARNING            requested 'jev-latest' but server served ['jev-1.13.0'] -- cost figures use the requested model's price
+
+-- decision
+   accuracy 0.812   log-loss 1.4458   brier 0.2670   ECE 0.0860
+   conf>=0.5: accuracy 0.857 on 92% of items
+   conf>=0.7: accuracy 0.936 on 76% of items
+   conf>=0.9: accuracy 0.944 on 49% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.3,0.4)  conf 0.334  acc 0.200  n=5  gap +0.134
+     [0.4,0.5)  conf 0.452  acc 0.333  n=6  gap +0.118
+     [0.5,0.6)  conf 0.547  acc 0.294  n=17  gap +0.253
+     [0.6,0.7)  conf 0.666  acc 1.000  n=7  gap -0.334
+     [0.7,0.8)  conf 0.741  acc 0.867  n=15  gap -0.125
+     [0.8,0.9)  conf 0.852  acc 0.957  n=23  gap -0.105
+     [0.9,1.0)  conf 0.945  acc 0.944  n=71  gap +0.001
+
+
+=== summeval-relevance  (240 items) ===
+=== jev / jev-latest ===
+wall time          83.8s  (2.86 items/s)
+calls              240
+latency p50        0.346s
+latency mean       0.349s
+latency p95        0.392s
+input tokens       217,853
+output tokens      4,080
+total cost         $0.009150
+schema retries     0
+transient retries  0
+WARNING            requested 'jev-latest' but server served ['jev-1.13.0'] -- cost figures use the requested model's price
+
+-- decision
+   accuracy 0.358   log-loss 1.8415   brier 0.7773   ECE 0.2298
+   conf>=0.5: accuracy 0.350 on 75% of items
+   conf>=0.7: accuracy 0.486 on 15% of items
+   conf>=0.9: accuracy 0.000 on 0% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.3,0.4)  conf 0.369  acc 0.714  n=7  gap -0.346
+     [0.4,0.5)  conf 0.460  acc 0.340  n=53  gap +0.121
+     [0.5,0.6)  conf 0.541  acc 0.333  n=99  gap +0.207
+     [0.6,0.7)  conf 0.640  acc 0.283  n=46  gap +0.357
+     [0.7,0.8)  conf 0.740  acc 0.517  n=29  gap +0.222
+     [0.8,0.9)  conf 0.825  acc 0.333  n=6  gap +0.492
+
+
+=== vitaminc-dev  (599 items) ===
+=== jev / jev-latest ===
+wall time          209.0s  (2.87 items/s)
+calls              599
+latency p50        0.341s
+latency mean       0.349s
+latency p95        0.401s
+input tokens       282,829
+output tokens      28,220
+total cost         $0.011879
+schema retries     0
+transient retries  0
+WARNING            requested 'jev-latest' but server served ['jev-1.13.0'] -- cost figures use the requested model's price
+
+-- decision
+   accuracy 0.801   log-loss 1.5707   brier 0.3083   ECE 0.0988
+   conf>=0.5: accuracy 0.801 on 100% of items
+   conf>=0.7: accuracy 0.844 on 87% of items
+   conf>=0.9: accuracy 0.887 on 68% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.4,0.5)  conf 0.420  acc 1.000  n=1  gap -0.580
+     [0.5,0.6)  conf 0.543  acc 0.517  n=29  gap +0.026
+     [0.6,0.7)  conf 0.647  acc 0.489  n=45  gap +0.158
+     [0.7,0.8)  conf 0.747  acc 0.690  n=58  gap +0.057
+     [0.8,0.9)  conf 0.846  acc 0.695  n=59  gap +0.151
+     [0.9,1.0)  conf 0.982  acc 0.887  n=407  gap +0.095

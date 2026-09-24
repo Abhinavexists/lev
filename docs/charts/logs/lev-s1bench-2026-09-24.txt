@@ -1,0 +1,354 @@
+# `uv run levbench eval --backend lev --tasks data/s1bench --concurrency 1 --base-url https://jigsawstack--lev-serve.modal.run --timeout 120`,
+# sequential, from the same laptop as the Jev log, 2026-09-24, against the deployed
+# 4b-instruct/step-18750. Task files: all 13 S1Bench subsets as pinned by Nimble's manifests.
+# {"status":"ok","model":"Qwen/Qwen3.5-4B","checkpoint":"/checkpoints/4b-instruct/step-18750","calibrated":true,"mode_b":true,"noul_readout":"rating","max_label_options":null,"order_average":true,"prefix_mode":"single","compiled":false,"prompt_style":"chat","skip_multi_token_codes":true}
+# Latency here is mostly transport: a bare GET /health on a kept-alive connection took
+# 0.42 s median (15 calls) from this laptop during the run. Pasted verbatim.
+
+=== aegis2  (250 items) ===
+=== lev / Qwen/Qwen3.5-4B ===
+wall time          202.4s  (1.23 items/s)
+calls              250
+latency p50        0.607s
+latency mean       0.810s
+latency p95        0.708s
+input tokens       70,000
+output tokens      0
+total cost         self-hosted (GPU time, not per-token)
+schema retries     0
+transient retries  0
+
+-- decision
+   accuracy 0.800   log-loss 0.5797   brier 0.3301   ECE 0.1343
+   conf>=0.5: accuracy 0.800 on 100% of items
+   conf>=0.7: accuracy 0.816 on 98% of items
+   conf>=0.9: accuracy 0.842 on 81% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.5,0.6)  conf 0.514  acc 0.000  n=2  gap +0.514
+     [0.6,0.7)  conf 0.673  acc 0.250  n=4  gap +0.423
+     [0.7,0.8)  conf 0.761  acc 0.750  n=8  gap +0.011
+     [0.8,0.9)  conf 0.859  acc 0.667  n=33  gap +0.193
+     [0.9,1.0)  conf 0.963  acc 0.842  n=203  gap +0.120
+
+
+=== boolq  (300 items) ===
+=== lev / Qwen/Qwen3.5-4B ===
+wall time          188.7s  (1.59 items/s)
+calls              300
+latency p50        0.616s
+latency mean       0.629s
+latency p95        0.686s
+input tokens       85,244
+output tokens      0
+total cost         self-hosted (GPU time, not per-token)
+schema retries     0
+transient retries  0
+
+-- decision
+   accuracy 0.827   log-loss 0.4934   brier 0.2886   ECE 0.1264
+   conf>=0.5: accuracy 0.827 on 100% of items
+   conf>=0.7: accuracy 0.831 on 99% of items
+   conf>=0.9: accuracy 0.878 on 88% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.5,0.6)  conf 0.570  acc 1.000  n=1  gap -0.430
+     [0.6,0.7)  conf 0.652  acc 0.333  n=3  gap +0.319
+     [0.7,0.8)  conf 0.771  acc 0.200  n=5  gap +0.571
+     [0.8,0.9)  conf 0.855  acc 0.500  n=28  gap +0.355
+     [0.9,1.0)  conf 0.969  acc 0.878  n=263  gap +0.090
+
+
+=== civil_comments  (300 items) ===
+=== lev / Qwen/Qwen3.5-4B ===
+wall time          184.9s  (1.62 items/s)
+calls              300
+latency p50        0.609s
+latency mean       0.616s
+latency p95        0.663s
+input tokens       67,520
+output tokens      0
+total cost         self-hosted (GPU time, not per-token)
+schema retries     0
+transient retries  0
+
+-- decision
+   accuracy 0.760   log-loss 0.6057   brier 0.3928   ECE 0.1176
+   conf>=0.5: accuracy 0.760 on 100% of items
+   conf>=0.7: accuracy 0.761 on 81% of items
+   conf>=0.9: accuracy 0.796 on 31% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.5,0.6)  conf 0.530  acc 0.733  n=30  gap -0.203
+     [0.6,0.7)  conf 0.647  acc 0.778  n=27  gap -0.130
+     [0.7,0.8)  conf 0.762  acc 0.735  n=49  gap +0.027
+     [0.8,0.9)  conf 0.856  acc 0.743  n=101  gap +0.114
+     [0.9,1.0)  conf 0.934  acc 0.796  n=93  gap +0.138
+
+
+=== helpsteer2  (249 items) ===
+=== lev / Qwen/Qwen3.5-4B ===
+wall time          162.7s  (1.53 items/s)
+calls              249
+latency p50        0.654s
+latency mean       0.653s
+latency p95        0.686s
+input tokens       178,603
+output tokens      0
+total cost         self-hosted (GPU time, not per-token)
+schema retries     0
+transient retries  0
+
+-- decision
+   accuracy 0.386   log-loss 1.3859   brier 0.7170   ECE 0.1036
+   conf>=0.5: accuracy 0.443 on 46% of items
+   conf>=0.7: accuracy 1.000 on 0% of items
+   conf>=0.9: accuracy 0.000 on 0% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.2,0.3)  conf 0.279  acc 0.222  n=9  gap +0.057
+     [0.3,0.4)  conf 0.366  acc 0.048  n=21  gap +0.319
+     [0.4,0.5)  conf 0.457  acc 0.404  n=104  gap +0.053
+     [0.5,0.6)  conf 0.543  acc 0.423  n=104  gap +0.120
+     [0.6,0.7)  conf 0.637  acc 0.600  n=10  gap +0.037
+     [0.7,0.8)  conf 0.721  acc 1.000  n=1  gap -0.279
+
+
+=== massive-de-DE  (350 items) ===
+=== lev / Qwen/Qwen3.5-4B ===
+wall time          216.9s  (1.61 items/s)
+calls              350
+latency p50        0.607s
+latency mean       0.620s
+latency p95        0.672s
+input tokens       251,002
+output tokens      0
+total cost         self-hosted (GPU time, not per-token)
+schema retries     0
+transient retries  0
+
+-- decision
+   accuracy 0.823   log-loss 0.6668   brier 0.2622   ECE 0.0671
+   conf>=0.5: accuracy 0.858 on 92% of items
+   conf>=0.7: accuracy 0.907 on 83% of items
+   conf>=0.9: accuracy 0.933 on 72% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.0,0.1)  conf 0.072  acc 0.000  n=1  gap +0.072
+     [0.1,0.2)  conf 0.150  acc 0.667  n=3  gap -0.517
+     [0.2,0.3)  conf 0.262  acc 0.400  n=5  gap -0.138
+     [0.3,0.4)  conf 0.332  acc 0.500  n=6  gap -0.168
+     [0.4,0.5)  conf 0.454  acc 0.333  n=12  gap +0.121
+     [0.5,0.6)  conf 0.543  acc 0.417  n=24  gap +0.126
+     [0.6,0.7)  conf 0.674  acc 0.444  n=9  gap +0.229
+     [0.7,0.8)  conf 0.759  acc 0.579  n=19  gap +0.180
+     [0.8,0.9)  conf 0.862  acc 0.895  n=19  gap -0.033
+     [0.9,1.0)  conf 0.971  acc 0.933  n=252  gap +0.038
+
+
+=== massive-en-US  (350 items) ===
+=== lev / Qwen/Qwen3.5-4B ===
+wall time          212.9s  (1.64 items/s)
+calls              350
+latency p50        0.604s
+latency mean       0.608s
+latency p95        0.642s
+input tokens       249,935
+output tokens      0
+total cost         self-hosted (GPU time, not per-token)
+schema retries     0
+transient retries  0
+
+-- decision
+   accuracy 0.857   log-loss 0.6226   brier 0.2279   ECE 0.0564
+   conf>=0.5: accuracy 0.881 on 96% of items
+   conf>=0.7: accuracy 0.910 on 89% of items
+   conf>=0.9: accuracy 0.934 on 78% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.1,0.2)  conf 0.166  acc 0.667  n=3  gap -0.501
+     [0.2,0.3)  conf 0.257  acc 0.000  n=3  gap +0.257
+     [0.3,0.4)  conf 0.351  acc 0.250  n=4  gap +0.101
+     [0.4,0.5)  conf 0.457  acc 0.400  n=5  gap +0.057
+     [0.5,0.6)  conf 0.551  acc 0.538  n=13  gap +0.013
+     [0.6,0.7)  conf 0.636  acc 0.455  n=11  gap +0.181
+     [0.7,0.8)  conf 0.758  acc 0.625  n=8  gap +0.133
+     [0.8,0.9)  conf 0.862  acc 0.774  n=31  gap +0.087
+     [0.9,1.0)  conf 0.974  acc 0.934  n=272  gap +0.040
+
+
+=== multinli  (299 items) ===
+=== lev / Qwen/Qwen3.5-4B ===
+wall time          185.1s  (1.62 items/s)
+calls              299
+latency p50        0.603s
+latency mean       0.619s
+latency p95        0.678s
+input tokens       87,512
+output tokens      0
+total cost         self-hosted (GPU time, not per-token)
+schema retries     0
+transient retries  0
+
+-- decision
+   accuracy 0.890   log-loss 0.3162   brier 0.1691   ECE 0.0367
+   conf>=0.5: accuracy 0.892 on 99% of items
+   conf>=0.7: accuracy 0.914 on 93% of items
+   conf>=0.9: accuracy 0.982 on 57% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.4,0.5)  conf 0.496  acc 0.500  n=2  gap -0.004
+     [0.5,0.6)  conf 0.552  acc 0.500  n=8  gap +0.052
+     [0.6,0.7)  conf 0.667  acc 0.600  n=10  gap +0.067
+     [0.7,0.8)  conf 0.757  acc 0.667  n=33  gap +0.090
+     [0.8,0.9)  conf 0.864  acc 0.868  n=76  gap -0.005
+     [0.9,1.0)  conf 0.944  acc 0.982  n=170  gap -0.039
+
+
+=== paws  (250 items) ===
+=== lev / Qwen/Qwen3.5-4B ===
+wall time          151.2s  (1.65 items/s)
+calls              250
+latency p50        0.600s
+latency mean       0.605s
+latency p95        0.641s
+input tokens       57,084
+output tokens      0
+total cost         self-hosted (GPU time, not per-token)
+schema retries     0
+transient retries  0
+
+-- decision
+   accuracy 0.776   log-loss 0.7356   brier 0.4035   ECE 0.1779
+   conf>=0.5: accuracy 0.776 on 100% of items
+   conf>=0.7: accuracy 0.776 on 100% of items
+   conf>=0.9: accuracy 0.794 on 91% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.7,0.8)  conf 0.745  acc 0.750  n=4  gap -0.005
+     [0.8,0.9)  conf 0.867  acc 0.556  n=18  gap +0.312
+     [0.9,1.0)  conf 0.964  acc 0.794  n=228  gap +0.170
+
+
+=== pubmedqa  (250 items) ===
+=== lev / Qwen/Qwen3.5-4B ===
+wall time          163.0s  (1.53 items/s)
+calls              250
+latency p50        0.648s
+latency mean       0.652s
+latency p95        0.756s
+input tokens       144,432
+output tokens      0
+total cost         self-hosted (GPU time, not per-token)
+schema retries     0
+transient retries  0
+
+-- decision
+   accuracy 0.732   log-loss 0.6947   brier 0.3882   ECE 0.1211
+   conf>=0.5: accuracy 0.750 on 98% of items
+   conf>=0.7: accuracy 0.804 on 84% of items
+   conf>=0.9: accuracy 0.929 on 51% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.3,0.4)  conf 0.366  acc 0.000  n=1  gap +0.366
+     [0.4,0.5)  conf 0.480  acc 0.000  n=5  gap +0.480
+     [0.5,0.6)  conf 0.540  acc 0.444  n=18  gap +0.096
+     [0.6,0.7)  conf 0.646  acc 0.412  n=17  gap +0.235
+     [0.7,0.8)  conf 0.755  acc 0.385  n=13  gap +0.370
+     [0.8,0.9)  conf 0.864  acc 0.652  n=69  gap +0.212
+     [0.9,1.0)  conf 0.948  acc 0.929  n=127  gap +0.019
+
+
+=== squad2  (299 items) ===
+=== lev / Qwen/Qwen3.5-4B ===
+wall time          186.3s  (1.61 items/s)
+calls              299
+latency p50        0.606s
+latency mean       0.623s
+latency p95        0.717s
+input tokens       117,717
+output tokens      0
+total cost         self-hosted (GPU time, not per-token)
+schema retries     0
+transient retries  0
+
+-- decision
+   accuracy 0.813   log-loss 0.4855   brier 0.3034   ECE 0.1032
+   conf>=0.5: accuracy 0.813 on 100% of items
+   conf>=0.7: accuracy 0.821 on 97% of items
+   conf>=0.9: accuracy 0.872 on 73% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.5,0.6)  conf 0.563  acc 0.500  n=4  gap +0.063
+     [0.6,0.7)  conf 0.649  acc 0.500  n=4  gap +0.149
+     [0.7,0.8)  conf 0.757  acc 0.600  n=10  gap +0.157
+     [0.8,0.9)  conf 0.867  acc 0.683  n=63  gap +0.184
+     [0.9,1.0)  conf 0.949  acc 0.872  n=218  gap +0.077
+
+
+=== summeval-consistency  (144 items) ===
+=== lev / Qwen/Qwen3.5-4B ===
+wall time          91.6s  (1.57 items/s)
+calls              144
+latency p50        0.644s
+latency mean       0.636s
+latency p95        0.681s
+input tokens       102,073
+output tokens      0
+total cost         self-hosted (GPU time, not per-token)
+schema retries     0
+transient retries  0
+
+-- decision
+   accuracy 0.271   log-loss 1.5032   brier 0.7830   ECE 0.1745
+   conf>=0.5: accuracy 0.529 on 12% of items
+   conf>=0.7: accuracy 0.000 on 0% of items
+   conf>=0.9: accuracy 0.000 on 0% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.3,0.4)  conf 0.373  acc 0.133  n=30  gap +0.239
+     [0.4,0.5)  conf 0.449  acc 0.268  n=97  gap +0.181
+     [0.5,0.6)  conf 0.541  acc 0.533  n=15  gap +0.007
+     [0.6,0.7)  conf 0.626  acc 0.500  n=2  gap +0.126
+
+
+=== summeval-relevance  (240 items) ===
+=== lev / Qwen/Qwen3.5-4B ===
+wall time          149.6s  (1.60 items/s)
+calls              240
+latency p50        0.610s
+latency mean       0.623s
+latency p95        0.674s
+input tokens       174,698
+output tokens      0
+total cost         self-hosted (GPU time, not per-token)
+schema retries     0
+transient retries  0
+
+-- decision
+   accuracy 0.358   log-loss 1.4447   brier 0.7585   ECE 0.1362
+   conf>=0.5: accuracy 0.377 on 51% of items
+   conf>=0.7: accuracy 0.000 on 0% of items
+   conf>=0.9: accuracy 0.000 on 0% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.3,0.4)  conf 0.383  acc 0.333  n=15  gap +0.049
+     [0.4,0.5)  conf 0.459  acc 0.340  n=103  gap +0.119
+     [0.5,0.6)  conf 0.534  acc 0.383  n=115  gap +0.152
+     [0.6,0.7)  conf 0.611  acc 0.286  n=7  gap +0.326
+
+
+=== vitaminc-dev  (599 items) ===
+=== lev / Qwen/Qwen3.5-4B ===
+wall time          367.4s  (1.63 items/s)
+calls              599
+latency p50        0.601s
+latency mean       0.613s
+latency p95        0.661s
+input tokens       224,699
+output tokens      0
+total cost         self-hosted (GPU time, not per-token)
+schema retries     0
+transient retries  0
+
+-- decision
+   accuracy 0.668   log-loss 0.8832   brier 0.4933   ECE 0.1405
+   conf>=0.5: accuracy 0.679 on 97% of items
+   conf>=0.7: accuracy 0.725 on 84% of items
+   conf>=0.9: accuracy 0.854 on 25% of items
+   reliability (top-probability bin -> accuracy, n):
+     [0.3,0.4)  conf 0.370  acc 0.500  n=2  gap -0.130
+     [0.4,0.5)  conf 0.460  acc 0.333  n=18  gap +0.126
+     [0.5,0.6)  conf 0.548  acc 0.353  n=34  gap +0.195
+     [0.6,0.7)  conf 0.657  acc 0.409  n=44  gap +0.248
+     [0.7,0.8)  conf 0.761  acc 0.500  n=122  gap +0.261
+     [0.8,0.9)  conf 0.857  acc 0.759  n=228  gap +0.099
+     [0.9,1.0)  conf 0.919  acc 0.854  n=151  gap +0.065

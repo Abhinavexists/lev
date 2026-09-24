@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 
@@ -42,11 +43,9 @@ def _measure_tokens(config, data_dir: str, sample: int = 1500) -> dict:
 
 
 def cmd_plan(args: argparse.Namespace) -> None:
-    """Print the training budget for a preset without spending it."""
     from .train.config import PRESETS
 
-    # argparse `choices` rejects an unknown preset before this point.
-    config = PRESETS[args.preset]
+    config = replace(PRESETS[args.preset])
     if args.data:
         measured = _measure_tokens(config, args.data)
         print(
@@ -65,7 +64,6 @@ def cmd_plan(args: argparse.Namespace) -> None:
 
 
 def cmd_route(args: argparse.Namespace) -> None:
-    """Show which readout mode each question in a request would take when served."""
     from transformers import AutoTokenizer
 
     from .model import EngineConfig, serving_routes
@@ -88,7 +86,6 @@ def cmd_route(args: argparse.Namespace) -> None:
 
 
 def cmd_check_data(args: argparse.Namespace) -> None:
-    """Fail loudly if a training mixture touches an evaluation subset."""
     from .data import BLOCKED_SUBSETS, ContaminationError, assert_clean
 
     names = [n.strip() for n in Path(args.sources).read_text().splitlines() if n.strip()]
@@ -108,7 +105,6 @@ def _preset_names() -> list[str]:
 
 
 def cmd_data_build(args: argparse.Namespace) -> None:
-    """Download every source, split it, and write the mixture to disk."""
     from .data.build import build_dataset
 
     manifest = build_dataset(
@@ -133,7 +129,6 @@ def cmd_data_build(args: argparse.Namespace) -> None:
 
 
 def cmd_data_eval(args: argparse.Namespace) -> None:
-    """Export the held-out split as levbench task files."""
     from .data.export_eval import export
     from .data.splits import Split
 
@@ -145,14 +140,13 @@ def cmd_data_eval(args: argparse.Namespace) -> None:
 
 
 def cmd_s1bench_export(args: argparse.Namespace) -> None:
-    """Export the S1Bench evaluation subsets as levbench task files."""
     from .data.s1bench import export
 
-    index = export(args.out, args.subsets, args.limit)
-    print(f"wrote {index['total_items']:,} items to {args.out} (seed {index['seed']})")
-    print(f"  {'subset':<16}{'items':>7}{'type':>8}{'jev':>8}")
+    index = export(args.out, args.subsets)
+    print(f"wrote {index['total_items']:,} items to {args.out}")
+    print(f"  {'subset':<22}{'items':>7}{'type':>8}{'jev 1.13':>10}")
     for subset, info in index["subsets"].items():
-        print(f"  {subset:<16}{info['items']:>7,}{info['type']:>8}{info['jev_measured']:>8.4f}")
+        print(f"  {subset:<22}{info['items']:>7,}{info['type']:>8}{info['jev_published']:>10.3f}")
     print("\n  validate the harness against Jev first:")
     print(f"    uv run levbench eval --backend jev --tasks {args.out}")
     print("  then score lev on the same files:")
@@ -163,7 +157,7 @@ def cmd_train(args: argparse.Namespace) -> None:
     from .train.config import PRESETS
     from .train.loop import run_training
 
-    config = PRESETS[args.preset]
+    config = replace(PRESETS[args.preset])
     if args.output_dir:
         config.output_dir = args.output_dir
     summary = run_training(
@@ -269,9 +263,10 @@ def main(argv: list[str] | None = None) -> None:
         "--checkpoint",
         default=None,
         help=(
-            "a training output directory (or a step-N inside one). The LoRA "
-            "adapter, the Mode B head and any calibration.json beside them are "
-            "all picked up. Omit to serve the untrained base model."
+            "a release directory, a Hub id, or a training output directory (or "
+            "a step-N inside one). The LoRA adapter, the Mode B head and any "
+            "calibration.json beside them are all picked up. Omit to serve the "
+            "untrained base model."
         ),
     )
     serve_parser.add_argument("--model", default="Qwen/Qwen3.5-4B-Base")
@@ -331,10 +326,7 @@ def main(argv: list[str] | None = None) -> None:
         "--subsets",
         nargs="*",
         default=None,
-        help="subset names; defaults to all six with a measured Jev accuracy",
-    )
-    s1_export.add_argument(
-        "--limit", type=int, default=None, help="rows per subset; defaults to the count S1Bench ran"
+        help="subset names; defaults to all 13",
     )
     s1_export.set_defaults(func=cmd_s1bench_export)
 

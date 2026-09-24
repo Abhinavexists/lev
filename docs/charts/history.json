@@ -1,5 +1,5 @@
 {
-  "_about": "Values recorded in docs/FINDINGS.md at the time of measurement. The final lev numbers are not here: build.py reads them from logs/lev-s1bench-final.txt.",
+  "_about": "Values recorded in docs/FINDINGS.md at the time of measurement. All on the six subsets as defined before the pinned S1Bench items; the final lev point is read from logs/pre-nimble/lev-s1bench-final.txt.",
   "macro_accuracy": [
     {"label": "run 1\nBase, 9 sources", "value": 0.489, "source": "FINDINGS §12"},
     {"label": "run 2\ninstruct, 23 src", "value": 0.612, "source": "FINDINGS §15"},

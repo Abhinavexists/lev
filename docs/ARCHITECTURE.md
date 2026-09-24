@@ -401,13 +401,13 @@ Stated plainly, because the distinction matters:
 - **Taken from others' published numbers:** the 0.7189 target (reflex), 0.7033
   (decider-2b), the schema-first cost table, ECE 0.0849 vs 0.4252.
 - **Measured since:** the 128-token mean and the padding factor (§5.8); that both
-  readouts serve and train; that `levbench` reproduces Jev's published per-subset
-  numbers within ±0.4 pp on 5 of 6.
+  readouts serve and train; that `levbench` on S1Bench's pinned items reproduces
+  Jev's published per-subset numbers within 0.8 pp on all 13 subsets (FINDINGS §17).
 - **Measured after training:** three 4B checkpoints trained, calibrated and scored on
   S1Bench against Jev through identical task files; results and what each run
-  changed are in [FINDINGS §12–16](FINDINGS.md).
-- **Still open:** whether Mode A and Mode B agree where both are valid (Q2), and a
-  valid lev-vs-Jev calibration comparison on S1Bench.
+  changed are in [FINDINGS §12–17](FINDINGS.md), including the lev-vs-Jev
+  calibration comparison on all 13 subsets.
+- **Still open:** whether Mode A and Mode B agree where both are valid (Q2).
 
 ## 6. How the harness validates this
 

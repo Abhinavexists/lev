@@ -9,8 +9,9 @@ import sys
 from pathlib import Path
 
 import pytest
+from lev.data import s1bench
 from lev.data.contamination import BLOCKED_SUBSETS, ContaminationError, assert_clean
-from lev.data.s1bench import EVAL_SUBSETS, get_subset, subset_names
+from lev.data.s1bench import EVAL_SUBSETS, EvalItem, definition, get_subset, load_eval_subset
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -33,7 +34,9 @@ class TestEvalDoorOpensOnlyOnEvalData:
     def test_loadable_subsets_resolve(self, name: str) -> None:
         assert get_subset(name).name == name
 
-    @pytest.mark.parametrize("alias", ["tals/vitaminc", "google/boolq", "AmazonScience/massive"])
+    @pytest.mark.parametrize(
+        "alias", ["tals/vitaminc", "google/boolq", "AmazonScience/massive", "rajpurkar/squad_v2"]
+    )
     def test_aliases_resolve_to_their_subset(self, alias: str) -> None:
         assert get_subset(alias).name in EVAL_SUBSETS
 
@@ -41,12 +44,6 @@ class TestEvalDoorOpensOnlyOnEvalData:
     def test_training_sources_are_refused(self, name: str) -> None:
         """The door must not become a general-purpose dataset loader."""
         with pytest.raises(ContaminationError):
-            get_subset(name)
-
-    @pytest.mark.parametrize("name", ["squad2", "pubmedqa", "multinli"])
-    def test_blocked_but_unrun_subsets_have_no_loader(self, name: str) -> None:
-        """Blocked, so not a ContaminationError -- but nothing to validate against."""
-        with pytest.raises(KeyError, match="no.*loader|never ran"):
             get_subset(name)
 
 
@@ -69,40 +66,83 @@ class TestStructuralSeparation:
         )
 
 
-class TestValidationTargets:
-    def test_only_subsets_with_a_measured_jev_score_are_listed(self) -> None:
-        """A loader with no measured number cannot be validated, so it is not built."""
-        assert len(EVAL_SUBSETS) == 6
-        assert set(subset_names()) < BLOCKED_SUBSETS
+EXPECTED_TYPES = {
+    "vitaminc-dev": "choice",
+    "massive-en-US": "choice",
+    "massive-de-DE": "choice",
+    "multinli": "choice",
+    "pubmedqa": "choice",
+    "boolq": "noul",
+    "squad2": "noul",
+    "paws": "noul",
+    "civil_comments": "noul",
+    "aegis2": "noul",
+    "helpsteer2": "score",
+    "summeval-relevance": "score",
+    "summeval-consistency": "score",
+}
 
-    def test_published_and_measured_agree_except_on_aegis2(self) -> None:
-        """Sets the pass criterion: ~1pp for five, looser for aegis2."""
-        for name, spec in EVAL_SUBSETS.items():
-            if name == "aegis2":
-                assert spec.agreement_pp == pytest.approx(3.2, abs=0.05)
+
+def snapshot() -> dict:
+    return json.loads((REPO_ROOT / "data" / "s1bench-snapshot.json").read_text())
+
+
+class TestPinnedDefinitions:
+    def test_every_blocked_subset_is_loadable(self) -> None:
+        assert set(EVAL_SUBSETS) == BLOCKED_SUBSETS
+
+    @pytest.mark.parametrize("name", sorted(EVAL_SUBSETS))
+    def test_definition_is_self_consistent_and_names_its_source(self, name: str) -> None:
+        spec = definition(name)
+        assert len(spec["ids"]) == len(set(spec["ids"])) == spec["count"]
+        assert sum(spec["labels"].values()) == spec["count"]
+        assert spec["source"].startswith("https://github.com/bespokelabsai/nimble/blob/")
+        assert s1bench.question_for(spec).type == EXPECTED_TYPES[name]
+
+    @pytest.mark.parametrize("name", sorted(EVAL_SUBSETS))
+    def test_record_counts_match_the_board(self, name: str) -> None:
+        """helpsteer2 is one record short of the board's 250: the manifest's
+        token-length filter dropped rows."""
+        board = next(t for t in snapshot()["targets"] if t["target"] == "jev")["subsets"][name]
+        expected = board["total"] - (1 if name == "helpsteer2" else 0)
+        assert definition(name)["count"] == expected
+
+    def test_jev_numbers_match_the_snapshot(self) -> None:
+        """Read from `data/s1bench-snapshot.json` rather than restated, so a
+        regenerated snapshot fails here."""
+        data = snapshot()
+        board = next(t for t in data["targets"] if t["target"] == "jev")["subsets"]
+        for name, subset in EVAL_SUBSETS.items():
+            assert subset.jev_published == pytest.approx(data["published_jev"][name], abs=1e-6)
+            measured = board.get(name, {}).get("acc")
+            if measured is None:
+                assert subset.jev_measured is None, f"{name} has no board measurement"
             else:
-                assert spec.agreement_pp < 1.0, f"{name} disagrees by {spec.agreement_pp:.2f}pp"
+                assert subset.jev_measured == pytest.approx(measured, abs=5e-5), name
 
-    def test_registry_matches_the_snapshot_it_was_read_from(self) -> None:
-        """Read from `data/s1bench-snapshot.json` rather than restating it, so a
-        regenerated snapshot fails here instead of silently disagreeing with the
-        numbers the harness validates against."""
-        snapshot = json.loads((REPO_ROOT / "data" / "s1bench-snapshot.json").read_text())
-        jev = next(t for t in snapshot["targets"] if t["target"] == "jev")
 
-        for name, spec in EVAL_SUBSETS.items():
-            recorded = jev["subsets"][name]
-            assert spec.items == recorded["total"], f"{name} item count"
-            # The registry carries the 4dp figure; the snapshot the raw ratio.
-            assert spec.jev_measured == pytest.approx(recorded["acc"], abs=5e-5), f"{name} acc"
-            assert spec.jev_published == pytest.approx(snapshot["published_jev"][name], abs=1e-6), (
-                f"{name} published"
-            )
+class TestSelection:
+    """`load_eval_subset` keeps exactly the pinned ids and refuses drifted upstream data."""
 
-    def test_every_subset_that_actually_ran_has_a_loader(self) -> None:
-        """The six are exactly those with a measured accuracy -- not a hand-picked
-        subset of them."""
-        snapshot = json.loads((REPO_ROOT / "data" / "s1bench-snapshot.json").read_text())
-        jev = next(t for t in snapshot["targets"] if t["target"] == "jev")
-        measured = {name for name, v in jev["subsets"].items() if v.get("acc") is not None}
-        assert set(EVAL_SUBSETS) == measured
+    def fake(self, monkeypatch, rows, ids, labels):
+        spec = {**definition("boolq"), "ids": ids, "labels": labels, "count": len(ids)}
+        monkeypatch.setattr(s1bench, "definition", lambda name: spec)
+        monkeypatch.setitem(s1bench._READERS, "boolq", lambda: iter(rows))
+
+    def test_keeps_only_the_pinned_ids_sorted(self, monkeypatch) -> None:
+        rows = [EvalItem("boolq-b", {"q": "2"}, False), EvalItem("boolq-a", {"q": "1"}, True)]
+        rows.append(EvalItem("boolq-z", {"q": "unpinned"}, True))
+        self.fake(monkeypatch, rows, ["boolq-b", "boolq-a"], {"True": 1, "False": 1})
+        question, items = load_eval_subset("boolq")
+        assert question.type == "noul"
+        assert [item.id for item in items] == ["boolq-a", "boolq-b"]
+
+    def test_a_missing_pinned_id_raises(self, monkeypatch) -> None:
+        self.fake(monkeypatch, [EvalItem("boolq-a", {}, True)], ["boolq-a", "boolq-b"], {"True": 2})
+        with pytest.raises(ValueError, match="pinned ids not in the upstream data"):
+            load_eval_subset("boolq")
+
+    def test_drifted_labels_raise(self, monkeypatch) -> None:
+        self.fake(monkeypatch, [EvalItem("boolq-a", {}, False)], ["boolq-a"], {"True": 1})
+        with pytest.raises(ValueError, match="label counts"):
+            load_eval_subset("boolq")

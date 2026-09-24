@@ -408,6 +408,12 @@ Official Claude Code skill: `claude plugin marketplace add typesafe-ai/skills` t
 
 ## 12. First head-to-head on S1Bench: two named failure modes
 
+> §§12–16 use this repo's own loaders for the six subsets, not the items S1Bench
+> scores: massive-en-US there is 60 intents on the validation split, where S1Bench
+> asks 18 scenarios on test, and all six use this repo's question wording, not S1Bench's.
+> Their numbers compare runs with each other, not with the board. §17 re-runs on
+> S1Bench's pinned items.
+
 Run 2026-09-22. 1,999 items across the six S1Bench subsets that actually
 executed in `s1-fast`, exported by `lev s1bench export` and scored through one
 `levbench eval --tasks` against both backends, so the prompts are identical and
@@ -859,6 +865,107 @@ from 0.1415 to 0.1359 (vitaminc 0.246 → 0.207); S1Bench accuracy is unchanged
 (no subset exceeds 68 options). Run sequentially from the same laptop as the
 Jev run, per-call p50 is 414–463 ms against Jev's 344–357 ms.
 
-Comparison charts: `docs/charts/lev-vs-jev.html`, rendered by
-`docs/charts/build.py` from `docs/charts/logs/`.
+The logs for this run are in `docs/charts/logs/pre-nimble/`.
+
+---
+
+## 17. All 13 S1Bench subsets, on the pinned items
+
+Run 2026-09-24. S1Bench's items come from Bespoke Labs' Nimble public-benchmark
+manifests (commit `62076b4`): per subset, the upstream dataset, the exact ids,
+the label counts, a SHA-256 of the records, and the one question every record
+asks. `lev s1bench export` rebuilds each subset from its Hugging Face source,
+keeps exactly the pinned ids and refuses the export if an id is missing or the
+label counts differ. The rebuilt records match the manifest SHA-256 on 12 of 13
+subsets; multinli differs only in reference metadata the model never sees
+(Nimble reads annotator votes from the original NYU zip). Record counts match
+the board on 12 of 13; helpsteer2 has 249 against the board's 250. 3,880 items.
+The vendored definitions are in `packages/lev/src/lev/data/s1bench_subsets/`.
+
+Both backends were run sequentially from the same laptop, through the same task
+files: Jev on the hosted API (served `jev-1.13.0`), lev on the deployed
+`4b-instruct/step-18750` (chat prompts, skipped label codes, transfer-selected
+calibration). ECE is binned on each answer's top probability for both, so this
+is the first valid lev-vs-Jev calibration comparison on S1Bench.
+
+**The harness reproduces Jev.** On every subset our Jev run lands within 0.8
+points of TypeSafe's published figure; its 13-subset macro is 0.761 against the
+published 0.760. Against the board's own measurements, five of the six measured
+subsets agree within 0.7 points. The exception is aegis2: 0.804 here, exactly the
+published figure, against the board's 0.836 -- the board is the outlier there,
+already +3.2 against published in §9.
+
+| subset | n | lev | Jev | Jev published | majority label | ECE lev | ECE Jev |
+|---|---|---|---|---|---|---|---|
+| vitaminc-dev | 599 | 0.668 | **0.801** | 0.801 | 0.503 | 0.141 | 0.099 |
+| massive-en-US | 350 | 0.857 | **0.874** | 0.874 | 0.163 | **0.056** | 0.071 |
+| massive-de-DE | 350 | 0.823 | **0.871** | 0.869 | 0.163 | 0.067 | 0.059 |
+| boolq | 300 | 0.827 | **0.893** | 0.897 | 0.580 | 0.126 | 0.035 |
+| squad2 | 299 | 0.813 | **0.836** | 0.829 | 0.502 | 0.103 | 0.036 |
+| paws | 250 | 0.776 | **0.900** | 0.892 | 0.516 | 0.178 | 0.028 |
+| multinli | 299 | **0.890** | 0.836 | 0.829 | 0.361 | **0.037** | 0.057 |
+| civil_comments | 300 | 0.760 | **0.803** | 0.810 | 0.893 | 0.118 | 0.044 |
+| aegis2 | 250 | 0.800 | **0.804** | 0.804 | 0.568 | 0.134 | 0.050 |
+| helpsteer2 | 249 | **0.386** | 0.341 | 0.341 | 0.422 | **0.104** | 0.258 |
+| summeval-relevance | 240 | 0.358 | 0.358 | 0.350 | 0.458 | **0.136** | 0.230 |
+| summeval-consistency | 144 | 0.271 | **0.812** | 0.812 | 0.840 | 0.174 | 0.086 |
+| pubmedqa | 250 | 0.732 | **0.764** | 0.772 | 0.532 | **0.121** | 0.136 |
+| **macro, all 13** | | 0.689 | **0.761** | 0.760 | | 0.115 | 0.091 |
+| **macro, board's six** | | 0.719 | **0.769** | 0.768 | | 0.123 | 0.090 |
+
+"Majority label" is the accuracy of always answering the most common label.
+A per-subset difference needs roughly 5–9 points to clear sampling noise (95%).
+
+**Where lev stands on the board.** On the six subsets every board model
+completed, lev's 0.7190 is level with reflex-4b's 0.7189 (the same Qwen3.5-4B
+backbone), behind Jev (0.775 on the board) and three open models of 26B–35B.
+Board models were scored by S1Bench's harness and lev by ours, on the same
+items; our Jev run is 0.6 points under the board's Jev on these six, all of it
+aegis2.
+
+**What the table says.**
+
+- **Clear losses:** paws (−12.4) and vitaminc (−13.3), the minimal-edit pairs of
+  §16, and summeval-consistency (−54.1). boolq (−6.6) is just outside the band.
+- **Leads at the edge of noise:** multinli (+5.4) and helpsteer2 (+4.5).
+- **Four subsets beat both models with a constant.** civil_comments is 89% non-toxic,
+  and on the three 5-level rating subsets the most common level wins too. Neither
+  backend has learned these rating scales better than their base rates.
+- **Calibration:** lev is better calibrated on 5 of 13 (massive-en-US, multinli,
+  helpsteer2, summeval-relevance, pubmedqa), worse on the rest, and worst where
+  it is also least accurate (paws 0.178, consistency 0.174).
+- **The earlier definitions flattered and hid different things.** On the old
+  loaders lev led aegis2 by 3.2; on the pinned items it trails by 0.4. The
+  18-scenario massive is much easier for lev (0.857) than the 60-intent version
+  (0.791).
+
+**summeval-consistency is a hedging failure.** 121 of the 144 summaries carry the
+top rating, "every statement is supported". Probed on the deployed endpoint, lev
+answered level 4 on 34 of them, level 3 on 66 and level 2 on 17; its mean
+probability on level 4 was 0.236 against 0.338 on level 3. Jev's 0.812 is close
+to the 0.840 of always answering 4.
+
+The serving path is not the cause and training is. Run on Modal over the same
+144 items, the release gives identical predictions with raw softmax and without
+order averaging (0.271 each; temperature cannot move an argmax, and the
+probabilities with and without order averaging were identical). The frozen
+Qwen3.5-4B backbone, through the same engine and chat prompts, answers level 4 on
+138 of 144 and scores **0.826**. That is below the 0.840 of always answering 4:
+like Jev, it is near-constant rather than discriminating. Fine-tuning taught lev to rate one
+level lower: a regression of 55 points on this subset, and a data problem to
+look for in the mixture's rating sources rather than a readout to fix.
+
+**Latency is not comparable across these two runs.** lev's per-call p50 was
+600–654 ms against 414–463 ms in §16, on the same checkpoint and configuration;
+Jev's was 335–346 ms, unchanged. A bare `GET /health` from the laptop took
+0.42 s median, and Modal's request log records about 108 ms of execution even for
+that handler, which does no work. Twenty warm sequential aegis2 calls afterwards
+(states of about 470 tokens): 589 ms at the laptop, 381 ms of request duration and
+287 ms of execution in Modal's log. The 69 ms compute figure (ADR-023) is for
+`profile_engine`'s short reference state, measured inside the container; it is
+not the per-call cost on S1Bench's longer states. Why the end-to-end path moved
+by ~180 ms between runs is open.
+
+Logs: `docs/charts/logs/{jev,lev}-s1bench-2026-09-24.txt`. Comparison charts:
+`docs/charts/lev-vs-jev.html`, rendered by `docs/charts/build.py` from those logs.
 

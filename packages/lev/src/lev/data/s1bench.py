@@ -1,331 +1,331 @@
-"""Load S1Bench evaluation subsets, for evaluation and nothing else.
+"""Export the 13 S1Bench subsets as levbench task files, for evaluation only.
 
-The one place in `lev` allowed to read the 13 subsets `contamination.assert_clean`
-refuses. The separation is structural: this module never imports `mixture` or
-`build`, never produces an `Example`, and writes only levbench task files, so no
-training entry point can route a blocked subset into the mixture.
-`tests/test_s1bench.py` asserts that import closure. Every subset is read through
-`assert_eval_only`.
-
-The task files match `export_eval.py`'s, so one `levbench eval --tasks` run scores
-Jev and lev on identical files; a gap against Jev's published numbers means
-little until Jev has run the same files.
-
-Only the 6 subsets that ran in `s1-fast` have a measured Jev accuracy to validate
-a loader against, so only they are in `EVAL_SUBSETS`.
+This module must not import training data builders or produce an `Example`;
+`test_s1bench.py` checks that separation. Every subset passes `assert_eval_only`.
+Ids, questions and labels come from Nimble's pinned manifests in
+`s1bench_subsets/`. Conversion details and the multinli metadata exception are
+recorded in docs/FINDINGS.md §17.
 """
 
 from __future__ import annotations
 
+import gzip
+import hashlib
 import json
-import re
-from collections.abc import Callable, Iterable
+import math
+from collections import Counter
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:  # `datasets` is heavy and only imported where it is used.
+    from datasets import Dataset
 
 from ..types import Choice, Noul, Question, Score, question_payload
 from .contamination import assert_eval_only
 
+SUBSET_DIR = Path(__file__).with_name("s1bench_subsets")
+QUESTION_NAME = "decision"  # S1Bench asks every record one question under this name
+
+
+@dataclass(frozen=True)
+class EvalItem:
+    """One record: its S1Bench id, the state to send, and the answer to compare
+    against (an option string for Choice, a level index for Score, a bool for Noul)."""
+
+    id: str
+    state: dict | str
+    truth: bool | int | str
+
 
 @dataclass(frozen=True)
 class EvalSubset:
-    """One S1Bench subset: where to read it, and what Jev scored on it.
+    """One S1Bench subset: its upstream dataset, and what Jev scored on it.
 
-    `jev_measured` is the `s1-fast` accuracy in `data/s1bench-snapshot.json`;
-    `jev_published` is TypeSafe's figure. They agree within 0.7 pp on five of the
-    six; `aegis2` differs by 3.2 pp, so only its measured number is a target.
+    `jev_published` is Jev 1.13's figure on this subset; `jev_measured` is the
+    board's own `s1-fast` run in `data/s1bench-snapshot.json`, which covered only
+    six subsets.
     """
 
     name: str
     hf_id: str
-    primitive: str
-    items: int
-    jev_measured: float
     jev_published: float
-    hf_config: str | None = None
-    split: str = "validation"
-    # Script-backed repos have no parquet in `main` and `datasets>=5` will not run
-    # the script, so this names the auto-converted branch.
-    revision: str | None = None
-    # `massive`'s converted branch exposes locales as directories, not configs.
-    data_files: str | None = None
-
-    @property
-    def agreement_pp(self) -> float:
-        """How far the published and measured numbers sit apart, in points."""
-        return abs(self.jev_measured - self.jev_published) * 100
+    jev_measured: float | None = None
 
 
 EVAL_SUBSETS: dict[str, EvalSubset] = {
-    "vitaminc-dev": EvalSubset(
-        name="vitaminc-dev",
-        hf_id="tals/vitaminc",
-        primitive="choice",
-        items=599,
-        jev_measured=0.8030,
-        jev_published=0.8010,
-    ),
-    "massive-en-US": EvalSubset(
-        name="massive-en-US",
-        hf_id="AmazonScience/massive",
-        primitive="choice",
-        items=350,
-        jev_measured=0.8743,
-        jev_published=0.8740,
-        revision="refs/convert/parquet",
-        data_files="en-US/validation/0000.parquet",
-    ),
-    "boolq": EvalSubset(
-        name="boolq",
-        hf_id="google/boolq",
-        primitive="noul",
-        items=300,
-        jev_measured=0.8933,
-        jev_published=0.8970,
-    ),
-    "aegis2": EvalSubset(
-        name="aegis2",
-        hf_id="nvidia/Aegis-AI-Content-Safety-Dataset-2.0",
-        primitive="noul",
-        items=250,
-        jev_measured=0.8360,
-        jev_published=0.8040,
-    ),
-    "paws": EvalSubset(
-        name="paws",
-        hf_id="google-research-datasets/paws",
-        hf_config="labeled_final",
-        primitive="noul",
-        items=250,
-        jev_measured=0.8960,
-        jev_published=0.8920,
-    ),
-    "helpsteer2": EvalSubset(
-        name="helpsteer2",
-        hf_id="nvidia/HelpSteer2",
-        primitive="score",
-        items=250,
-        jev_measured=0.3480,
-        jev_published=0.3410,
-    ),
+    subset.name: subset
+    for subset in (
+        EvalSubset("vitaminc-dev", "tals/vitaminc", 0.801, 0.8030),
+        EvalSubset("massive-en-US", "AmazonScience/massive", 0.874, 0.8743),
+        EvalSubset("massive-de-DE", "AmazonScience/massive", 0.869),
+        EvalSubset("boolq", "google/boolq", 0.897, 0.8933),
+        EvalSubset("squad2", "rajpurkar/squad_v2", 0.829),
+        EvalSubset("paws", "google-research-datasets/paws", 0.892, 0.8960),
+        EvalSubset("multinli", "nyu-mll/multi_nli", 0.829),
+        EvalSubset("civil_comments", "google/civil_comments", 0.810),
+        EvalSubset("aegis2", "nvidia/Aegis-AI-Content-Safety-Dataset-2.0", 0.804, 0.8360),
+        EvalSubset("helpsteer2", "nvidia/HelpSteer2", 0.341, 0.3480),
+        EvalSubset("summeval-relevance", "mteb/summeval", 0.350),
+        EvalSubset("summeval-consistency", "mteb/summeval", 0.812),
+        EvalSubset("pubmedqa", "qiaojin/PubMedQA", 0.772),
+    )
 }
 
 
 def subset_names() -> list[str]:
-    """The subsets this harness can load, in snapshot order."""
     return list(EVAL_SUBSETS)
 
 
 def get_subset(name: str) -> EvalSubset:
     """Resolve a subset by name or alias. Raises unless it is S1Bench evaluation data."""
-    canonical = assert_eval_only(name)
-    if canonical not in EVAL_SUBSETS:
-        raise KeyError(
-            f"{name!r} resolves to the blocked subset {canonical!r}, which has no "
-            f"loader: it never ran in `s1-fast`, so there is no measured Jev "
-            f"accuracy to validate one against. Loadable subsets: "
-            f"{', '.join(subset_names())}."
-        )
+    canonical = name if name in EVAL_SUBSETS else assert_eval_only(name)
+    assert_eval_only(canonical)
     return EVAL_SUBSETS[canonical]
 
 
-# Each reader returns `(question, items)`, with questions built as `lev.types`
-# models so a malformed schema fails on load, not mid-run.
+def definition(name: str) -> dict:
+    """The vendored definition: `instructions`, `criteria`, `ids`, `labels`, provenance."""
+    return json.loads((SUBSET_DIR / f"{name}.json").read_text(encoding="utf-8"))
 
 
-@dataclass(frozen=True)
-class EvalItem:
-    """One scored row: the state to send, and the answer to compare against.
+def question_for(spec: dict) -> Question:
+    criteria = spec["criteria"]
+    if isinstance(criteria, list):
+        return Score(instructions=spec["instructions"], criteria=criteria)
+    if set(criteria) == {"false", "true"}:
+        return Noul(instructions=spec["instructions"], criteria=criteria)
+    return Choice(instructions=spec["instructions"], criteria=criteria)
 
-    `truth` is written in the shape levbench compares per primitive -- an option
-    string for Choice, a level index for Score, a bool for Noul -- matching
-    `export_eval.truth_for`.
+
+# Readers: every upstream row as an EvalItem, before selection by id.
+
+
+def _download(repo: str, filename: str, revision: str | None = None) -> str:
+    from huggingface_hub import hf_hub_download
+
+    return hf_hub_download(repo, filename, repo_type="dataset", revision=revision)
+
+
+def _parquet(repo: str, filename: str, revision: str | None = None) -> Dataset:
+    from datasets import load_dataset  # heavy, and only needed to export
+
+    # `split=` narrows load_dataset's return union to one Dataset; the annotation
+    # says so, since callers index rows by column name and read `.features`.
+    return load_dataset("parquet", data_files=_download(repo, filename, revision), split="train")
+
+
+def _rows(dataset: Dataset) -> Iterator[dict]:
+    """The dataset's rows as dicts.
+
+    `Dataset.__iter__` carries no annotation upstream, so a type checker infers
+    `list` for the element and rejects every column lookup. It yields dicts.
     """
-
-    state: dict
-    truth: bool | int | str
+    return cast("Iterator[dict]", iter(dataset))
 
 
-def humanise(label: str) -> str:
-    """`iot_hue_lightchange` -> `iot hue lightchange`, for option descriptions."""
-    return re.sub(r"[_\-]+", " ", label).strip()
+def _jsonl(path: str) -> list[dict]:
+    opener = gzip.open if path.endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8", newline="\n") as handle:
+        return [json.loads(line) for line in handle if line.strip()]
 
 
-def _sample(dataset, limit: int, seed: int):
-    """Shuffle before limiting, always.
-
-    A head slice is not a sample: the first N rows of `massive`'s validation
-    split under-cover its 60 intents.
-    """
-    if limit < len(dataset):
-        return dataset.shuffle(seed=seed).select(range(limit))
-    return dataset
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
-def _read_boolq(dataset) -> tuple[Noul, list[EvalItem]]:
-    question = Noul(
-        instructions="Does the passage support answering yes to the question?",
-        criteria={"true": "the passage supports yes", "false": "the passage supports no"},
-    )
-    items = [
-        EvalItem(
-            state={"passage": r["passage"], "question": r["question"]}, truth=bool(r["answer"])
+def _read_boolq() -> Iterator[EvalItem]:
+    for row in _rows(_parquet("google/boolq", "data/validation-00000-of-00001.parquet")):
+        yield EvalItem(
+            "boolq-" + _digest(row["question"] + "\n" + row["passage"]),
+            {"passage": row["passage"], "question": row["question"]},
+            row["answer"],
         )
-        for r in dataset
-    ]
-    return question, items
 
 
-def _read_paws(dataset) -> tuple[Noul, list[EvalItem]]:
-    question = Noul(
-        instructions="Do the two sentences mean the same thing?",
-        criteria={"true": "they are paraphrases", "false": "they differ in meaning"},
-    )
-    items = [
-        EvalItem(
-            state={"sentence1": r["sentence1"], "sentence2": r["sentence2"]},
-            truth=bool(r["label"]),
+def _read_paws() -> Iterator[EvalItem]:
+    for row in _rows(
+        _parquet("google-research-datasets/paws", "labeled_final/test-00000-of-00001.parquet")
+    ):
+        yield EvalItem(
+            f"paws-{row['id']}",
+            {"sentence_1": row["sentence1"], "sentence_2": row["sentence2"]},
+            row["label"] == 1,
         )
-        for r in dataset
-    ]
-    return question, items
 
 
-def _read_aegis2(dataset) -> tuple[Noul, list[EvalItem]]:
-    question = Noul(
-        instructions="Is this prompt unsafe?",
-        criteria={"true": "unsafe", "false": "safe"},
-    )
-    items = [
-        EvalItem(state={"prompt": r["prompt"]}, truth=r["prompt_label"] == "unsafe")
-        for r in dataset
-        if r["prompt_label"] in ("safe", "unsafe")
-    ]
-    return question, items
-
-
-def _read_vitaminc(dataset) -> tuple[Choice, list[EvalItem]]:
-    options = {
-        "SUPPORTS": "the evidence supports the claim",
-        "REFUTES": "the evidence contradicts the claim",
-        "NOT ENOUGH INFO": "the evidence neither supports nor contradicts the claim",
-    }
-    question = Choice(
-        instructions="Does the evidence support or refute the claim?", criteria=options
-    )
-    items = [
-        EvalItem(state={"claim": r["claim"], "evidence": r["evidence"]}, truth=r["label"])
-        for r in dataset
-        if r["label"] in options
-    ]
-    return question, items
-
-
-def _read_massive(dataset) -> tuple[Choice, list[EvalItem]]:
-    """60 intents, the largest option set here; within the 68-code Mode A limit."""
-    names = dataset.features["intent"].names
-    question = Choice(
-        instructions="What is the user's intent?",
-        criteria={name: humanise(name) for name in names},
-    )
-    items = [EvalItem(state={"utterance": r["utt"]}, truth=names[r["intent"]]) for r in dataset]
-    return question, items
-
-
-# HelpSteer2 rates on 0-4; the levels are the dataset's own rubric.
-_HELPSTEER_LEVELS = [
-    "not helpful at all",
-    "borderline unhelpful",
-    "partially helpful",
-    "mostly helpful",
-    "fully helpful",
-]
-
-
-def _read_helpsteer2(dataset) -> tuple[Score, list[EvalItem]]:
-    question = Score(
-        instructions="How helpful is the response to the prompt?", criteria=_HELPSTEER_LEVELS
-    )
-    items = [
-        EvalItem(
-            state={"prompt": r["prompt"], "response": r["response"]}, truth=int(r["helpfulness"])
+def _read_vitaminc() -> Iterator[EvalItem]:
+    for row in _jsonl(_download("tals/vitaminc", "dev.jsonl")):
+        yield EvalItem(
+            "vitaminc-" + row["unique_id"],
+            {"evidence": row["evidence"], "claim": row["claim"]},
+            row["label"],
         )
-        for r in dataset
-        if r["helpfulness"] is not None
-    ]
-    return question, items
 
 
-_READERS: dict[str, Callable] = {
-    "boolq": _read_boolq,
-    "paws": _read_paws,
-    "aegis2": _read_aegis2,
+def _read_massive(locale: str) -> Callable[[], Iterator[EvalItem]]:
+    def read() -> Iterator[EvalItem]:
+        rows = _parquet(
+            "AmazonScience/massive", f"{locale}/test/0000.parquet", "refs/convert/parquet"
+        )
+        scenarios = rows.features["scenario"].names
+        for row in _rows(rows):
+            yield EvalItem(
+                f"massive-{row['id']}",
+                {"utterance": row["utt"], "locale": locale},
+                scenarios[row["scenario"]],
+            )
+
+    return read
+
+
+def _read_squad2() -> Iterator[EvalItem]:
+    for row in _rows(_parquet("rajpurkar/squad_v2", "squad_v2/validation-00000-of-00001.parquet")):
+        answerable = any(text.strip() for text in row["answers"]["text"])
+        yield EvalItem(
+            "squad2-" + row["id"],
+            {"paragraph": row["context"], "question": row["question"]},
+            answerable,
+        )
+
+
+def _read_multinli() -> Iterator[EvalItem]:
+    labels = ("entailment", "neutral", "contradiction")
+    for row in _rows(
+        _parquet("nyu-mll/multi_nli", "data/validation_matched-00000-of-00001.parquet")
+    ):
+        if row["label"] in (0, 1, 2):  # -1: no majority label
+            yield EvalItem(
+                "multinli-" + row["pairID"],
+                {"premise": row["premise"].strip(), "hypothesis": row["hypothesis"].strip()},
+                labels[row["label"]],
+            )
+
+
+def _read_civil_comments() -> Iterator[EvalItem]:
+    # Ids are row positions in the test split, which has no id column.
+    rows = _parquet("google/civil_comments", "data/test-00000-of-00001.parquet")
+    for index, row in enumerate(_rows(rows)):
+        if isinstance(row["text"], str) and row["text"].strip():
+            yield EvalItem(f"civil_comments-{index}", row["text"].strip(), row["toxicity"] >= 0.5)
+
+
+def _read_aegis2() -> Iterator[EvalItem]:
+    path = _download("nvidia/Aegis-AI-Content-Safety-Dataset-2.0", "test.json")
+    for row in json.loads(Path(path).read_text(encoding="utf-8")):
+        human = row.get("prompt_label_source") == "human"
+        prompt = row.get("prompt")
+        if human and row.get("reconstruction_id_if_redacted") is None and prompt and prompt.strip():
+            yield EvalItem(
+                "aegis2-" + row["id"],
+                {"user_message": prompt.strip()},
+                row["prompt_label"] == "unsafe",
+            )
+
+
+def _read_helpsteer2() -> Iterator[EvalItem]:
+    rows = _jsonl(_download("nvidia/HelpSteer2", "validation.jsonl.gz"))
+    for index, row in enumerate(rows):
+        yield EvalItem(
+            f"helpsteer2-{index}",
+            {"prompt": row["prompt"], "response": row["response"]},
+            row["helpfulness"],
+        )
+
+
+def _read_summeval(dimension: str) -> Callable[[], Iterator[EvalItem]]:
+    def read() -> Iterator[EvalItem]:
+        rows = _parquet("mteb/summeval", "data/test-00000-of-00001-35901af5f6649399.parquet")
+        for row in _rows(rows):
+            for index, summary in enumerate(row["machine_summaries"]):
+                # The three-expert 1-5 mean, rounded half up, as a 0-4 level index.
+                level = min(4, max(0, math.floor(row[dimension][index] + 0.5) - 1))
+                yield EvalItem(
+                    f"summeval-{dimension}-{row['id']}-{index}",
+                    {"article": row["text"], "summary": summary},
+                    level,
+                )
+
+    return read
+
+
+def _read_pubmedqa() -> Iterator[EvalItem]:
+    for row in _rows(_parquet("qiaojin/PubMedQA", "pqa_labeled/train-00000-of-00001.parquet")):
+        contexts = [c for c in row["context"]["contexts"] if isinstance(c, str) and c.strip()]
+        yield EvalItem(
+            f"pubmedqa-{row['pubid']}",
+            {"question": row["question"], "abstract_context": " ".join(contexts)},
+            row["final_decision"].strip().lower(),
+        )
+
+
+_READERS: dict[str, Callable[[], Iterator[EvalItem]]] = {
     "vitaminc-dev": _read_vitaminc,
-    "massive-en-US": _read_massive,
+    "massive-en-US": _read_massive("en-US"),
+    "massive-de-DE": _read_massive("de-DE"),
+    "boolq": _read_boolq,
+    "squad2": _read_squad2,
+    "paws": _read_paws,
+    "multinli": _read_multinli,
+    "civil_comments": _read_civil_comments,
+    "aegis2": _read_aegis2,
     "helpsteer2": _read_helpsteer2,
+    "summeval-relevance": _read_summeval("relevance"),
+    "summeval-consistency": _read_summeval("consistency"),
+    "pubmedqa": _read_pubmedqa,
 }
 
 
-# Fixed, so two harness runs score the same rows.
-SAMPLE_SEED = 20260922
+def load_eval_subset(name: str) -> tuple[Question, list[EvalItem]]:
+    """One S1Bench subset as its question plus exactly its records, sorted by id.
 
-
-def load_eval_subset(
-    name: str, limit: int | None = None, seed: int = SAMPLE_SEED
-) -> tuple[Question, list[EvalItem]]:
-    """Load one S1Bench subset as a question plus scored items.
-
-    Raises `ContaminationError` for anything that is not S1Bench evaluation
-    data. `limit` defaults to the item count S1Bench itself ran, so accuracy is
-    comparable to Jev's figure over the same nominal N.
+    Raises `ContaminationError` for anything that is not S1Bench evaluation data,
+    and `ValueError` if the upstream data no longer yields the pinned ids and labels.
     """
-    from datasets import load_dataset  # heavy, and not needed to inspect the registry
+    subset = get_subset(name)
+    spec = definition(subset.name)
+    by_id = {item.id: item for item in _READERS[subset.name]()}
+    missing = [i for i in spec["ids"] if i not in by_id]
+    if missing:
+        raise ValueError(
+            f"{subset.name}: {len(missing)} pinned ids not in the upstream data, e.g. {missing[:3]}"
+        )
+    items = sorted((by_id[i] for i in spec["ids"]), key=lambda item: item.id)
+    labels = dict(Counter(str(item.truth) for item in items))
+    if labels != spec["labels"]:
+        raise ValueError(
+            f"{subset.name}: label counts {labels} differ from the manifest's {spec['labels']}"
+        )
+    return question_for(spec), items
 
-    spec = get_subset(name)
-    kwargs: dict = {"path": spec.hf_id, "split": spec.split}
-    if spec.hf_config:
-        kwargs["name"] = spec.hf_config
-    if spec.revision:
-        kwargs["revision"] = spec.revision
-    if spec.data_files:
-        kwargs["data_files"] = {spec.split: spec.data_files}
 
-    dataset = load_dataset(**kwargs)
-    question, items = _READERS[spec.name](_sample(dataset, limit or spec.items, seed))
-    return question, items
-
-
-def export(
-    out_dir: str | Path, subsets: Iterable[str] | None = None, limit: int | None = None
-) -> dict:
-    """Write `<subset>.json` levbench task files, plus an `index.json`.
-
-    The same format as `export_eval.export`, so one `levbench eval --tasks`
-    run scores Jev and lev through identical code.
-    """
+def export(out_dir: str | Path, subsets: list[str] | None = None) -> dict:
+    """Write `<subset>.json` levbench task files, plus an `index.json`."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
     index: dict[str, dict] = {}
     for name in subsets or subset_names():
-        spec = get_subset(name)
-        question, items = load_eval_subset(name, limit)
+        subset = get_subset(name)
+        question, items = load_eval_subset(subset.name)
         payload = {
-            "questions": {spec.name: question_payload(question)},
-            "items": [{"state": item.state, "labels": {spec.name: item.truth}} for item in items],
+            "questions": {QUESTION_NAME: question_payload(question)},
+            "items": [
+                {"state": item.state, "labels": {QUESTION_NAME: item.truth}} for item in items
+            ],
         }
-        (out / f"{spec.name}.json").write_text(json.dumps(payload, indent=2) + "\n")
-        index[spec.name] = {
+        (out / f"{subset.name}.json").write_text(json.dumps(payload, indent=2) + "\n")
+        index[subset.name] = {
             "items": len(items),
             "type": question.type,
-            "jev_measured": spec.jev_measured,
-            "jev_published": spec.jev_published,
+            "jev_published": subset.jev_published,
+            "jev_measured": subset.jev_measured,
         }
 
     summary = {
         "suite": "s1bench",
-        "seed": SAMPLE_SEED,
-        "total_items": sum(entry["items"] for entry in index.values()),
+        "total_items": sum(e["items"] for e in index.values()),
         "subsets": index,
     }
     (out / "index.json").write_text(json.dumps(summary, indent=2) + "\n")
