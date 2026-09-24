@@ -21,8 +21,7 @@ import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .labels import LABEL_OPTION_CAP
-from .train.checkpoints import TRAINING_STATE, resolve_checkpoint
+from .train.checkpoints import CALIBRATION, MODE_B_HEAD, TRAINING_STATE, resolve_checkpoint
 
 RELEASE_MANIFEST = "lev_release.json"
 MODEL_CARD = "README.md"
@@ -56,11 +55,11 @@ def build_release(
             shutil.copy2(file, target / file.name)
             copied.append(file.name)
 
-    profile = Path(calibration) if calibration else step_dir.parent / "calibration.json"
+    profile = Path(calibration) if calibration else step_dir.parent / CALIBRATION
     calibrated = profile.is_file()
     if calibrated:
-        shutil.copy2(profile, target / "calibration.json")
-        copied.append("calibration.json")
+        shutil.copy2(profile, target / CALIBRATION)
+        copied.append(CALIBRATION)
 
     adapter_config = json.loads((step_dir / "adapter_config.json").read_text())
     manifest = {
@@ -69,12 +68,10 @@ def build_release(
         "step": int(step_dir.name.split("-")[1]) if step_dir.name.startswith("step-") else None,
         "base_model": adapter_config["base_model_name_or_path"],
         "lora_rank": adapter_config.get("r"),
-        "mode_b_head": "mode_b_head.pt" in copied,
+        "mode_b_head": MODE_B_HEAD in copied,
         "calibrated": calibrated,
-        # The training-time cap (Mode B's share of the data) and the readout
-        # the temperatures were fitted on. Serving routes Mode A up to the
-        # tokenizer's single-token limit regardless (ADR-025).
-        "train_max_label_options": LABEL_OPTION_CAP,
+        # The readout and prompt format the weights and temperatures belong to;
+        # the server reads both.
         "noul_readout": "rating",
         "prompt_style": prompt_style,
         "files": copied,
@@ -124,9 +121,10 @@ uv run levbench eval --backend lev --tasks data/s1bench --base-url http://localh
 
 The server reads `lev_release.json` for the base model and the prompt style
 (`{manifest["prompt_style"]}`) the adapter trained under. Questions route to
-label-token readout (Mode A) while the tokenizer can express the option codes
-in single tokens, and to the candidate-path head (Mode B) above that; Mode B
-was trained on sets of {manifest["train_max_label_options"] + 1}+ options.
+label-token readout (Mode A) while the tokenizer can express one single-token
+code per option -- codes that split into two tokens are skipped -- and to the
+candidate-path head (Mode B) above that. Mode A trains on sets up to the
+tokenizer's limit; the head trains on the full large taxonomies.
 {calibration}
 
 ## What is in here
@@ -136,7 +134,7 @@ was trained on sets of {manifest["train_max_label_options"] + 1}+ options.
 | `adapter_model.safetensors`, `adapter_config.json` | LoRA adapter ({adapter_note}) |
 | `mode_b_head.pt` | candidate-path matching head |
 | `tokenizer*` | the tokenizer the label-token readout was verified against |
-| `calibration.json` | per-`(question type, mode)` temperatures |
+| `calibration.json` | temperatures per question type, readout mode and Choice option-count band |
 | `lev_release.json` | this manifest |
 
 ## Measured

@@ -339,3 +339,112 @@ class TestChatStyle:
         r = build("state", "q", q, ["A", "B"])
         assert r.prefix == "Context:\nstate\n\n" and r.suffix.endswith(ANSWER_CUE)
         assert "<|im_start|>" not in r.full
+
+
+class TestSkipMultiTokenCodes:
+    def tokenizer_without(self, broken: str):
+        from string import ascii_uppercase
+
+        from conftest import FakeTokenizer
+
+        pairs = {f" {a}{b}" for a in ascii_uppercase for b in ascii_uppercase} - {f" {broken}"}
+        return FakeTokenizer({f" {c}" for c in ascii_uppercase} | pairs)
+
+    def test_default_scheme_stops_at_the_first_split_code(self):
+        tok = self.tokenizer_without("BQ")  # the 69th code, as in Qwen3.5
+        assert single_token_codes(tok, 68) is not None
+        assert single_token_codes(tok, 69) is None
+
+    def test_skipping_passes_over_split_codes_and_keeps_the_order(self):
+        tok = self.tokenizer_without("BQ")
+        codes = single_token_codes(tok, 77, skip_multi_token=True)
+        assert len(codes) == 77 and "BQ" not in codes and len(set(codes)) == 77
+        assert codes[:68] == single_token_codes(tok, 68), "codes below the split are unchanged"
+        assert codes[68] == "BR"
+
+    def test_route_uses_mode_a_past_the_split_only_when_asked(self):
+        tok = self.tokenizer_without("BQ")
+        q = Choice(criteria={f"o{i}": None for i in range(77)})
+        assert route(q, tok).mode is Mode.CANDIDATE_PATH
+        assert route(q, tok, skip_multi_token=True).mode is Mode.LABEL_TOKEN
+        assert (
+            route(q, tok, max_label_options=76, skip_multi_token=True).mode is Mode.CANDIDATE_PATH
+        )
+
+
+class TestRoutePreviewMatchesServing:
+    def test_lev_route_previews_the_mode_the_server_uses(self, tmp_path, monkeypatch, capsys):
+        """`lev route` exists to preview serving. A 60-option Choice is Mode A
+        when served (the tokenizer can express 60 codes); a preview defaulting to
+        the 26-option training threshold reported Mode B."""
+        import json
+        import sys
+        import types
+        from string import ascii_uppercase
+
+        from conftest import FakeTokenizer
+        from lev.cli import main
+
+        pairs = {f" {a}{b}" for a in ascii_uppercase for b in ascii_uppercase}
+        tokenizer = FakeTokenizer({f" {c}" for c in ascii_uppercase} | pairs)
+        stub = types.ModuleType("transformers")
+        stub.AutoTokenizer = types.SimpleNamespace(from_pretrained=lambda *_a, **_k: tokenizer)
+        monkeypatch.setitem(sys.modules, "transformers", stub)
+
+        request = {
+            "state": "turn the lights off",
+            "questions": {
+                "intent": {"type": "choice", "criteria": {f"o{i}": None for i in range(60)}}
+            },
+        }
+        path = tmp_path / "request.json"
+        path.write_text(json.dumps(request))
+
+        main(["route", str(path)])
+        assert "mode A" in capsys.readouterr().out
+
+    def test_lev_route_prints_a_mode_b_route_without_codes(self, tmp_path, monkeypatch, capsys):
+        """A Mode B route has no label codes; printing one used to raise TypeError."""
+        import json
+        import sys
+        import types
+
+        from conftest import FakeTokenizer
+        from lev.cli import main
+
+        tokenizer = FakeTokenizer({" A", " B"})  # only two codes are single tokens
+        stub = types.ModuleType("transformers")
+        stub.AutoTokenizer = types.SimpleNamespace(from_pretrained=lambda *_a, **_k: tokenizer)
+        monkeypatch.setitem(sys.modules, "transformers", stub)
+        request = {
+            "state": "s",
+            "questions": {"q": {"type": "choice", "criteria": {"a": None, "b": None, "c": None}}},
+        }
+        path = tmp_path / "request.json"
+        path.write_text(json.dumps(request))
+
+        main(["route", str(path)])
+        assert "mode B" in capsys.readouterr().out
+
+
+class TestSystemOneAcceptsPlainDicts:
+    """`lev.load` hands users an engine; they pass questions as JSON-shaped dicts."""
+
+    def engine(self, tokenizer, **config):
+        from lev.model import DecisionEngine, EngineConfig
+
+        return DecisionEngine(model=None, tokenizer=tokenizer, config=EngineConfig(**config))
+
+    def test_a_dict_question_is_parsed_and_routed(self, rich_tokenizer):
+        # Capped at two label options with no head loaded, a three-option Choice
+        # needs Mode B, so routing refuses before any forward pass is attempted.
+        engine = self.engine(rich_tokenizer, max_label_options=2)
+        questions = {"pick": {"type": "choice", "criteria": {"a": None, "b": None, "c": None}}}
+        with pytest.raises(RuntimeError, match="need Mode B"):
+            engine.system_one("state", questions)
+
+    def test_a_malformed_dict_is_a_value_error(self, rich_tokenizer):
+        """ValueError is what the server turns into a 422."""
+        engine = self.engine(rich_tokenizer)
+        with pytest.raises(ValueError, match="at least 2 options"):
+            engine.system_one("state", {"pick": {"type": "choice", "criteria": {"a": None}}})

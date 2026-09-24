@@ -228,9 +228,9 @@ and FINDINGS §13 have the breakdown.
 ## Weights
 
 A release is one flat directory -- adapter, Mode B head, tokenizer, fitted
-temperatures, and a `lev_release.json` naming the base model and the option
-cap the weights were trained under -- that `lev serve` loads as-is from disk
-or from the Hub.
+temperatures, and a `lev_release.json` naming the base model and the prompt
+format the weights were trained under -- that `lev.load` and `lev serve` load
+as-is from disk or from the Hub.
 
 ```bash
 make release PRESET=4b-instruct          # package the newest checkpoint on the Modal volume
@@ -241,8 +241,22 @@ uv run lev serve --checkpoint weights/4b-instruct            # from disk
 uv run lev serve --checkpoint org/lev-4b-instruct            # from the Hub
 ```
 
-The server reads the manifest for the base model, so `--model` is not needed
-for a packaged release, and `GET /health` reports what it loaded. On Modal,
+In-process, without the server:
+
+```python
+import lev
+
+model = lev.load("org/lev-4b-instruct")
+model.system_one(
+    "I was charged twice", {"refund": {"type": "noul", "instructions": "Wants a refund?"}}
+)
+```
+
+Both read the manifest for the base model, so `--model` is not needed for a
+packaged release, and `GET /health` reports what the server loaded.
+`scripts/publish_hf.sh` runs the whole path to a private Hub repo -- package,
+load-check on an H100 (`check_release`), pull, swap in the Hub card from
+`hf/README.md`, upload. On Modal,
 `make deploy PRESET=4b-instruct` serves that preset's newest checkpoint.
 
 ## Status
@@ -271,9 +285,11 @@ Jev through identical task files**. The first, on nine classification corpora,
 scored 0.489 macro against Jev's 0.754 and the frozen backbone's 0.719
 ([FINDINGS §12](docs/FINDINGS.md), [ADR-020](docs/DECISIONS.md#adr-020--the-trained-model-lost-to-the-frozen-one-what-changes-and-what-does-not)).
 The second, from the instruct checkpoint on 23 sources with paraphrased and
-negated questions and varied option sets, scores **0.697** -- equal to Jev on
-aegis2, above it on helpsteer2, three points under the frozen backbone -- with
-held-out 0.836 / ECE 0.046 ([FINDINGS §15](docs/FINDINGS.md)). Getting there
+negated questions and varied option sets, scored 0.697; the third, adding FEVER,
+adversarial paraphrase, yes/no recasts and large lettered sets and trained in
+the backbone's chat format, scores **0.725** -- past the frozen backbone and
+reflex, above Jev on aegis2 and helpsteer2 ([FINDINGS §16](docs/FINDINGS.md)) -- with
+held-out 0.807 / ECE 0.061 ([FINDINGS §15](docs/FINDINGS.md)). Getting there
 included a serving decision worth 51 points on one subset: route Mode A up to
 the tokenizer's single-token limit rather than the training cap
 ([ADR-025](docs/DECISIONS.md#adr-025--serving-routes-mode-a-up-to-the-tokenizer-limit-training-keeps-its-cap)).

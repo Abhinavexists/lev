@@ -185,7 +185,7 @@ def evaluate_split(
 
     resolved = str(resolve_checkpoint(checkpoint_dir))
     plain = EvalReport(split=split, checkpoint=resolved, calibrated=False)
-    tuned = EvalReport(split=split, checkpoint=resolved, calibrated=True)
+    tuned = EvalReport(split=split, checkpoint=resolved, calibrated=bool(profile.temperatures))
     # Rows of one source may carry different option counts (the calibration
     # split varies them), and the temperature depends on the count; score each
     # group at its own temperature, then report per source.

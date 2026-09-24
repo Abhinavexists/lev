@@ -10,8 +10,6 @@ import json
 import sys
 from pathlib import Path
 
-from .labels import LABEL_OPTION_CAP
-
 
 def _measure_tokens(config, data_dir: str, sample: int = 1500) -> dict:
     """Tokenise real rendered prompts and report the length distribution.
@@ -25,13 +23,16 @@ def _measure_tokens(config, data_dir: str, sample: int = 1500) -> dict:
 
     from .data.build import load_split
     from .data.splits import Split
-    from .train.collate import ModeBatcher, render
+    from .prompt import Style
+    from .train.collate import RouteCache, render
 
     tokenizer = AutoTokenizer.from_pretrained(config.model_id)
     rows = load_split(data_dir, Split.TRAIN)[:sample]
-    batcher = ModeBatcher(tokenizer, batch_size=1)
+    # The preset's own prompt style: `chat` adds a system turn to every prompt.
+    style = Style(config.prompt_style)
+    routes = RouteCache(tokenizer, config.max_label_options, style)
     lengths = sorted(
-        len(tokenizer.encode(render(e, batcher.route_for(e).codes), add_special_tokens=False))
+        len(tokenizer.encode(render(e, routes.route_for(e).codes, style), add_special_tokens=False))
         for e in rows
     )
     return {
@@ -67,17 +68,26 @@ def cmd_plan(args: argparse.Namespace) -> None:
 
 
 def cmd_route(args: argparse.Namespace) -> None:
-    """Show which readout mode each question in a request would take."""
+    """Show which readout mode each question in a request would take when served."""
     from transformers import AutoTokenizer
 
-    from .router import route_all
+    from .model import EngineConfig, serving_routes
     from .types import SystemOneRequest
 
     request = SystemOneRequest.model_validate(json.loads(Path(args.request).read_text()))
     tokenizer = AutoTokenizer.from_pretrained(args.model)
-    for name, r in route_all(request.questions, tokenizer, args.max_label_options).items():
-        codes = f"  codes={r.codes[:6]}{'...' if r.codes and len(r.codes) > 6 else ''}"
-        print(f"{name:<24} mode {r.mode.value}  ({r.reason}){codes if r.codes else ''}")
+    config = EngineConfig(
+        model_id=args.model,
+        max_label_options=args.max_label_options,
+        prompt_style=args.prompt_style,
+        skip_multi_token_codes=not args.no_skip_codes,
+    )
+    for name, r in serving_routes(request.questions, tokenizer, config).items():
+        # Mode B routes carry no codes.
+        codes = ""
+        if r.codes:
+            codes = f"  codes={r.codes[:6]}{'...' if len(r.codes) > 6 else ''}"
+        print(f"{name:<24} mode {r.mode.value}  ({r.reason}){codes}")
 
 
 def cmd_check_data(args: argparse.Namespace) -> None:
@@ -240,11 +250,16 @@ def main(argv: list[str] | None = None) -> None:
     route_parser = sub.add_parser("route", help="show the readout mode per question")
     route_parser.add_argument("request", help="path to a /v1/systemone request JSON")
     route_parser.add_argument("--model", default="Qwen/Qwen3.5-4B-Base")
+    # Defaults mirror `EngineConfig`, so the preview matches what a server does.
     route_parser.add_argument(
         "--max-label-options",
         type=int,
-        default=LABEL_OPTION_CAP,
-        help="Mode A above this many options routes to Mode B; the served default",
+        default=None,
+        help="force Mode B above this many options (default: the tokenizer limit, as served)",
+    )
+    route_parser.add_argument("--prompt-style", choices=["plain", "chat"], default="plain")
+    route_parser.add_argument(
+        "--no-skip-codes", action="store_true", help="stop at the first two-token label code"
     )
     route_parser.set_defaults(func=cmd_route)
 

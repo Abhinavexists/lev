@@ -5,10 +5,12 @@ generated tokens. Wire-compatible with TypeSafe's `/v1/systemone`.
 
 The pure-Python core (schema, prompt layouts, router, calibration, contamination
 guard) imports without torch, so it is testable on any machine. Anything needing a
-model lives behind `lev.model` / `lev.server` and the `[train]` extra.
+model -- `lev.load`, `lev.server` -- imports torch only when called and needs
+the `[train]` extra.
 """
 
 from .calibrate import CalibrationProfile
+from .model import DecisionEngine, load
 from .prompt import Layout
 from .router import Mode, route, route_all
 from .types import (
@@ -32,6 +34,7 @@ __all__ = [
     "CalibrationProfile",
     "Choice",
     "ChoiceAnswer",
+    "DecisionEngine",
     "Layout",
     "Mode",
     "Noul",
@@ -42,6 +45,7 @@ __all__ = [
     "SystemOneRequest",
     "SystemOneResponse",
     "Usage",
+    "load",
     "route",
     "route_all",
 ]

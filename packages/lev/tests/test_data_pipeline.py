@@ -23,9 +23,7 @@ from lev.data.sources import (
 from lev.data.splits import (
     DEFAULT_FRACTIONS,
     Split,
-    assign,
     check_coverage,
-    row_key,
     split_examples,
 )
 from lev.labels import NOUL_RATING_TOKENS
@@ -198,9 +196,24 @@ class TestSplits:
         assert not states[Split.CALIBRATION] & states[Split.TEST]
 
     def test_assignment_is_stable_across_processes(self):
-        """`hash()` is salted per process; a split built on it would not reproduce."""
-        assert assign(row_key("s", 7, "some text")) == assign(row_key("s", 7, "some text"))
-        assert assign("lev") is assign("lev")
+        """`hash()` is salted per process, so a split built on it reshuffles on
+        every rebuild. Checked in two fresh interpreters with different hash
+        seeds, against assignments pinned when the split salt was fixed."""
+        import os
+        import subprocess
+        import sys
+
+        probe = (
+            "from lev.data.splits import assign, row_key; "
+            "print(' '.join(assign(row_key('s', i, f'text {i}')).value for i in range(8)))"
+        )
+        pinned = "test train train test calibration train test test"
+        for seed in ("1", "2"):
+            env = {**os.environ, "PYTHONHASHSEED": seed}
+            out = subprocess.run(
+                [sys.executable, "-c", probe], capture_output=True, text=True, check=True, env=env
+            )
+            assert out.stdout.strip() == pinned
 
     def test_every_label_appears_in_train(self, examples):
         report = check_coverage(split_examples(examples))
@@ -752,3 +765,64 @@ class TestKeepFull:
             and any(15 <= s <= 26 for s in sizes)
             and any(27 <= s < 40 for s in sizes)
         )
+
+
+class TestBuildDataset:
+    """`build_dataset` end to end: two fake sources in, three split files out."""
+
+    @staticmethod
+    def loader(hf_id, config=None, split=None, cache_dir=None, **_):
+        if hf_id == REGISTRY["ag_news"].hf_id:
+            rows = [{"text": f"news story {i}", "label": i % 4} for i in range(400)]
+            return FakeDataset(
+                rows, {"label": FakeFeature(["World", "Sports", "Business", "Sci/Tech"])}
+            )
+        if hf_id == REGISTRY["imdb"].hf_id:
+            rows = [{"text": f"film review {i}", "label": i % 2} for i in range(400)]
+            return FakeDataset(rows, {"label": FakeFeature(["neg", "pos"])})
+        raise AssertionError(f"unexpected source {hf_id}")
+
+    def test_every_split_draws_from_every_source(self, tmp_path):
+        """The loaders are built in a loop; a closure that captured the loop
+        variable late would make every split draw from the last source alone,
+        and every other check -- coverage, round trip -- would still pass."""
+        from lev.data.build import SPLIT_FILES, build_dataset, read_jsonl
+
+        manifest = build_dataset(
+            tmp_path,
+            limit_per_source=None,
+            n_examples=300,
+            sources={"ag_news": 0.5, "imdb": 0.5},
+            loader=self.loader,
+        )
+        prefix = {"ag_news": "news story", "imdb": "film review"}
+        for split, filename in SPLIT_FILES.items():
+            rows = read_jsonl(tmp_path / filename)
+            assert {e.source for e in rows} == {"ag_news", "imdb"}, split.value
+            # A row is labelled with the pool it was drawn from, so a crossed
+            # loader leaves the labels right and the content wrong. Check both.
+            for e in rows:
+                if not e.abstain:
+                    assert e.state.startswith(prefix[e.source]), (
+                        f"{split.value}: {e.source} row holds {e.state!r}"
+                    )
+        assert manifest["split_counts"]["train"] == 300
+        assert set(manifest["sources"]) == {"ag_news", "imdb"}
+
+    def test_held_out_splits_keep_the_canonical_question(self, tmp_path):
+        """Augmentation varies the train split only; an exported eval needs one
+        question per source."""
+        from lev.data.build import SPLIT_FILES, build_dataset, read_jsonl
+        from lev.data.splits import Split
+
+        build_dataset(
+            tmp_path,
+            limit_per_source=None,
+            n_examples=300,
+            sources={"ag_news": 0.5, "imdb": 0.5},
+            loader=self.loader,
+        )
+        test_rows = read_jsonl(tmp_path / SPLIT_FILES[Split.TEST])
+        for source in ("ag_news", "imdb"):
+            wordings = {e.question.instructions for e in test_rows if e.source == source}
+            assert wordings == {REGISTRY[source].instructions}

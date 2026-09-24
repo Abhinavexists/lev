@@ -81,6 +81,9 @@ image = (
     # several times longer for nothing.
     .apt_install("build-essential")
     .env({"CC": "gcc", "CXX": "g++", "TORCH_CUDA_ARCH_LIST": "9.0", "MAX_JOBS": "8"})
+    # Length-bucketed batches vary widely in shape; without this the caching
+    # allocator fragments (the OOM at step 6,075 had 29 GiB reserved-but-free).
+    .env({"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
     .pip_install("causal-conv1d", extra_options="--no-build-isolation")
     .add_local_dir(
         REPO_ROOT / "packages" / "lev" / "src" / "lev",
@@ -163,6 +166,7 @@ def _serve_overrides() -> list:
             "LEV_SERVE_COMPILE",
             "LEV_SERVE_MAX_LABEL_OPTIONS",
             "LEV_SERVE_PROMPT",
+            "LEV_SERVE_SKIP_CODES",
         )
         if (value := os.environ.get(key))
     }
@@ -297,7 +301,7 @@ def smoke(steps: int = 40) -> dict:
 
 
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=60 * 60)
-def calibrate(preset: str = "4b", split: str = "calibration") -> dict:
+def calibrate(preset: str = "4b", split: str = "calibration", method: str = "transfer") -> dict:
     """Fit per-bucket temperatures on a split that is neither train nor test.
 
     Separate from `train` on purpose: calibration is fitted *after* training, on
@@ -318,6 +322,7 @@ def calibrate(preset: str = "4b", split: str = "calibration") -> dict:
         # Without this the head is built at the 4B hidden size whatever preset
         # was trained, and the state dict silently fails to match.
         config=config,
+        method=method,
     )
 
 
@@ -335,6 +340,7 @@ def evaluate(
     accuracy, only calibration.
     """
     from lev.calibrate import CalibrationProfile
+    from lev.train.checkpoints import CALIBRATION
     from lev.train.config import PRESETS
     from lev.train.evaluate import evaluate_split
 
@@ -342,7 +348,7 @@ def evaluate(
     config.output_dir = f"{CKPT_DIR}/{preset}"
 
     profile = CalibrationProfile()
-    calibration = Path(config.output_dir) / "calibration.json"
+    calibration = Path(config.output_dir) / CALIBRATION
     if calibration.is_file():
         profile = CalibrationProfile.load(calibration)
     else:
@@ -388,6 +394,7 @@ def serve():
     from pathlib import Path as _Path
 
     from lev.server import create_app
+    from lev.train.checkpoints import latest_checkpoint
     from lev.train.config import PRESETS
 
     # Not an argument: `@modal.asgi_app` functions must be nullary. The preset
@@ -397,8 +404,10 @@ def serve():
         raise ValueError(f"LEV_SERVE_PRESET={preset!r} is not a preset; have {sorted(PRESETS)}")
     config = PRESETS[preset]
     output = _Path(f"{CKPT_DIR}/{preset}")
-    trained = output.is_dir() and (
-        any(output.glob("step-*")) or (output / "adapter_model.safetensors").is_file()
+    # `latest_checkpoint` ignores a step directory without weights, which is what
+    # a save interrupted between `mkdir` and `save_pretrained` leaves behind.
+    trained = (
+        latest_checkpoint(output) is not None or (output / "adapter_model.safetensors").is_file()
     )
 
     # A frozen model is a different backbone; the adapter trained on -Base
@@ -412,6 +421,7 @@ def serve():
     # The style the adapter trained under, from its preset; LEV_SERVE_PROMPT
     # overrides -- for a frozen model, which trained under neither.
     prompt_style = os.environ.get("LEV_SERVE_PROMPT") or config.prompt_style
+    skip_codes = os.environ.get("LEV_SERVE_SKIP_CODES", "1") not in ("0", "false", "no")
     frozen = os.environ.get("LEV_SERVE_MODEL")
     if frozen:
         print(f"serving {frozen} frozen: no adapter, binary Noul, raw softmax")
@@ -422,6 +432,7 @@ def serve():
             compile=compile,
             max_label_options=max_label_options,
             prompt_style=prompt_style,
+            skip_multi_token_codes=skip_codes,
         )
 
     if not trained:
@@ -434,6 +445,7 @@ def serve():
         compile=compile,
         max_label_options=max_label_options,
         prompt_style=prompt_style,
+        skip_multi_token_codes=skip_codes,
     )
 
 
@@ -473,6 +485,64 @@ def export_checkpoint(preset: str = "4b", name: str | None = None) -> dict:
     print(f"  pull it:    make weights RELEASE={target}")
     print(f"  publish it: make publish RELEASE={target} REPO=<org/name>")
     return manifest
+
+
+@app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=30 * 60)
+def check_release(name: str = "4b") -> dict:
+    """Load a packaged release the way a user will -- `lev.load` on the flat
+    directory, then the HTTP server over it -- and answer one request of every
+    question type through each. Raises if the release loads without its
+    calibration or head, or if the two paths disagree.
+    """
+    import json
+
+    from fastapi.testclient import TestClient
+    from lev import load
+    from lev.server import create_app
+
+    release = f"{RELEASES_DIR}/{name}"
+    request = {
+        "state": "Hi, I was charged twice for my order #4471 and I want a refund.",
+        "questions": {
+            "intent": {
+                "type": "choice",
+                "instructions": "What does the customer want?",
+                "criteria": {
+                    "refund": "wants money back",
+                    "cancel": "wants to cancel an order",
+                    "track": "wants to know where an order is",
+                    "other": "anything else",
+                },
+            },
+            "urgent": {"type": "noul", "instructions": "Does this need a human within the hour?"},
+            "frustration": {
+                "type": "score",
+                "instructions": "How frustrated is the customer?",
+                "criteria": ["calm", "mildly annoyed", "annoyed", "angry"],
+            },
+        },
+    }
+
+    engine = load(release, cache_dir=MODELS_DIR)
+    if not engine.calibration.temperatures or engine.mode_b_head is None:
+        raise RuntimeError(f"{release} loaded without its calibration or its Mode B head")
+    direct = engine.system_one(request["state"], request["questions"]).model_dump(mode="json")
+    del engine
+
+    with TestClient(create_app(release, model_cache=MODELS_DIR)) as client:
+        health = client.get("/health").json()
+        served = client.post("/v1/systemone", json=request)
+    served.raise_for_status()
+    served = served.json()
+    for question, answer in served["answers"].items():
+        expected = direct["answers"][question]
+        gaps = [abs(answer["probabilities"][k] - p) for k, p in expected["probabilities"].items()]
+        gap = max(gaps, default=0.0)
+        if answer.get("choice") != expected.get("choice") or gap > 1e-3:
+            raise RuntimeError(f"server and lev.load disagree on {question}: {answer}, {expected}")
+
+    print(json.dumps({"health": health, "response": served}, indent=2))
+    return {"health": health, "response": served}
 
 
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=30 * 60)
@@ -593,29 +663,22 @@ def profile_engine(preset: str = "4b", rounds: int = 20) -> dict:
     """
     import statistics
     import time
-    from pathlib import Path as _Path
 
     import lev.model as engine_module
     import torch
-    from lev.calibrate import CalibrationProfile
-    from lev.model import DecisionEngine, EngineConfig
-    from lev.server import _load_head
-    from lev.train.checkpoints import resolve_checkpoint
+    from lev.model import DecisionEngine, EngineConfig, load
     from lev.train.config import PRESETS
     from lev.types import Choice, Noul, Score
-    from peft import PeftModel
-    from transformers import AutoModelForCausalLM, AutoTokenizer
 
     config = PRESETS[preset]
-    checkpoint = resolve_checkpoint(f"{CKPT_DIR}/{preset}")
-    tokenizer = AutoTokenizer.from_pretrained(str(checkpoint))
-    model = AutoModelForCausalLM.from_pretrained(
-        config.model_id, dtype=torch.bfloat16, cache_dir=MODELS_DIR
-    ).cuda()
-    model = PeftModel.from_pretrained(model, str(checkpoint)).eval()
-    head = _load_head(checkpoint, model)
-    profile = CalibrationProfile.load(_Path(checkpoint).parent / "calibration.json")
-    engine = DecisionEngine(model, tokenizer, EngineConfig(model_id=config.model_id), profile, head)
+    engine = load(
+        f"{CKPT_DIR}/{preset}",
+        model_id=config.model_id,
+        cache_dir=MODELS_DIR,
+        prompt_style=config.prompt_style,
+    )
+    model, tokenizer = engine.model, engine.tokenizer
+    profile, head = engine.calibration, engine.mode_b_head
 
     kernels = {}
     for name in ("fla", "causal_conv1d"):
@@ -698,7 +761,12 @@ def profile_engine(preset: str = "4b", rounds: int = 20) -> dict:
             compiled_engine = DecisionEngine(
                 model,
                 tokenizer,
-                EngineConfig(model_id=config.model_id, prefix_mode="single", compile=True),
+                EngineConfig(
+                    model_id=config.model_id,
+                    prompt_style=config.prompt_style,
+                    prefix_mode="single",
+                    compile=True,
+                ),
                 profile,
                 head,
             )

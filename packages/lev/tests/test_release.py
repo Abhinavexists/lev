@@ -48,7 +48,7 @@ class TestBuildRelease:
         assert manifest["base_model"] == "Qwen/Qwen3.5-4B-Base"
         assert manifest["step"] == 18750 and manifest["preset"] == "4b"
         assert manifest["calibrated"] and manifest["mode_b_head"]
-        assert manifest["train_max_label_options"] == 26
+        assert "train_max_label_options" not in manifest, "no cap applies to training any more"
         assert manifest["prompt_style"] == "plain"
         assert json.loads((release / RELEASE_MANIFEST).read_text()) == manifest
 
@@ -95,3 +95,14 @@ class TestResolvingAReleaseBack:
     def test_a_missing_path_that_is_not_a_hub_id_fails_clearly(self, spec):
         with pytest.raises(FileNotFoundError, match="neither a local path nor a Hub id"):
             fetch_checkpoint(spec)
+
+
+def test_model_card_describes_routing_as_it_is_served_and_trained(tmp_path):
+    """The card ships with downloadable weights, so its claims must be current:
+    Mode B trains on the full large taxonomies, not on "27+ options", and
+    Choice temperatures are banded by option count."""
+    out = fake_checkpoint(tmp_path)
+    build_release(out, tmp_path / "release", preset="4b")
+    card = (tmp_path / "release" / MODEL_CARD).read_text()
+    assert "27+" not in card
+    assert "option-count band" in card

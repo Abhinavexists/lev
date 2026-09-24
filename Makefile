@@ -93,7 +93,8 @@ release: ## Modal: package the newest PRESET checkpoint into a release dir on th
 	modal run modal/app.py::export_checkpoint --preset $(PRESET) $(if $(NAME),--name $(NAME),)
 
 weights: ## Pull a packaged release to weights/RELEASE (RELEASE=name, default PRESET)
-	modal volume get --force lev-checkpoints releases/$(RELEASE) weights/$(RELEASE)
+	mkdir -p weights
+	modal volume get --force lev-checkpoints releases/$(RELEASE) weights/
 
 publish: ## Upload weights/RELEASE to the Hub (REPO=org/name; needs HF_TOKEN)
 	uv run lev release publish weights/$(RELEASE) --repo $(REPO)

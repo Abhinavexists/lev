@@ -27,16 +27,22 @@ The cache fork was the one part that could not be reasoned about -- see `_fork`.
 from __future__ import annotations
 
 import copy
+import json
 import threading
 import time
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
+
+from pydantic import TypeAdapter
 
 from .calibrate import CalibrationProfile
 from .labels import noul_probability
 from .prompt import Layout, Rendered, Style, build, candidate_texts, label_prefix, schema_block
 from .router import BINARY_NOUL, Mode, Route, route_all
+from .train.checkpoints import MODE_B_HEAD
 from .types import (
     Choice,
     ChoiceAnswer,
@@ -48,6 +54,8 @@ from .types import (
     SystemOneResponse,
     Usage,
 )
+
+_QUESTIONS = TypeAdapter(dict[str, Question])
 
 
 @dataclass
@@ -74,6 +82,12 @@ class EngineConfig:
     # agreement 0.15 between two orders of the same 60 options). Two suffix rows
     # instead of one, in the same batched forward -- no extra prefill.
     order_average: bool = True
+    # Skip label codes that are more than one token (Qwen3.5: `BQ`, `BZ`, ...)
+    # instead of falling to Mode B at the first one. Serving-only: training
+    # routing keeps the plain scheme so Mode B keeps its data. Measured on 400
+    # held-out rows each: banking77 0.818 -> 0.980, clinc_oos 0.953 -> 0.968.
+    # ADR-028.
+    skip_multi_token_codes: bool = True
     # How the shared prefix is computed. "fork": prefill once, fork the cache,
     # run the suffixes -- two forwards, no repeated prefix FLOPs. "single": one
     # batched forward over prefix+suffix per row -- repeats the prefix per row
@@ -130,6 +144,21 @@ def average_orders(prob_rows: list[list[float]], orders: list[list[int] | None])
     return [t / len(prob_rows) for t in total]
 
 
+def serving_routes(
+    questions: dict[str, Question], tokenizer, config: EngineConfig
+) -> dict[str, Route]:
+    """The readout mode each question gets under `config`: the one routing policy
+    the engine applies, and the one `lev route` previews."""
+    return route_all(
+        questions,
+        tokenizer,
+        config.max_label_options,
+        noul_binary=config.noul_readout == "binary",
+        label_prefix=label_prefix(Style(config.prompt_style)),
+        skip_multi_token=config.skip_multi_token_codes,
+    )
+
+
 class DecisionEngine:
     """Answers a batch of typed questions about one state in a single prefill."""
 
@@ -146,6 +175,8 @@ class DecisionEngine:
         self.config = config or EngineConfig()
         self.calibration = calibration or CalibrationProfile()
         self.mode_b_head = mode_b_head
+        # The resolved checkpoint directory `load` read, for reporting.
+        self.checkpoint: Path | None = None
         self._candidate_cache: dict[tuple[str, ...], Any] = {}
         # Read once: a compiled module proxies attributes, but not reliably.
         self._device = getattr(model, "device", None)
@@ -200,14 +231,11 @@ class DecisionEngine:
             self.config.compile = False
         return time.perf_counter() - started
 
-    def system_one(self, state, questions: dict[str, Question]) -> SystemOneResponse:
-        routes = route_all(
-            questions,
-            self.tokenizer,
-            self.config.max_label_options,
-            noul_binary=self.config.noul_readout == "binary",
-            label_prefix=label_prefix(Style(self.config.prompt_style)),
-        )
+    def system_one(self, state, questions: Mapping[str, Question | dict]) -> SystemOneResponse:
+        """Answer every question about `state` in one forward pass. Questions may
+        be `Noul`/`Choice`/`Score` objects or the same shapes as plain dicts."""
+        questions = _QUESTIONS.validate_python(questions)
+        routes = serving_routes(questions, self.tokenizer, self.config)
 
         unsupported = [
             name
@@ -512,6 +540,129 @@ class DecisionEngine:
             )
 
         raise TypeError(f"unknown question type {question.type!r}")
+
+
+def load(
+    checkpoint: str | Path | None = None,
+    *,
+    model_id: str = "Qwen/Qwen3.5-4B-Base",
+    cache_dir: str | None = None,
+    calibration: str | Path | None = None,
+    noul_readout: Literal["rating", "binary"] | None = None,
+    prompt_style: Literal["plain", "chat"] | None = None,
+    compile: bool = False,
+    max_label_options: int | None = None,
+    skip_multi_token_codes: bool = True,
+) -> DecisionEngine:
+    """Load a checkpoint -- a release directory, a training output or a Hub id --
+    into a ready `DecisionEngine`. With no checkpoint, serves `model_id` frozen.
+
+        engine = lev.load("interfaze-ai/lev-4b")
+        engine.system_one(state, {"urgent": {"type": "noul", "instructions": "..."}})
+
+    A release's `lev_release.json` names the base model and prompt style its
+    weights were trained under and overrides `model_id` and `prompt_style`. The
+    Mode B head and `calibration.json` beside the adapter are picked up; a
+    missing calibration is warned about, not hidden.
+    """
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from .train.checkpoints import CALIBRATION, resolve_checkpoint
+
+    # A checkpoint directory holds a LoRA *adapter*, not a full model: it has
+    # `adapter_config.json` and no model config. So the base is loaded from
+    # `model_id` and the adapter applied on top.
+    resolved = resolve_checkpoint(checkpoint, cache_dir) if checkpoint else None
+    manifest_file = resolved / "lev_release.json" if resolved else None
+    if manifest_file and manifest_file.is_file():
+        manifest = json.loads(manifest_file.read_text())
+        prompt_style = manifest.get("prompt_style", prompt_style)
+        if manifest["base_model"] != model_id:
+            print(
+                f"release manifest names base {manifest['base_model']!r}; "
+                f"using it instead of {model_id!r}"
+            )
+            model_id = manifest["base_model"]
+
+    # Tokenizer from the checkpoint when it saved one: the label-token readout
+    # depends on which ids a code encodes to, so a mismatch produces plausible
+    # wrong answers rather than an error.
+    tok_source = resolved if resolved and (resolved / "tokenizer.json").is_file() else model_id
+    tokenizer = AutoTokenizer.from_pretrained(str(tok_source), cache_dir=cache_dir)
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        dtype=torch.bfloat16,
+        device_map="auto" if torch.cuda.device_count() > 1 else None,
+        cache_dir=cache_dir,
+    )
+    if torch.cuda.is_available() and torch.cuda.device_count() == 1:
+        model = model.cuda()
+
+    head = None
+    if resolved:
+        from peft import PeftModel
+
+        model = PeftModel.from_pretrained(model, str(resolved))
+        head = _load_head(resolved / MODE_B_HEAD, model)
+    model = model.eval()
+
+    # Default to the profile sitting beside the weights it was fitted for:
+    # inside a flat release directory, or one level up in a training tree.
+    if calibration is None and resolved:
+        candidates = [resolved / CALIBRATION, resolved.parent / CALIBRATION]
+        calibration = next((c for c in candidates if c.is_file()), candidates[-1])
+    profile = CalibrationProfile()
+    if calibration:
+        try:
+            profile = CalibrationProfile.load(calibration)
+        except FileNotFoundError:
+            # Serving uncalibrated is legitimate (it is build step 1), but it
+            # must be loud: uncalibrated confidence is the failure mode the
+            # benchmark measured at ECE 0.43.
+            print(f"WARNING: no calibration at {calibration}; serving raw softmax")
+
+    config = EngineConfig(
+        model_id=model_id,
+        # A stock checkpoint pins the 0-8 rating scale at one end regardless of
+        # content (ADR-007), so untrained serving reads Noul as two options.
+        noul_readout=noul_readout or ("rating" if resolved else "binary"),
+        compile=compile,
+        prompt_style=prompt_style or "plain",
+        # A serving-side experiment knob (ADR-025); None is the trained policy.
+        max_label_options=max_label_options,
+        skip_multi_token_codes=skip_multi_token_codes,
+    )
+    engine = DecisionEngine(model, tokenizer, config, profile, mode_b_head=head)
+    engine.checkpoint = resolved
+    if compile:
+        # Pay compile and graph capture now, on every shape bucket the
+        # benchmark and the demo send, so no request ever does.
+        print(f"warmup: compiled forward in {engine.warmup():.0f}s", flush=True)
+    return engine
+
+
+def _load_head(path: Path, model):
+    """Load the Mode B head saved beside the adapter, if there is one.
+
+    Absent is fine and means Mode A only -- the engine refuses a question that
+    needs Mode B rather than answer it wrongly.
+    """
+    import torch
+
+    from .readout.mode_b import CandidatePathReadout
+
+    if not path.is_file():
+        return None
+
+    state_dict = torch.load(path, map_location="cpu", weights_only=True)
+    # Shapes come from the saved tensors, not from a config that might have
+    # drifted since the run that produced them.
+    proj_dim, hidden_size = state_dict["question_proj.weight"].shape
+    head = CandidatePathReadout(hidden_size=hidden_size, proj_dim=proj_dim)
+    head.load_state_dict(state_dict)
+    return head.to(device=next(model.parameters()).device, dtype=torch.float32).eval()
 
 
 def _bucket_type(question: Question, route: Route) -> str:
