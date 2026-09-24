@@ -1,15 +1,14 @@
 """Assemble the training mixture, gated by the contamination guard.
 
-An example is one (state, question, answer) triple. The mixture controls three
-things the architecture depends on, so they live here rather than in the loop:
+An example is one (state, question, answer) triple. The mixture controls:
 
-  layout          50/50 state-first / schema-first, so both caches work at inference
-  abstain         a fraction whose answer is genuinely not determinable from the
-                  state, carrying a uniform target rather than a gold label
-  option scaling  some questions with large option sets, to exercise Mode B
+  layout          50/50 state-first / schema-first, so both layouts work at inference
+  abstain         a fraction whose answer cannot be determined from the state,
+                  with a uniform target instead of a gold label
+  option scaling  large option sets, for Mode B and large lettered sets
 
-The loaders live in `lev.data.sources`; `build_mixture` takes them injected so the
-tests never touch the network.
+`build_mixture` takes its loaders (`lev.data.sources`) injected, so tests stay
+offline.
 """
 
 from __future__ import annotations
@@ -34,9 +33,8 @@ class Example:
     layout: Layout
     source: str
     abstain: bool = False
-    # Present only on abstain examples, where there is no gold index to supervise
-    # and the correct behaviour is spread mass, not pick one. The loss reads this
-    # in preference to `target` when it is set.
+    # Abstain examples only: no gold index, so the loss reads this uniform target
+    # instead of `target`.
     soft_target: list[float] | None = None
 
 
@@ -44,10 +42,9 @@ class Example:
 class Augment:
     """How one source's questions may be varied in the training mixture.
 
-    `negations` ask the opposite question, so the Noul target flips; they are
-    what stops "yes" meaning "good" in every training row. `min_options` is the
-    floor when a Choice is subsampled -- above the Mode A cap for Mode B sources,
-    so subsampling cannot quietly move them to the other readout.
+    `negations` ask the opposite question, flipping the Noul target, so "yes"
+    does not mean "good" in every row. `min_options` is the floor when a Choice
+    is subsampled.
     """
 
     paraphrases: tuple[str, ...] = ()
@@ -70,8 +67,7 @@ class MixtureSpec:
     # source -> sources whose states must not be used as abstain donors,
     # because they would in fact answer the question. See `sources.ADJACENT`.
     adjacent: dict[str, frozenset[str]] = field(default_factory=dict)
-    # Training-only variation, per source. Empty means canonical questions only,
-    # which is what the held-out splits use. See ADR-020.
+    # Training variation per source; empty means canonical questions (ADR-020).
     augment: dict[str, Augment] = field(default_factory=dict)
     paraphrase_fraction: float = 0.7
     negate_fraction: float = 0.5
@@ -80,10 +76,7 @@ class MixtureSpec:
     description_dropout: float = 0.3
 
     def validate(self) -> None:
-        # Raises on any source colliding with an S1Bench evaluation subset. This
-        # runs before a single example is loaded, because a contaminated run looks
-        # *better* and would silently invalidate the only number this project
-        # competes on.
+        # Before any example loads: a contaminated run silently looks better.
         assert_clean(self.sources.keys())
         if not self.sources:
             raise ValueError("mixture has no sources")
@@ -97,8 +90,7 @@ Loader = Callable[[], Iterable[Example]]
 def build_mixture(spec: MixtureSpec, loaders: dict[str, Loader]) -> Iterator[Example]:
     """Yield `spec.n_examples`, respecting weights, layout split and abstain rate.
 
-    `loaders` maps a source name to a callable returning an iterable of Examples.
-    Injected rather than imported so tests can run without touching the network.
+    `loaders` maps a source name to a callable returning its Examples.
     """
     spec.validate()
     missing = set(spec.sources) - set(loaders)
@@ -133,10 +125,8 @@ def build_mixture(spec: MixtureSpec, loaders: dict[str, Loader]) -> Iterator[Exa
 
         soft_target = None
         if abstain:
-            # Replace the state, so the question becomes genuinely unanswerable,
-            # and supervise a uniform distribution: with no evidence every
-            # candidate is equally supported, and that is the calibrated answer
-            # rather than a hedge. See ADR-012.
+            # Swap in an unrelated state and supervise a uniform distribution:
+            # with no evidence that is the calibrated answer (ADR-012).
             state = _donor_state(pools, source, spec.adjacent, rng)
             n_candidates = candidate_count(question)
             soft_target = [1.0 / n_candidates] * n_candidates
@@ -218,14 +208,10 @@ def _donor_state(
 ):
     """A state borrowed from a source that cannot answer `source`'s question.
 
-    "A different source" is not sufficient. imdb and rotten_tomatoes are both
-    movie reviews, so pairing one's question with the other's state leaves the
-    question perfectly answerable while it gets labelled uniform -- the exact
-    mislabelling abstain augmentation exists to avoid. `adjacent` carries those
-    exclusions; see `sources.ADJACENT`.
-
-    Falls back to any other source, then to any source at all, so a narrow
-    mixture still yields an example rather than raising.
+    Another source is not enough: imdb's question is answerable from a
+    rotten_tomatoes state, so `adjacent` (`sources.ADJACENT`) excludes such
+    pairs. Falls back to any other source, then any source, so a narrow mixture
+    still yields an example.
     """
     excluded = {source} | set(adjacent.get(source, ()))
     eligible = (

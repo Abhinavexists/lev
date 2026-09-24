@@ -62,10 +62,8 @@ def handler(request: httpx2.Request) -> httpx2.Response:
     questions = body["questions"]
     answers = {k: _answer(k, q, state_sig) for k, q in questions.items()}
 
-    # Rough token model: input scales with the state (billed once per request),
-    # output scales with the number of questions. This is the accounting shape
-    # the batching sweep is designed to detect -- the sweep must find it from
-    # the response, not assume it.
+    # Input scales with the state (billed once per request), output with the
+    # question count: the shape the batching sweep must find from responses.
     input_tokens = max(1, len(state_text) // 4)
     output_tokens = 4 * len(questions)
 

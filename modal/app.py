@@ -1,38 +1,24 @@
-"""Modal app: train and serve lev on one H100.
+"""Modal app: build data, train, calibrate, evaluate, package and serve lev on one H100.
 
-    modal setup                                   # once
-    modal run   modal/app.py::smoke               # ~5 min, proves the path works
-    modal run   modal/app.py::train --preset 4b   # the real run, ~2h
-    modal serve modal/app.py                      # /v1/systemone on an H100, dev URL
-    modal deploy modal/app.py                     # ...with a stable URL
+    modal setup                                            # once
+    modal run    modal/app.py::smoke                       # ~5 min, proves the path
+    modal run    modal/app.py::train --preset 4b-instruct  # the real run
+    modal run    modal/app.py::calibrate --preset 4b-instruct
+    modal deploy modal/app.py                              # /v1/systemone, stable URL
 
-`modal serve` and `modal run` are both *ephemeral* apps, and every ephemeral
-app of this file registers the `serve` web function under the same `-dev`
-label. Running any function here -- an export, a diagnostic -- while a dev
-server is up steals that label, and the server's URL returns 404 once the run
-exits. Serve with `modal deploy` for a URL that other runs cannot take.
+`modal serve` and `modal run` are both ephemeral apps, and each registers the
+`serve` web function under the same `-dev` label: running any function here
+while a dev server is up steals that label, and the server's URL returns 404
+once the run exits. `modal deploy` gives a URL other runs cannot take.
 
-Design notes worth knowing before you change anything here:
-
-* **The model cache is a Volume, not part of the image.** A 4B checkpoint is ~8 GB;
-  baking it into the image makes every rebuild slow and every push enormous.
-* **Checkpoints go to a second Volume and are committed *during* training**, not at
-  the end. A run that loses everything to a preemption is a bad trade for the two
-  lines it takes to commit periodically.
-* **`smoke` exists to be run first.** It uses the 0.8B preset and a few dozen
-  steps, so the whole path -- image, volumes, data, both readouts, loss,
-  checkpoint write -- is exercised for a few minutes of GPU time instead of
-  discovering a bug most of the way through the real run.
-* **H100 timeout is 24h against a ~2h estimate.** Deliberately generous: the
-  estimate assumes a sustained throughput that has not been measured yet
-  (DECISIONS.md Q5), and a run that dies just before it saves costs everything.
-
-PARTLY RUN ON MODAL. The image builds, all six functions register, and
-`download` has run green -- it wrote the HF cache layout that `train` reads
-(`models--Qwen--Qwen3.5-4B-Base/snapshots/...` in the models Volume). Still
-unrun remotely: `build_data`, `smoke`, `train`, `calibrate`, `serve`. The
-pipeline underneath them is verified end to end on CPU (docs/TRAINING.md,
-"What has actually been run"). Run `smoke` next.
+* **The model cache is a Volume**, not part of the image: a 4B checkpoint is
+  ~8 GB, which would make every image rebuild slow.
+* **Checkpoints go to a second Volume, committed during training**, so a
+  preemption costs at most `checkpoint_every` steps.
+* **`smoke` runs first**: the 0.8B preset for a few dozen steps exercises image,
+  volumes, data, both readouts, loss and checkpoint write in minutes.
+* **The H100 timeout is 24 h against a ~2 h estimate**: a run that dies just
+  before it saves costs everything.
 """
 
 from __future__ import annotations
@@ -48,15 +34,12 @@ APP_NAME = "lev"
 # invoked from anywhere, and a relative path would silently mount nothing.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# Pinned rather than floating: an unpinned torch or transformers turns a
-# reproducible run into a lottery. `transformers` must be 5.x -- the prefix-cache
-# fork calls `reorder_cache` on a hybrid cache, which 4.x cannot do.
+# Pinned for reproducibility. `transformers` must be 5.x: the prefix-cache fork
+# calls `reorder_cache` on a hybrid cache, which 4.x cannot do.
 image = (
-    # A CUDA *devel* base, not `debian_slim`: it carries `nvcc`, which is what
-    # `causal-conv1d` needs to build. Without that kernel 24 of the 32 layers
-    # run their depthwise conv on a reference PyTorch path -- every training and
-    # serving log said so -- and the served forward measured ~160 ms flat for a
-    # 4B model on an H100, launch-bound rather than FLOP-bound. The CUDA major
+    # A CUDA devel base for `nvcc`, which `causal-conv1d` needs to build. Without
+    # that kernel 24 of the 32 layers run their depthwise conv on a reference
+    # PyTorch path; with it served compute fell from 81 to 69 ms. The CUDA major
     # must match torch's build (2.14.0+cu130).
     modal.Image.from_registry("nvidia/cuda:13.0.3-devel-ubuntu24.04", add_python="3.12")
     .pip_install(
@@ -70,15 +53,12 @@ image = (
         "fastapi==0.141.1",
         "huggingface-hub==1.32.0",
     )
-    # Speed, not correctness: the linear-attention kernels (pure Triton) and the
-    # depthwise conv kernel (CUDA, built here against the torch above). If the
-    # conv build breaks on a pin change, delete that line -- the run gets slow,
-    # not wrong, and says so in its log.
+    # Speed, not correctness: the linear-attention kernels (Triton) and the conv
+    # kernel (CUDA). If the conv build breaks on a pin change, delete it; runs get
+    # slower, not wrong.
     .pip_install("flash-linear-attention", "ninja", "packaging")
-    # The devel image ships nvcc but no host C++ compiler, and torch's
-    # extension builder refuses to proceed without one ("clang++ 0.0.0").
-    # Arch 9.0 only: this image runs on H100s, and compiling every arch takes
-    # several times longer for nothing.
+    # The devel image has nvcc but no host C++ compiler, which torch's extension
+    # builder requires ("clang++ 0.0.0"). Arch 9.0 only: this image runs on H100s.
     .apt_install("build-essential")
     .env({"CC": "gcc", "CXX": "g++", "TORCH_CUDA_ARCH_LIST": "9.0", "MAX_JOBS": "8"})
     # Length-bucketed batches vary widely in shape; without this the caching
@@ -94,8 +74,7 @@ image = (
 
 app = modal.App(APP_NAME, image=image)
 
-# Persisted across runs. Downloading a 4B checkpoint on every invocation is
-# minutes of wall clock and bandwidth you pay for.
+# Persisted across runs, so the 4B checkpoint downloads once.
 models = modal.Volume.from_name("lev-models", create_if_missing=True)
 checkpoints = modal.Volume.from_name("lev-checkpoints", create_if_missing=True)
 datasets_vol = modal.Volume.from_name("lev-data", create_if_missing=True)
@@ -112,18 +91,12 @@ SERVE_PRESET = "4b"
 
 
 def _hf_secrets() -> list:
-    """A token only if there is one to pass.
+    """The local `HF_TOKEN` as a Secret, only if one is set.
 
-    The default backbone is public, so most runs need no credential at all.
-    `Secret.from_name("huggingface")` is resolved when the function is created
-    and fails outright if no such Secret exists -- which made `modal run` fail
-    on a fresh account for a backbone that needs no token. Reading the local
-    `HF_TOKEN` instead means the common case works untouched and a gated
-    backbone works by exporting one variable.
-
-    Prefer a real Modal Secret for a shared or long-lived deployment:
-        modal secret create huggingface HF_TOKEN=hf_...
-    then set LEV_HF_SECRET=huggingface.
+    The backbones are public, and `Secret.from_name("huggingface")` fails at
+    function creation when no such Secret exists. For a shared deployment,
+    create one (`modal secret create huggingface HF_TOKEN=hf_...`) and set
+    LEV_HF_SECRET=huggingface.
     """
     named = os.environ.get("LEV_HF_SECRET")
     if named:
@@ -134,12 +107,10 @@ def _hf_secrets() -> list:
 
 # Deploy-time knobs, read where `modal deploy` runs. Decorator arguments are
 # fixed at import, so these cannot travel as Secrets the way the preset does.
-#   LEV_SERVE_CONCURRENCY  requests one container handles at once (default 4).
-#                          The engine serialises GPU forwards; everything else
-#                          -- parsing, tokenising, the network -- overlaps.
+#   LEV_SERVE_CONCURRENCY  requests one container handles at once (default 4);
+#                          GPU forwards serialise, parsing and network overlap.
 #   LEV_SERVE_WARM         containers kept running (default 0). One removes the
-#                          20-55 s cold start and the compile warmup at the cost
-#                          of an idle GPU.
+#                          20-55 s cold start, at the cost of an idle GPU.
 #   LEV_SERVE_REGION       a Modal region near the client; the measured 280 ms
 #                          TCP round trip is a continent, not a server.
 #   LEV_SERVE_SCALEDOWN    idle seconds before a container stops (default 300).
@@ -153,10 +124,9 @@ def _serve_overrides() -> list:
     """Which checkpoint the server loads, chosen from the local environment.
 
     `LEV_SERVE_PRESET=4b-instruct make deploy` serves that preset's newest
-    checkpoint. `LEV_SERVE_MODEL=Qwen/Qwen3.5-4B` serves that model frozen --
-    no adapter, binary Noul -- the zero-shot baseline every trained run has to
-    beat (reflex-4b: 0.719 on S1Bench). Local env does not reach the
-    container, so whichever are set travel as a Secret.
+    checkpoint; `LEV_SERVE_MODEL=Qwen/Qwen3.5-4B` serves that model frozen (no
+    adapter, binary Noul) as the zero-shot baseline. Local env does not reach
+    the container, so whichever are set travel as a Secret.
     """
     overrides = {
         key: value
@@ -180,11 +150,9 @@ SECRETS = _hf_secrets() + _serve_overrides()
 def download(model_id: str = "Qwen/Qwen3.5-4B-Base") -> str:
     """Pre-fetch a checkpoint into the models Volume. Idempotent.
 
-    `cache_dir`, not `local_dir`. Training loads with
-    `from_pretrained(model_id, cache_dir=MODELS_DIR)`, which looks for the HF
-    cache layout (`models--Qwen--...`); `local_dir` writes a flat directory
-    that lookup never finds, so the warm-up silently did nothing and the real
-    run downloaded 8 GB again on the clock.
+    `cache_dir`, not `local_dir`: training's `from_pretrained(model_id,
+    cache_dir=MODELS_DIR)` looks for the HF cache layout (`models--Qwen--...`),
+    which a flat `local_dir` download does not have.
     """
     from huggingface_hub import snapshot_download
 
@@ -214,8 +182,7 @@ def train(
     """Fine-tune on one H100. See `lev.train.config.PRESETS`.
 
     Resumes from the newest checkpoint in the preset's directory unless
-    `--fresh`; `--resume <path>` names one explicitly. A preempted run costs
-    at most `checkpoint_every` steps, which is the point of writing them.
+    `--fresh`; `--resume <path>` names one explicitly.
     """
     from lev.train.config import PRESETS
     from lev.train.loop import run_training
@@ -238,7 +205,7 @@ def train(
         resume_from=resume,
         max_steps=max_steps,
         fresh=fresh,
-        # Commit mid-run so a preemption near the end does not cost the whole run.
+        # Commit mid-run, so a late preemption keeps the checkpoints.
         on_checkpoint=lambda: checkpoints.commit(),
     )
     checkpoints.commit()
@@ -249,15 +216,12 @@ def train(
 def build_data(limit_per_source: int = 20_000, n_examples: int = 200_000) -> dict:
     """Download every source and write the three splits to the data volume.
 
-    No GPU: this is downloads and CPU, and paying H100 rates to wait on the
-    HuggingFace CDN is the most avoidable line on the bill. Run it once; `train`
-    then starts against a volume that already has the data, and fails in seconds
-    rather than minutes if it does not.
+    No GPU: it is downloads and CPU. Run it once; `train` then fails in seconds,
+    not minutes, if the data is missing.
     """
     from lev.data.build import build_dataset
 
-    # The HF download cache on the volume, not in the container: the first
-    # build downloads ~25 corpora, and without this every rebuild does too.
+    # The HF download cache lives on the volume, so rebuilds reuse the corpora.
     manifest = build_dataset(
         DATA_DIR,
         limit_per_source=limit_per_source,
@@ -273,21 +237,17 @@ def smoke(steps: int = 40) -> dict:
     """Exercise the whole path on the 0.8B preset. Run this first, always.
 
     Builds a small mixture if the volume is empty, so a fresh workspace needs
-    exactly one command. It covers image, volumes, both readout modes, the loss,
-    and a checkpoint write -- every part of `train` except its duration.
+    one command. Covers every part of `train` except its duration.
     """
     from pathlib import Path as _Path
 
     if not (_Path(DATA_DIR) / "train.jsonl").is_file():
-        # On the GPU, which `build_data` exists to avoid -- but only for the
-        # 2k-per-source smoke mixture, a couple of minutes, and it saves a
-        # fresh workspace from needing two commands in the right order. Run
-        # `build_data` yourself before `train`; do not let `train` land here.
+        # On the GPU, which `build_data` avoids, but only for the small smoke
+        # mixture (a couple of minutes). Run `build_data` before `train`.
         print("data volume is empty; building a small mixture first")
         build_data.local(limit_per_source=2_000, n_examples=4_000)
 
-    # Always from scratch: a smoke test that resumed a previous smoke would
-    # skip the very steps it exists to exercise.
+    # From scratch: resuming a previous smoke would skip the steps it tests.
     summary = train.local(preset="smoke", max_steps=steps, fresh=True)
     losses = [h["loss"] for h in summary["history"]]
     modes = {h["mode"] for h in summary["history"]}
@@ -304,8 +264,7 @@ def smoke(steps: int = 40) -> dict:
 def calibrate(preset: str = "4b", split: str = "calibration", method: str = "transfer") -> dict:
     """Fit per-bucket temperatures on a split that is neither train nor test.
 
-    Separate from `train` on purpose: calibration is fitted *after* training, on
-    held-out data, and re-fitting must not require another fine-tune.
+    Separate from `train` so re-fitting needs no fine-tune.
     """
     from lev.train.calibration_run import fit_profile
     from lev.train.config import PRESETS
@@ -313,14 +272,12 @@ def calibrate(preset: str = "4b", split: str = "calibration", method: str = "tra
     config = PRESETS[preset]
     config.output_dir = f"{CKPT_DIR}/{preset}"
     return fit_profile(
-        # The preset's output directory, not a step directory: `fit_profile`
-        # resolves the newest checkpoint inside it.
+        # `fit_profile` resolves the newest checkpoint inside this directory.
         checkpoint_dir=config.output_dir,
         data_dir=DATA_DIR,
         split=split,
         on_complete=lambda: checkpoints.commit(),
-        # Without this the head is built at the 4B hidden size whatever preset
-        # was trained, and the state dict silently fails to match.
+        # Otherwise the head is built at the 4B hidden size whatever the preset.
         config=config,
         method=method,
     )
@@ -335,9 +292,7 @@ def evaluate(
     """Score the newest checkpoint on a held-out split, with and without the
     fitted temperature.
 
-    Runs in the container so the checkpoint and the data stay on their volumes.
-    Reports both so the temperature's effect is visible: it cannot change
-    accuracy, only calibration.
+    Runs in the container, next to the checkpoint and data volumes.
     """
     from lev.calibrate import CalibrationProfile
     from lev.train.checkpoints import CALIBRATION
@@ -381,15 +336,11 @@ def evaluate(
 def serve():
     """Serve `/v1/systemone`, wire-compatible with the TypeSafe API.
 
-    Point the benchmark at it with no code change:
         levbench eval --backend lev --base-url <the URL Modal prints> \
                       --tasks data/eval
 
-    Serving the *untrained* backbone is a legitimate first step (TRAINING.md
-    step 1), so a missing checkpoint falls back to the base model rather than
-    refusing to start. `create_app` still raises when a checkpoint is named
-    explicitly and is not there -- the difference is that here nothing was
-    named, we only looked.
+    With no trained checkpoint for the preset it serves the base backbone
+    uncalibrated, with a warning, rather than refusing to start.
     """
     from pathlib import Path as _Path
 
@@ -397,31 +348,27 @@ def serve():
     from lev.train.checkpoints import latest_checkpoint
     from lev.train.config import PRESETS
 
-    # Not an argument: `@modal.asgi_app` functions must be nullary. The preset
-    # comes from LEV_SERVE_PRESET (see `_serve_overrides`), else the default.
+    # `@modal.asgi_app` functions take no arguments; see `_serve_overrides`.
     preset = os.environ.get("LEV_SERVE_PRESET", SERVE_PRESET)
     if preset not in PRESETS:
         raise ValueError(f"LEV_SERVE_PRESET={preset!r} is not a preset; have {sorted(PRESETS)}")
     config = PRESETS[preset]
     output = _Path(f"{CKPT_DIR}/{preset}")
-    # `latest_checkpoint` ignores a step directory without weights, which is what
-    # a save interrupted between `mkdir` and `save_pretrained` leaves behind.
+    # `latest_checkpoint` skips a step directory without weights (an interrupted save).
     trained = (
         latest_checkpoint(output) is not None or (output / "adapter_model.safetensors").is_file()
     )
 
-    # A frozen model is a different backbone; the adapter trained on -Base
-    # cannot be applied to it, so the checkpoint is deliberately not loaded.
     # Off unless asked: measured slower than eager on this model (ADR-023).
     compile = os.environ.get("LEV_SERVE_COMPILE", "0") in ("1", "true", "yes")
     # Default None: Mode A up to the tokenizer limit (ADR-025). Set to force a
     # lower cap, e.g. 26 to reproduce the ADR-020 policy.
     cap_env = os.environ.get("LEV_SERVE_MAX_LABEL_OPTIONS")
     max_label_options = int(cap_env) if cap_env else None
-    # The style the adapter trained under, from its preset; LEV_SERVE_PROMPT
-    # overrides -- for a frozen model, which trained under neither.
+    # The preset's prompt style; LEV_SERVE_PROMPT overrides it for a frozen model.
     prompt_style = os.environ.get("LEV_SERVE_PROMPT") or config.prompt_style
     skip_codes = os.environ.get("LEV_SERVE_SKIP_CODES", "1") not in ("0", "false", "no")
+    # A frozen model is a different backbone from the adapter's, so no checkpoint.
     frozen = os.environ.get("LEV_SERVE_MODEL")
     if frozen:
         print(f"serving {frozen} frozen: no adapter, binary Noul, raw softmax")
@@ -463,9 +410,8 @@ RELEASES_DIR = f"{CKPT_DIR}/releases"
 def export_checkpoint(preset: str = "4b", name: str | None = None) -> dict:
     """Package the newest checkpoint of a preset into `/checkpoints/releases/<name>`.
 
-    No GPU: this copies files. The result is what `make weights` pulls and
-    `lev release publish` uploads -- adapter, head, tokenizer, calibration and
-    a manifest naming the base model and serving policy.
+    No GPU: it copies files (adapter, head, tokenizer, calibration, manifest)
+    for `make weights` to pull and `lev release publish` to upload.
     """
     from lev.release import build_release
     from lev.train.config import PRESETS
@@ -549,13 +495,11 @@ def check_release(name: str = "4b") -> dict:
 def diagnose_candidates(model_id: str = "Qwen/Qwen3.5-4B-Base") -> dict:
     """Is a candidate string's representation independent of its batch neighbours?
 
-    Mode B embeds each option string by running the whole option set through
-    the backbone as one right-padded batch and reading the last real position.
-    The head is permutation-invariant, yet reordering the options changes the
-    served distribution almost entirely (L1 1.23 on massive-en-US). If a
-    string's vector differs between "alone" and "in a batch", or between two
-    batch orders, the padded forward is leaking across rows and every Mode B
-    representation the head was trained on was position-contaminated.
+    Mode B embeds each option by running the whole option set through the
+    backbone as one right-padded batch. The head is permutation-invariant, yet
+    reordering options changed the served distribution almost entirely (L1 1.23
+    on massive-en-US). A vector that differs between "alone" and "in a batch"
+    would mean the padded forward leaks across rows.
     """
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -654,12 +598,10 @@ def diagnose_candidates(model_id: str = "Qwen/Qwen3.5-4B-Base") -> dict:
 def profile_engine(preset: str = "4b", rounds: int = 20) -> dict:
     """Where a `/v1/systemone` call spends its time inside the container.
 
-    Loads the served checkpoint exactly as `serve` does and times each stage of
-    the engine with CUDA synchronised: tokenising, the prefix prefill, the cache
-    fork, the suffix forward, the readout. Medians over `rounds` after warmup,
-    for the request shapes the benchmark and the demo actually send. Network
-    is excluded by construction; subtract these from a client-side latency to
-    get it.
+    Loads the checkpoint as `serve` does (`lev.load`) and times each engine
+    stage with CUDA synchronised, for both prefix modes and the compiled path.
+    Medians over `rounds` after warmup, for the shapes the benchmark and demo
+    send. Network is excluded; subtract from a client-side latency to get it.
     """
     import statistics
     import time
@@ -752,9 +694,8 @@ def profile_engine(preset: str = "4b", rounds: int = 20) -> dict:
             worst = max(worst, *(abs(pa[k] - pb[k]) for k in pa))
     report["fork_vs_single_max_prob_diff"] = round(worst, 5)
     print(f"fork vs single: max |dp| over all answers = {worst:.5f}", flush=True)
-    # Both prefix strategies, because which is faster depends on whether the
-    # forward is FLOP-bound (fork wins) or launch-bound (single wins); then the
-    # compiled single path, with its warmup cost reported separately.
+    # Fork wins when the forward is FLOP-bound, single when launch-bound; then the
+    # compiled single path, with its warmup reported separately.
     variants = [("fork", False), ("single", False), ("single", True)]
     for prefix_mode, compiled in variants:
         if compiled:

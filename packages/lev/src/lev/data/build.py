@@ -1,9 +1,8 @@
 """Materialise the mixture to disk as three JSONL splits.
 
-Training reads from disk, not from the network. Two reasons, both learned the
-expensive way by other people: a run that re-downloads its corpus is not
-reproducible, and an H100 that stalls on a rate-limited dataset server is still
-being billed.
+Training reads from disk, not the network: a run that re-downloads its corpus is
+not reproducible, and an H100 stalled on a rate-limited dataset server is still
+billed.
 
     lev data build --out data/mixture --limit-per-source 20000
 
@@ -48,13 +47,10 @@ def to_json(example: Example) -> dict:
 def _question_from(payload: dict, cache: dict[str, Question]) -> Question:
     """Validate a question once per distinct schema, not once per row.
 
-    Distinct means *order included*. The key must not sort the payload: two
-    rows whose option sets are equal but ordered differently are different
-    questions, because `target` indexes the order. Keyed with `sort_keys=True`,
-    every shuffled row of a source resolved to the first-seen order and its
-    target pointed at a wrong option -- 35-45% of shuffled Choice rows in the
-    ADR-020 mixture trained on wrong labels, and clinc_oos fell to 0.055. The
-    written row was correct; the reader merged it. ADR-024.
+    Distinct includes option order, because `target` indexes it. A sorted key
+    merged shuffled rows into the first-seen order: 35-45% of shuffled Choice
+    rows in the ADR-020 mixture trained on wrong labels and clinc_oos fell to
+    0.055 (ADR-024).
     """
     key = json.dumps(payload, sort_keys=False)
     if key not in cache:
@@ -97,10 +93,8 @@ def read_jsonl(path: Path) -> list[Example]:
 def verify_round_trip(path: Path, sample: int = 1000) -> int:
     """Re-read a written split and check each sampled row comes back as written.
 
-    Order-sensitive on purpose: `target` indexes the option order, so a reader
-    that returns the right *set* of options in a different order has moved the
-    label. A guard this cheap would have caught ADR-024 at build time instead
-    of after a six-hour run. Returns the number of rows checked.
+    Order-sensitive, since `target` indexes the option order: this catches the
+    ADR-024 reader bug at build time. Returns the number of rows checked.
     """
     rows = read_jsonl(path)
     step = max(1, len(rows) // sample)
@@ -110,8 +104,7 @@ def verify_round_trip(path: Path, sample: int = 1000) -> int:
                 continue
             written = json.loads(line)
             reread = to_json(rows[i])
-            # Compared as text, not as dicts: dict equality ignores key order,
-            # and key order is exactly what a merged question loses.
+            # As text: dict equality ignores key order, which a merged question loses.
             if json.dumps(reread, ensure_ascii=False) != json.dumps(written, ensure_ascii=False):
                 raise ValueError(
                     f"{path} row {i} did not survive the round trip: written "
@@ -134,10 +127,8 @@ def build_dataset(
 ) -> dict:
     """Load every source, split it, then draw the mixture from the train split.
 
-    Order matters: **split first, mix second.** Mixing first and splitting after
-    would let the same underlying row appear in train and in test wearing two
-    different layouts, which is a contamination leak with our own data rather
-    than S1Bench's -- subtler, and it would flatter the result the same way.
+    **Split first, mix second**: the other order lets one underlying row reach
+    both train and test under different layouts, a leak that flatters results.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -168,25 +159,19 @@ def build_dataset(
 
         mixture = MixtureSpec(
             sources={name: weight / total_weight for name, weight in available.items()},
-            # Held-out splits are drawn at their natural size; only train is
-            # oversampled to the configured budget.
+            # Only train is oversampled to the budget.
             n_examples=(
                 n_examples if is_train else sum(len(rows) for rows in by_source[split].values())
             ),
             schema_first_fraction=schema_first_fraction,
-            # Abstain augmentation is a training device. Unanswerable rows in the
-            # test split would measure abstention, not accuracy.
+            # Unanswerable test rows would measure abstention, not accuracy.
             abstain_fraction=abstain_fraction if is_train else 0.0,
-            # A different stream per split, so the three do not replay the same
-            # layout and abstain decisions in lockstep.
+            # A different stream per split, so layouts do not repeat in lockstep.
             seed=seed + list(Split).index(split),
             adjacent=adjacency_map(),
-            # Paraphrases, negations and option subsampling are training
-            # variation. The test split keeps every source's canonical question,
-            # so an exported eval file has one question per source. The
-            # calibration split varies option *sets* only -- no rewording -- so
-            # temperatures can be fitted per option-count band on rows the
-            # canonical questions never produce (ADR-026).
+            # Test keeps each source's canonical question (one per exported eval
+            # file). Calibration varies option sets but not wording, so each
+            # option-count band has rows to fit on (ADR-026).
             augment=augmentation_map() if split is not Split.TEST else {},
             **(
                 {}
@@ -198,8 +183,7 @@ def build_dataset(
                 }
             ),
         )
-        # `name=name` binds the loop variable at definition time; without it every
-        # loader would close over the last source in the dict.
+        # `name=name` binds the loop variable now, not the last source.
         loaders = {
             name: (lambda name=name, split=split: by_source[split][name]) for name in available
         }
@@ -209,12 +193,8 @@ def build_dataset(
     unique_train = sum(len(rows) for rows in by_source[Split.TRAIN].values())
     manifest = {
         "sources": {name: REGISTRY[name].hf_id for name in weights},
-        # `build_mixture` draws with replacement, so asking for more examples
-        # than the train split holds oversamples it. That is legitimate -- each
-        # draw gets its own layout and abstain roll, so the examples differ even
-        # when the underlying row repeats -- but the ratio is worth recording,
-        # because at 3 epochs on top of it an oversample of 1.4x means the model
-        # sees each row about four times.
+        # Draws are with replacement, each with its own layout and abstain roll.
+        # Recorded because 1.4x oversampling at 3 epochs shows each row ~4 times.
         "unique_train_rows": unique_train,
         "oversample_ratio": round(n_examples / max(1, unique_train), 2),
         "weights": weights,

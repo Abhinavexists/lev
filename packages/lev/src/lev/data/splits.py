@@ -1,20 +1,15 @@
 """Deterministic train / calibration / test splits.
 
-Three splits, not two, because the temperature is fitted on held-out data and a
-temperature fitted on the test set is not a measurement of anything. `calibrate.fit`
-already refuses a split named test/eval/holdout; this module is the other half of
-that guarantee -- it is what produces a genuinely disjoint `calibration` split for
-it to accept.
+Three splits because the temperature is fitted on held-out data that must not be
+the test set: `calibrate.fit` refuses test/eval/holdout, and this module produces
+the disjoint `calibration` split it accepts.
 
-Assignment is a hash of a stable per-row key, so it depends on the row and nothing
-else: no RNG state, no iteration order, no dataset version. Re-running on a machine
-that downloaded the corpus in a different order puts every row in the same split it
-was in before, which is the property that makes a resumed or re-run experiment
-comparable to the original.
+Assignment hashes a per-row key (source, position within the source, text), so it
+needs no RNG state and reproduces across processes and machines for the same row
+order. A re-ordered corpus re-splits.
 
-The subtle failure this module exists to prevent: a purely random split over
-banking77's 77 intents can leave an intent that appears in test and never in train.
-Accuracy on it is then a measurement of nothing. `check_coverage` raises on that.
+A random split over banking77's 77 intents can leave an intent in test and never
+in train; `check_coverage` raises on that.
 """
 
 from __future__ import annotations
@@ -35,12 +30,11 @@ class Split(StrEnum):
     TEST = "test"
 
 
-# Changing this re-splits every row, so a model trained before the change and one
-# trained after are no longer comparable. Version it rather than edit it.
+# Changing this re-splits every row, making models before and after incomparable.
 SPLIT_SALT = "lev-split-v1"
 
-# Fitting a temperature needs far fewer rows than fitting a model, and the test
-# split only has to be big enough to separate two runs. Everything else trains.
+# A temperature needs far fewer rows than a model, and test only has to separate
+# two runs.
 DEFAULT_FRACTIONS: dict[Split, float] = {
     Split.TRAIN: 0.80,
     Split.CALIBRATION: 0.10,
@@ -49,19 +43,15 @@ DEFAULT_FRACTIONS: dict[Split, float] = {
 
 
 def row_key(source: str, index: int, text: str) -> str:
-    """A stable identity for a row.
-
-    The text is included so that an upstream re-ordering moves a row's *index*
-    without moving the row: the same sentence keeps the same split.
-    """
+    """A stable identity for a row: its source, its position within that source,
+    and the first 512 characters of its text."""
     return f"{source}|{index}|{text[:512]}"
 
 
 def hash_position(key: str, salt: str = SPLIT_SALT) -> float:
     """Map a key to a uniform float in [0, 1). Stable across processes.
 
-    `hash()` is deliberately not used: Python salts it per process, so a split
-    built today would not reproduce tomorrow.
+    Not `hash()`, which Python salts per process.
     """
     digest = hashlib.blake2b(f"{salt}|{key}".encode(), digest_size=8).digest()
     return int.from_bytes(digest, "big") / float(1 << 64)
@@ -113,18 +103,13 @@ def split_examples(
 
 
 def check_coverage(splits: dict[Split, list[Example]], strict: bool = True) -> SplitReport:
-    """Two coverage checks, because one of them is not enough.
+    """Two coverage checks.
 
-    1. Every label *observed* anywhere must also appear in train. A label present
-       only in calibration or test is unmeasurable: the model was never shown it,
-       so its error rate says nothing about the model's ability.
-
-    2. Every label the *question offers* must be observed at all. This is the
-       check that catches a truncated or label-sorted corpus, and the first check
-       cannot: if a sample only ever contains 3 of banking77's 77 intents, those
-       3 are in train, check 1 is satisfied, and the mixture is still junk. The
-       option set comes from the question, so it is what the model is asked to
-       choose between regardless of what the sample happens to contain.
+    1. Every label observed anywhere also appears in train; one seen only in
+       calibration or test measures nothing.
+    2. Every label the question offers is observed at all. This catches a
+       truncated or label-sorted corpus, which check 1 cannot: a sample holding
+       3 of banking77's 77 intents passes check 1.
     """
     seen: dict[str, set[int]] = defaultdict(set)
     in_train: dict[str, set[int]] = defaultdict(set)

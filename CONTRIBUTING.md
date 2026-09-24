@@ -29,10 +29,9 @@ rows) and stopped ones (1 subset, 599 rows). Mixing them silently breaks every
 conclusion. `jeff-gpu` at 0.6644 is stopped; `jeff-gpu-full` at 0.5595 is not.
 
 **Verify, don't reason.** "It should work" is not a check, and neither is a passing
-test that doesn't exercise the change. If you cannot run it, say so in the docstring —
-several modules here do exactly that.
+test that doesn't exercise the change. If you cannot run it, say so.
 
-**The contamination guard is not negotiable.** Six subsets are banned from training
+**The contamination guard is not negotiable.** All 13 S1Bench subsets are banned from training
 ([ADR-009](docs/DECISIONS.md#adr-009--all-thirteen-evaluation-subsets-are-banned-from-training)).
 Contamination makes the headline number *better* while invalidating it, which is why
 the guard raises instead of warning. Do not add a bypass flag.
@@ -42,7 +41,7 @@ thing it measures is not an instrument.
 
 ## Tests
 
-Write the test that would have caught the bug. Two examples already in the tree:
+Write the test that would have caught the bug. Examples already in the tree:
 
 - the fake tokenizer returns *more* than one token for unknown strings, because an
   earlier version returned one for single characters and made the router test vacuous;

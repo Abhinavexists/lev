@@ -17,7 +17,7 @@ class Price:
 
 
 PRICES: dict[str, Price] = {
-    # TypeSafe. Output is genuinely $0 -- "too cheap to meter".
+    # TypeSafe bills input only.
     "jev-latest": Price(0.042, 0.0),
     "jev-1.13": Price(0.042, 0.0),
     # Anthropic first-party rates.
@@ -28,8 +28,8 @@ PRICES: dict[str, Price] = {
 }
 
 
-# A model you host yourself: the cost is GPU time, not tokens, so quoting any
-# per-token figure would be actively misleading. Callers label it instead.
+# A self-hosted model costs GPU time, not tokens; callers label it rather than
+# quote a misleading per-token figure.
 SELF_HOSTED = Price(0.0, 0.0)
 
 
@@ -44,7 +44,6 @@ def lookup(model: str) -> Price:
         return PRICES[model]
     if model.startswith("jev"):
         return PRICES["jev-latest"]
-    # Self-hosted checkpoints (`Qwen/...`, a local adapter, ...) are not metered.
     return SELF_HOSTED
 
 

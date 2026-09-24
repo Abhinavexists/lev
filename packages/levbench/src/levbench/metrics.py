@@ -9,8 +9,7 @@ chance-corrected max probability, lev's is Gini concentration -- so calibration
 binned on it would compare different statistics across backends.
 
 `NoulAnswer` is a bare float, so a Noul is flattened to the two-way distribution
-{True: p, False: 1-p}. That distribution is our inference, not a model output --
-see FINDINGS.md section 2.
+{True: p, False: 1-p}: an inference, not a model output (FINDINGS.md §2).
 """
 
 from __future__ import annotations
@@ -19,8 +18,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-# Clamp before taking a log, so a confidently-wrong answer scores badly rather
-# than infinitely badly. 1e-15 is the usual scikit-learn convention.
+# Log clamp, so a confidently wrong answer scores badly rather than infinitely
+# badly (the scikit-learn convention).
 _EPS = 1e-15
 
 
@@ -43,8 +42,8 @@ def predicted_label(answer: Any) -> Any:
     if kind == "noul":
         return float(answer.noul) >= 0.5
     if kind == "choice":
-        # Trust the model's own `choice` over a recomputed argmax -- they disagree
-        # on ties, and `choice` is what a caller would actually act on.
+        # The model's own pick, not a recomputed argmax: they differ on ties, and
+        # `choice` is what a caller acts on.
         return answer.choice
     if kind == "score":
         return max(answer.probabilities.items(), key=lambda kv: kv[1])[0]
@@ -148,9 +147,8 @@ def selective_accuracy(
 ) -> tuple[float, float]:
     """Accuracy on answers above a confidence threshold, plus the kept fraction.
 
-    This is the metric that decides whether confidence is usable for routing:
-    if accuracy does not rise as the threshold rises, confidence carries no
-    signal and confidence-gating buys nothing.
+    Decides whether confidence is usable for routing: if accuracy does not rise
+    with the threshold, confidence carries no signal.
     """
     kept = [r for r in records if r[3] >= threshold]
     if not kept:

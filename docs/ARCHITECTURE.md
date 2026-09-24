@@ -1,7 +1,9 @@
 # Designing lev: what to take from each implementation, and what to refuse
 
 This is the build document. [`FINDINGS.md`](FINDINGS.md) establishes what Jev *is*;
-this establishes what **lev** should be.
+this establishes what **lev** should be. It was written before the first training
+run: §§1–4 are the survey it rests on, §5 the design as built. Where the build
+later departed from §5 the change is noted inline, with the ADR that records it.
 
 Every model below is on the S1Bench leaderboard, so each architectural claim is paired
 with measured accuracy, calibration and speed rather than a README's self-assessment.
@@ -183,7 +185,10 @@ Supervised proper-scoring first, RL only after. That vindicates the plan's §17 
 Constraint: **a single H100 80 GB for training**, Apple Silicon for prototyping. Every
 choice below is resolved against that.
 
-### 5.1 Backbone — `Qwen/Qwen3.5-4B-Base`
+### 5.1 Backbone — `Qwen/Qwen3.5-4B-Base`, then its instruct checkpoint
+
+The released model fine-tunes the instruct checkpoint, `Qwen/Qwen3.5-4B`, in its
+own chat format (ADR-020, ADR-027); the architecture below is shared by both.
 
 Verified from its `config.json`, not assumed:
 
@@ -252,7 +257,7 @@ choice non-obvious.
                              │       │
                              └───┬───┘
                                  ▼
-                   raw scores → per-mode temperature → softmax
+     raw scores → temperature per type, mode and option band → softmax
 ```
 
 **The router's boundary is tokenizer-verified single-token-ness, not a fixed count.**
@@ -276,14 +281,12 @@ mechanisms, so:
 |---|---|---|
 | **Choice** | softmax over label-token logits | softmax over candidate scores |
 | **Score** | `Σ(i × p_i)` over ordered levels | same, **plus an ordinality constraint** |
-| **Noul** | distribution over **9 rating tokens**, `p(yes) = Σ (i/8)·p_i` | single-path sigmoid |
+| **Noul** | distribution over **9 rating tokens**, `p(yes) = Σ (i/8)·p_i` | the same nine ratings as candidates (only if they are not single tokens) |
 
 **Score under Mode B needs care that Mode A does not.** Under A the levels are unordered
 symbols and ordering lives in the prompt. Under B, a shared matching head has nothing
-forcing level *i+1* to score above level *i*. We therefore add an explicit ordinal term
-and — following decider, which reports `ordinal_mae` separately from accuracy — **track
-ordinal error as its own metric**, because it is a distinct failure mode that accuracy
-hides.
+forcing level *i+1* to score above level *i*, so the loss adds an explicit ordinal
+term (applied to Noul rows as well, whose rating scale is equally ordered).
 
 **Noul returns a real distribution.** Nine rating tokens rather than a two-way yes/no
 (simple-jev, §3.4). This fixes the asymmetry FINDINGS §2 found in the real API, where
@@ -292,14 +295,16 @@ both, and is therefore calibratable like the other two types.
 
 ### 5.5 Caching — two layouts, trained 50/50
 
-- **State-first** (default) — `Context … Question … Options … Answer:`. Prefill the
-  state, fork the 8-layer K/V + conv state to every question. This is the shared-state
-  win, and the thing `levbench sweep` measures.
+- **State-first** (default) — `Context … Question … Options … Answer:`. The state is
+  the shared prefix. Serving runs one batched forward over prefix + suffix per
+  question, which measured faster than prefilling once and forking the 8-layer K/V +
+  conv state, because the forward is launch-bound at this size (ADR-023); the fork
+  remains as `prefix_mode="fork"`.
 - **Schema-first** (opt-in) — questions/options before the state, so the schema is a
   state-independent prefix cached read-only **across requests**.
 
 Random layout per example at training time buys the choice at inference. decider's
-measured cost of schema-first is inherited as the routing rule:
+measured cost of schema-first:
 
 | workload | schema-first cost |
 |---|---|
@@ -313,14 +318,16 @@ else.**
 ### 5.6 Calibration — the differentiator, and it is cheap
 
 Three splits, not two. Temperature is fitted on a split disjoint from **both** train and
-test, and **fitted per question type and per readout mode** — the three types have
-different distribution shapes and one global scalar under-serves at least one.
+test, and **fitted per question type and per readout mode**, plus an option-count band
+for Choice — the three types have different distribution shapes and one global scalar
+under-serves at least one. Each bucket keeps whichever of a row-weighted and a
+family-weighted fit transfers better to held-out task families (ADR-028).
 
 1. Train with a proper scoring rule (cross-entropy + Brier).
 2. **Abstain augmentation** (decider): examples where the answer is not determinable from
    the state, teaching the model to spread mass rather than guess confidently.
 3. Post-hoc temperature fit on the calibration split.
-4. Report accuracy, NLL, Brier, **ECE**, AURC, selective accuracy, and `ordinal_mae`.
+4. Report accuracy, NLL, Brier and **ECE** per source, with and without the temperature.
 
 Evidence this is worth the effort: untuned Qwen3.5 backbones sit at **ECE 0.4252**;
 reflex, the same family plus one fitted scalar, reaches **0.0849**. Jev is **0.0764**.
@@ -331,22 +338,14 @@ exists, never before.
 
 ### 5.7 Training data, and the contamination rule
 
-**This is a build requirement, not hygiene.** Our one differentiating number is
-calibration measured on S1Bench's six subsets. Three leaderboard entries self-declare
+**This is a build requirement, not hygiene.** Every S1Bench number is only meaningful
+if no evaluation subset reached training; three leaderboard entries self-declare
 contamination and their results are compromised by it.
 
-**Excluded from the training mixture, absolutely:**
-
-```
-vitaminc-dev   massive-en-US   boolq   helpsteer2   aegis2   paws
-```
-
-Candidate sources — each must be checked against that list before use:
-
-- decider's task registry (~95 public datasets) — **contains several of the thirteen**
-- Nimble's 2,676 train / 324 test examples — synthetic contrastive pairs
-- NanoJev's public dataset — observed-event data, good for the calibration objective
-- Teacher-generated states from a local 27B, as decider does
+**All 13 S1Bench subsets are excluded from the training mixture**, not only the six
+that ran (ADR-009), and the guard raises at import time and again before training.
+decider's task registry (~95 public datasets) contains several of them. The sources
+actually used are listed in [TRAINING.md](TRAINING.md#the-sources).
 
 ### 5.8 The training budget, with the arithmetic visible
 
@@ -384,7 +383,7 @@ H100 for **ablations, not for one heroic run**.
 1. **Mode A readout on stock `Qwen3.5-4B-Base`, serving `/v1/systemone`. No training.**
    simplejev's evidence says this alone reaches ~0.75 macro. *Done.*
 2. **Fit a temperature.** Evidence says this is ECE 0.43 → ~0.08. The cheapest point
-   on the curve, so it comes before anything else. *Implemented, not yet fitted.*
+   on the curve, so it comes before anything else. *Done.*
 3. **Add Mode B** and the router. This is the differentiator — measure A/B agreement
    where both are valid. *Done; agreement unmeasured (Q2).*
 4. **LoRA fine-tune** with random layout, abstain augmentation, proper scoring. *Done.*
@@ -404,12 +403,11 @@ Stated plainly, because the distinction matters:
 - **Measured since:** the 128-token mean and the padding factor (§5.8); that both
   readouts serve and train; that `levbench` reproduces Jev's published per-subset
   numbers within ±0.4 pp on 5 of 6.
-- **Projected, not measured:** that this combination reaches Jev-level calibration;
-  the wall-clock of a full run; that Mode B closes the option-ceiling gap without
-  costing accuracy.
-
-**No trained checkpoint has been evaluated yet.** The design is evidenced, the pipeline
-is exercised, and the outcome is still a hypothesis.
+- **Measured after training:** three 4B checkpoints trained, calibrated and scored on
+  S1Bench against Jev through identical task files; results and what each run
+  changed are in [FINDINGS §12–16](FINDINGS.md).
+- **Still open:** whether Mode A and Mode B agree where both are valid (Q2), and a
+  valid lev-vs-Jev calibration comparison on S1Bench.
 
 ## 6. How the harness validates this
 

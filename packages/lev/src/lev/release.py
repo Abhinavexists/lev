@@ -1,17 +1,13 @@
 """Package a checkpoint for distribution, and publish it to the Hub.
 
 A release is one flat directory: the LoRA adapter, the Mode B head, the
-tokenizer, the fitted `calibration.json`, a `lev_release.json` manifest naming
-the base model and the serving policy the weights were trained under, and a
-model card. `lev serve --checkpoint <dir-or-hf-repo>` loads it as-is, so the
-same folder is what `modal volume get` pulls, what `lev release publish`
-uploads, and what a user downloads.
+tokenizer, the fitted `calibration.json`, a `lev_release.json` manifest and a
+model card. `lev.load` and `lev serve` load it as-is from disk or the Hub, so it
+is what `modal volume get` pulls, `lev release publish` uploads and a user
+downloads.
 
-The manifest matters more than it looks: a LoRA adapter is meaningless without
-its base model, the head without its adapter, the temperatures without the
-readout they were fitted on, and the option cap without the training that
-assumed it. Shipping them as one unit with the facts written down is the
-difference between weights and a model.
+The manifest records what the weights mean nothing without: the base model the
+adapter belongs to and the prompt format it was trained in.
 """
 
 from __future__ import annotations
@@ -40,8 +36,8 @@ def build_release(
     """Copy a `step-N` checkpoint into a self-describing release directory.
 
     `calibration` defaults to the `calibration.json` beside the checkpoint's
-    parent, where `calibrate` writes it. Its absence is recorded, not hidden:
-    an uncalibrated release serves raw softmax and the card says so.
+    parent, where `calibrate` writes it. An uncalibrated release is recorded as
+    such and serves raw softmax.
     """
     step_dir = resolve_checkpoint(checkpoint)
     target = Path(out)
@@ -49,8 +45,8 @@ def build_release(
 
     copied: list[str] = []
     for file in sorted(step_dir.iterdir()):
-        # Optimiser moments and RNG state are for resuming, not for serving;
-        # PEFT's auto-generated README is replaced by the model card below.
+        # Training state is for resuming, not serving; PEFT's README is replaced
+        # by the model card.
         if file.is_file() and file.name not in (TRAINING_STATE, MODEL_CARD):
             shutil.copy2(file, target / file.name)
             copied.append(file.name)
@@ -70,8 +66,8 @@ def build_release(
         "lora_rank": adapter_config.get("r"),
         "mode_b_head": MODE_B_HEAD in copied,
         "calibrated": calibrated,
-        # The readout and prompt format the weights and temperatures belong to;
-        # the server reads both.
+        # `lev.load` reads `prompt_style` (and `base_model`); `noul_readout`
+        # records the readout the temperatures were fitted on.
         "noul_readout": "rating",
         "prompt_style": prompt_style,
         "files": copied,
@@ -150,8 +146,8 @@ Numbers on S1Bench, the harness and the decision log are in the repository.
 def publish(release_dir: str | Path, repo_id: str, *, private: bool = False) -> str:
     """Upload a release directory to the Hub. Returns the repo URL.
 
-    Needs `HF_TOKEN` (or a `huggingface-cli login`). Creates the repo if it does
-    not exist; re-running uploads the changed files only.
+    Needs `HF_TOKEN` or `hf auth login`. Creates the repo if it does not exist;
+    re-running uploads only the changed files.
     """
     from huggingface_hub import HfApi
 

@@ -1,13 +1,12 @@
 """Chooses the readout mode per question.
 
-This is the piece no other implementation has. Every Family-A project (simple-jev,
-litjev, decider, reflex) hits a hard ceiling when the option set will not fit into
-single tokens, and either caps the option count or rejects the request. We route
-those questions to Mode B instead, which scores candidate *text* and has no ceiling.
+Label-token projects (simple-jev, litjev, decider, reflex) hit a ceiling when the
+options stop fitting in single tokens, and cap the count or reject the request.
+lev routes those questions to Mode B, which scores candidate *text* and has no
+ceiling.
 
-The boundary is not an option count. It is whether every option maps to a verified
-single token for the tokenizer actually loaded -- a count would be wrong the moment
-you swap tokenizers.
+The boundary is whether every option maps to a verified single token for the
+loaded tokenizer, not an option count, which would break on a tokenizer swap.
 """
 
 from __future__ import annotations
@@ -58,15 +57,13 @@ def route(
 ) -> Route:
     """Pick a mode for one question.
 
-    `max_label_options` is an optional policy cap *below* the tokenizer limit. Mode A
-    accuracy decays as the label set grows -- decider measured -5 to -24 points on
-    50-219 options -- so a deployment may prefer Mode B well before Mode A becomes
-    impossible. None means "use Mode A whenever it is expressible".
+    `max_label_options` is an optional policy cap below the tokenizer limit: decider
+    measured Mode A losing 5-24 points on 50-219 options. None uses Mode A whenever
+    it is expressible.
 
     `noul_binary` reads a Noul as two lettered options instead of the 0-8 rating
-    scale. The scale is the trained target and the only calibratable form, but a
-    stock checkpoint pins it at one end regardless of content (ADR-007), so an
-    untrained deployment must use this.
+    scale. The scale is the trained, calibratable form, but a stock checkpoint pins
+    it at one end regardless of content (ADR-007), so untrained serving uses this.
     """
     n = candidate_count(question)
 

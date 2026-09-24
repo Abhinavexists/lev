@@ -1,9 +1,4 @@
-"""Progress reporting for a training run.
-
-Separated from the loop because it is reporting, not training: a silent run is
-indistinguishable from a hung one, and on Modal stdout is the only window into a
-job in flight.
-"""
+"""Progress reporting for a training run."""
 
 from __future__ import annotations
 
@@ -11,22 +6,13 @@ import time
 
 
 class ProgressLog:
-    """Periodic one-line progress, because a silent run looks like a hung one.
+    """Periodic one-line progress, flushed: on Modal stdout is the only view of a
+    run, and Python block-buffers it when it is not a tty.
 
-    On Modal the only window into a running job is stdout, and Python
-    block-buffers stdout when it is not a tty -- so an unflushed `print` shows
-    nothing for hours and then everything at once. Every write here is flushed.
-
-    Losses are reported per mode over the window rather than cumulatively: the
-    two readouts sit at different scales (Mode B starts near `ln(K)`), so a
-    single blended average hides which one is actually moving.
-
-    Rate, throughput and ETA are all measured over the window since the last
-    report, not cumulatively from process start -- see `record`.
-
-    Throughput counts the tokens actually fed to the model, from the attention
-    mask. Deriving it from `config.avg_tokens_per_example` would report the plan
-    rather than the run, and so could never contradict a wrong plan (ADR-016).
+    Losses are per mode (Mode B starts near `ln(K)`, a different scale), and
+    loss, rate, throughput and ETA are measured over the window since the last
+    report. Throughput counts real tokens from the attention mask, not
+    `config.avg_tokens_per_example`, so it can contradict a wrong plan (ADR-016).
     """
 
     def __init__(self, total_steps: int, log_every: int):
@@ -50,11 +36,9 @@ class ProgressLog:
         now = time.monotonic()
         # A coarse clock can report zero on a fast window; never divide by it.
         elapsed = max(now - self.start, 1e-9)
-        # Rate over the *window*, not since process start. Startup is a one-off
-        # -- weight loading, allocator warmup, and a Triton JIT compile that can
-        # run for minutes -- and a cumulative average never stops paying for it.
-        # Measured once at 0.33 it/s cumulative against 2.50 steady-state, with
-        # the ETA wrong by the same factor. See ADR-017.
+        # Over the window, not since start: startup (weight loading, a Triton JIT
+        # compile of minutes) made a cumulative rate read 0.33 it/s against 2.50
+        # steady-state, with the ETA wrong by the same factor (ADR-017).
         span = max(now - self.mark, 1e-9)
         rate = (done - self.mark_step) / span
         remaining = (self.total - done) / rate if rate else 0.0

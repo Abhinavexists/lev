@@ -1,16 +1,14 @@
-"""Regression test for the hybrid cache fork.
+"""Regression test for the hybrid cache fork (`prefix_mode="fork"`).
 
-The bug: `_fork` used `Cache.batch_repeat_interleave`, which only full-attention
-layers implement. Qwen3.5 is a hybrid -- 24 of its 32 layers are
-`LinearAttentionLayer`, holding conv/recurrent state rather than keys/values --
-so every real request died with
+`Cache.batch_repeat_interleave` exists only on full-attention layers, and 24 of
+Qwen3.5's 32 layers are `LinearAttentionLayer` (conv/recurrent state, not
+keys/values), so a fork built on it died with
 
     AttributeError: 'LinearAttentionLayer' object has no attribute
                     'batch_repeat_interleave'
 
-The hybrid split is precisely why this backbone was chosen, so the fork must
-cover both layer kinds. These tests build a mixed cache directly: no GPU, no
-model download, but the exact layer classes the model uses.
+These tests build a mixed cache from the real layer classes, with no GPU or
+model download.
 """
 
 from __future__ import annotations

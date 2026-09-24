@@ -1,27 +1,16 @@
-"""The decision engine: prefill once, fork per question, read logits, never generate.
+"""The decision engine: one forward pass per request, read logits, never generate.
 
-    state ──> prefill ──> KV cache (8 full-attn layers) + conv state (24 linear)
-                             │
-                 ┌───────────┼───────────┐        fork, batched in one forward
-                 ▼           ▼           ▼
-              q1 suffix   q2 suffix   qN suffix
-                 │           │           │
-                 ▼           ▼           ▼
-             logits at the "Answer:" position, restricted to candidates
-                 │
-                 ▼
-         temperature (per type and mode) ──> softmax ──> typed answer
+    state + q1 suffix ─┐
+    state + q2 suffix ─┼─> one batched forward ─> logits at each answer position,
+    state + qN suffix ─┘                          restricted to the candidates
+                                                        │
+                    temperature (per type, mode, band) ─┴─> softmax ─> typed answer
 
-Why the fork is cheap here specifically: Qwen3.5 is a hybrid, so only 8 of its 32
-layers hold a K/V cache. The other 24 carry small conv/recurrent state. Forking a
-full-attention model's cache N ways is what makes naive implementations slow.
+`prefix_mode="fork"` instead prefills the state once and forks the cache per
+question, which pays off only for long states with many questions (ADR-023).
 
-Verified end-to-end on `Qwen/Qwen3.5-4B-Base` and `-0.8B-Base`: both modes answer
-Choice, Score and Noul in one prefill with `output_tokens == 0`. A Mode B question
-needs a trained candidate-path head; without one, `system_one` refuses up front
-rather than answering badly.
-
-The cache fork was the one part that could not be reasoned about -- see `_fork`.
+A Mode B question needs a trained candidate-path head; without one,
+`system_one` refuses up front rather than answering badly.
 """
 
 from __future__ import annotations
@@ -61,12 +50,10 @@ _QUESTIONS = TypeAdapter(dict[str, Question])
 @dataclass
 class EngineConfig:
     model_id: str = "Qwen/Qwen3.5-4B-Base"
-    # None: Mode A whenever the tokenizer can express the codes, Mode B above
-    # that. Training caps Mode A at `LABEL_OPTION_CAP` so Mode B keeps its
-    # data; serving does not share the cap. ADR-020 set them equal after the
-    # Base model collapsed at 60 lettered options; measured on the instruct
-    # LoRA, Mode A at 60 scores 0.746 on an unseen taxonomy against 0.231 for
-    # the head, which learns the taxonomies it was shown. ADR-025.
+    # None: Mode A whenever the tokenizer can express the codes, Mode B beyond.
+    # On the instruct LoRA, Mode A at 60 options scores 0.746 on an unseen
+    # taxonomy against 0.231 for the head, which learns only the taxonomies it
+    # was shown (ADR-025).
     max_label_options: int | None = None
     layout: Layout = Layout.STATE_FIRST
     # Must match the style the adapter trained under (`TrainConfig.prompt_style`,
@@ -77,34 +64,27 @@ class EngineConfig:
     # "rating" is the trained 0-8 scale; "binary" is two lettered options for a
     # checkpoint that was never trained on the scale (ADR-007).
     noul_readout: Literal["rating", "binary"] = "rating"
-    # Read every Mode A question in two option orders and average. Cancels the
-    # letter-position bias that reordering exposed on massive-en-US (argmax
-    # agreement 0.15 between two orders of the same 60 options). Two suffix rows
-    # instead of one, in the same batched forward -- no extra prefill.
+    # Read Mode A questions in two option orders and average, cancelling letter
+    # position bias (argmax agreement was 0.15 between two orders of the same 60
+    # massive-en-US options). Costs one extra row in the same forward.
     order_average: bool = True
     # Skip label codes that are more than one token (Qwen3.5: `BQ`, `BZ`, ...)
-    # instead of falling to Mode B at the first one. Serving-only: training
-    # routing keeps the plain scheme so Mode B keeps its data. Measured on 400
-    # held-out rows each: banking77 0.818 -> 0.980, clinc_oos 0.953 -> 0.968.
-    # ADR-028.
+    # instead of falling to Mode B at the first. Serving-only, so training keeps
+    # large sets for Mode B. On 400 held-out rows each: banking77 0.818 -> 0.980,
+    # clinc_oos 0.953 -> 0.968 (ADR-028).
     skip_multi_token_codes: bool = True
-    # How the shared prefix is computed. "fork": prefill once, fork the cache,
-    # run the suffixes -- two forwards, no repeated prefix FLOPs. "single": one
-    # batched forward over prefix+suffix per row -- repeats the prefix per row
-    # but launches half as many kernels. Measured on an H100 with the 4B
-    # checkpoint (`profile_engine`): fork 159-169 ms, single 73-84 ms, flat in
-    # the number of questions either way. The forward is launch-bound at these
-    # sizes, so the fork's saved FLOPs buy nothing and its second forward costs
-    # double. Fork remains for long states with many questions, where the
-    # repeated prefix would dominate. ADR-023.
+    # "single": one batched forward over prefix+suffix per row. "fork": prefill
+    # once, fork the cache, run the suffixes (two forwards, no repeated prefix
+    # FLOPs). On an H100 with the 4B model the forward is launch-bound: fork
+    # 159-169 ms, single 73-84 ms, flat in question count. Fork is for long
+    # states with many questions, where the repeated prefix dominates (ADR-023).
     prefix_mode: Literal["fork", "single"] = "single"
-    # `torch.compile(mode="reduce-overhead")`: CUDA graphs replay the ~200
-    # kernel launches of a forward as one, which is the remaining order of
-    # magnitude in a launch-bound regime. Graphs are recorded per input shape,
-    # so shapes are padded to buckets (`pad_to` tokens, power-of-two rows) to
-    # keep the set small. Numerically the same forward; only the launch path
-    # changes. Off by default until `warmup()` has run: the first call per
-    # bucket pays the record, and a server does that at startup, not on a user.
+    # `torch.compile(mode="reduce-overhead")`: CUDA graphs replay a forward's
+    # ~200 kernel launches as one, recorded per input shape, so shapes are padded
+    # to buckets (`pad_to` tokens, power-of-two rows). Off by default: on this
+    # hybrid model it measured 103-137 ms against eager's 86-94 ms after a 104 s
+    # warmup, as dynamo hit its recompile limit (ADR-023). When on, `warmup()`
+    # pays graph capture at startup.
     compile: bool = False
     pad_to: int = 32
 
@@ -160,7 +140,7 @@ def serving_routes(
 
 
 class DecisionEngine:
-    """Answers a batch of typed questions about one state in a single prefill."""
+    """Answers a batch of typed questions about one state in one forward pass."""
 
     def __init__(
         self,
@@ -180,9 +160,8 @@ class DecisionEngine:
         self._candidate_cache: dict[tuple[str, ...], Any] = {}
         # Read once: a compiled module proxies attributes, but not reliably.
         self._device = getattr(model, "device", None)
-        # One forward at a time. CUDA-graph replay is not thread-safe, and a
-        # server that accepts concurrent requests overlaps everything else
-        # (parsing, tokenising, the network) around this.
+        # One forward at a time: CUDA-graph replay is not thread-safe. Concurrent
+        # requests still overlap parsing, tokenising and the network.
         self._lock = threading.Lock()
         self._eager_model = model
         if self.config.compile:
@@ -202,9 +181,8 @@ class DecisionEngine:
         ),
     ) -> float:
         """Run one forward per shape bucket so compile and graph capture happen
-        now rather than on the first request. Returns seconds spent. If the
-        compiled path fails, falls back to eager and says so -- a slow server
-        beats a dead one.
+        before the first request. Returns seconds spent. Falls back to eager,
+        with a warning, if the compiled path fails.
         """
         import torch
 
@@ -289,13 +267,10 @@ class DecisionEngine:
     def _orders(self, question: Question, route: Route) -> list[list[int] | None]:
         """The candidate orders to render a question in. `None` is its own order.
 
-        Two orders only where the order is arbitrary and position bias can act:
-        Choice and binary Noul, under lettered codes, in the state-first layout
-        (schema-first puts the options in the shared prefix, so a second order
-        would mean a second prefix). Ordered readouts are never reversed: a
-        Score's levels run low to high and the rating scale's digits carry
-        meaning, and training presents both in that order only -- a reversed
-        scale is a prompt the model has never seen. Measured: reversing Score
+        Two orders only where order is arbitrary: Choice and binary Noul, under
+        lettered codes, in the state-first layout (schema-first shares the
+        options in the prefix). Score levels and the rating scale are never
+        reversed: training only presents them low to high, and reversing Score
         cost 2.4 points on helpsteer2.
         """
         if (
@@ -337,8 +312,8 @@ class DecisionEngine:
             for name, question in questions.items()
             for order in self._orders(question, routes[name])
         ]
-        # Every variant shares one prefix by construction; assert it, because a
-        # silent mismatch would make the cache wrong rather than merely slow.
+        # Every variant shares one prefix by construction; a mismatch would make
+        # the cache wrong, not just slow.
         prefixes = {r.prefix for _, _, r in rendered}
         if len(prefixes) != 1:
             raise AssertionError(f"layout produced {len(prefixes)} prefixes, expected 1")
@@ -417,8 +392,7 @@ class DecisionEngine:
                 attention_mask=full_attention,
                 past_key_values=_fork(cache, len(suffixes), device),
                 use_cache=False,
-                # Only when a Mode B question is present: hidden states for a
-                # full batch are large, and Mode A never looks at them.
+                # Only for Mode B: full-batch hidden states are large.
                 output_hidden_states=want_hidden,
             )
 
@@ -471,14 +445,10 @@ class DecisionEngine:
     def _candidate_reprs(self, texts: list[str]):
         """One hidden vector per candidate string, from a single batched forward.
 
-        Cached per candidate set: the option list belongs to the question, not
-        to the request, so a served schema re-encodes its candidates once rather
-        than on every call.
-
-        The cache is unbounded. That is fine for a server with a fixed set of
-        schemas -- 151 candidates at hidden 2560 is ~1.5 MB -- and wrong for one
-        accepting arbitrary caller-supplied option sets. Bound it before doing
-        the latter.
+        Cached per candidate set, so a served schema encodes its candidates
+        once. The cache is unbounded: fine for a fixed set of schemas (151
+        candidates at hidden 2560 is ~1.5 MB), not for arbitrary caller-supplied
+        option sets.
         """
         import torch
 
@@ -529,8 +499,8 @@ class DecisionEngine:
 
         if isinstance(question, Noul):
             if route.reason == BINARY_NOUL:
-                # Two lettered options, yes first. No rating distribution exists
-                # to report, so `probabilities` stays absent rather than faked.
+                # Two lettered options, yes first; no rating distribution exists,
+                # so `probabilities` stays absent.
                 return NoulAnswer(noul=probs[0], probabilities=None, confidence=confidence)
             by_rating = dict(enumerate(probs))
             return NoulAnswer(
@@ -618,9 +588,8 @@ def load(
         try:
             profile = CalibrationProfile.load(calibration)
         except FileNotFoundError:
-            # Serving uncalibrated is legitimate (it is build step 1), but it
-            # must be loud: uncalibrated confidence is the failure mode the
-            # benchmark measured at ECE 0.43.
+            # Legitimate for a frozen model, but loud: untuned backbones sit at
+            # ECE 0.43 on S1Bench.
             print(f"WARNING: no calibration at {calibration}; serving raw softmax")
 
     config = EngineConfig(
@@ -637,8 +606,7 @@ def load(
     engine = DecisionEngine(model, tokenizer, config, profile, mode_b_head=head)
     engine.checkpoint = resolved
     if compile:
-        # Pay compile and graph capture now, on every shape bucket the
-        # benchmark and the demo send, so no request ever does.
+        # Pay graph capture now so no request does.
         print(f"warmup: compiled forward in {engine.warmup():.0f}s", flush=True)
     return engine
 
@@ -646,8 +614,7 @@ def load(
 def _load_head(path: Path, model):
     """Load the Mode B head saved beside the adapter, if there is one.
 
-    Absent is fine and means Mode A only -- the engine refuses a question that
-    needs Mode B rather than answer it wrongly.
+    Absent means Mode A only; the engine then refuses Mode B questions.
     """
     import torch
 
@@ -657,8 +624,7 @@ def _load_head(path: Path, model):
         return None
 
     state_dict = torch.load(path, map_location="cpu", weights_only=True)
-    # Shapes come from the saved tensors, not from a config that might have
-    # drifted since the run that produced them.
+    # Shapes come from the saved tensors, not a config that may have drifted.
     proj_dim, hidden_size = state_dict["question_proj.weight"].shape
     head = CandidatePathReadout(hidden_size=hidden_size, proj_dim=proj_dim)
     head.load_state_dict(state_dict)
@@ -674,19 +640,13 @@ def _bucket_type(question: Question, route: Route) -> str:
 def _fork(cache, n: int, device=None):
     """Expand a batch-1 prefix cache to `n` rows, one per question.
 
-    `batch_repeat_interleave` is the obvious API and it is wrong here: it only
-    exists on full-attention layers. Qwen3.5 is a hybrid -- 24 of its 32 layers
-    are `LinearAttentionLayer`, which holds `conv_states`/`recurrent_states`
-    rather than keys/values and raises `AttributeError` on that call. The hybrid
-    split is the reason we chose this backbone, so the fork has to handle it.
-
-    `reorder_cache` is defined on `CacheLayerMixin`, so *every* layer type
-    implements it, and each one indexes its own state correctly. Selecting index
-    0 `n` times turns one row into `n` -- `index_select` expands, it does not
-    merely permute.
-
-    The cache is deep-copied first because `reorder_cache` mutates in place, and
-    the prefix cache must stay reusable for the next request.
+    Not `batch_repeat_interleave`: it exists only on full-attention layers, and
+    24 of Qwen3.5's 32 layers are `LinearAttentionLayer`, holding
+    `conv_states`/`recurrent_states` instead of keys/values, which raise
+    `AttributeError` on that call. `reorder_cache` is defined on
+    `CacheLayerMixin`, so every layer type implements it; selecting index 0 `n`
+    times expands one row into `n`. Deep-copied first because `reorder_cache`
+    mutates in place and the prefix cache must stay reusable.
     """
     import torch
 
@@ -699,9 +659,8 @@ def _fork(cache, n: int, device=None):
 def _gini(probs: list[float]) -> float:
     """Normalised Gini concentration: (K*sum(p^2) - 1) / (K - 1).
 
-    LitJev's choice, and the leading hypothesis for Jev's own `confidence`.
-    `levbench confidence` tests that hypothesis against the live API. Uniform -> 0,
-    point mass -> 1.
+    LitJev's choice (Jev's own `confidence` is chance-corrected max probability,
+    FINDINGS §2). Uniform -> 0, point mass -> 1.
     """
     k = len(probs)
     if k <= 1:

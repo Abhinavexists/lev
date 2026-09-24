@@ -1,4 +1,7 @@
-"""Command line entry point: `levbench eval | sweep | compare`."""
+"""levbench: benchmark any `/v1/systemone` server.
+
+Subcommands: eval, sweep, compare, confidence, snake, replay.
+"""
 
 from __future__ import annotations
 
@@ -16,11 +19,8 @@ load_dotenv()
 
 
 def repo_data_dir() -> Path:
-    """Find the repo's `data/` by walking up from this file.
-
-    A fixed `parents[n]` breaks the moment the package moves inside the repo,
-    which is exactly what happened when levbench became a workspace member.
-    """
+    """Find the repo's `data/` by walking up from this file, so it survives the
+    package moving within the repo."""
     for parent in Path(__file__).resolve().parents:
         if (candidate := parent / "data").is_dir():
             return candidate
@@ -48,11 +48,10 @@ def _require_key(backend: str, base_url: str | None = None) -> None:
 
 
 def _task_files(path: str | None) -> list[Path | None]:
-    """`None` for the built-in fixture, one entry per file for a directory.
+    """`None` for the built-in fixture, else one entry per task file.
 
-    A directory is the normal case for a generated eval: each source has its own
-    question, so asking every question of every item would mean asking "how
-    positive is this review" of a banking ticket. One file per question set.
+    A generated eval is a directory with one file per source, because each
+    source has its own questions.
     """
     if path is None:
         return [None]

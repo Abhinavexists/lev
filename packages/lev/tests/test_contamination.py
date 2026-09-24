@@ -30,7 +30,7 @@ class TestResolution:
             ("google/civil_comments", "civil_comments"),
             ("qiaojin/PubMedQA", "pubmedqa"),
             ("mteb/summeval", "summeval-relevance"),
-            # Re-hosted copies that passed before segment matching covered aliases.
+            # Re-hosted copies, caught by alias segment matching.
             ("SetFit/amazon_massive_intent_en-US", "massive-en-US"),
             ("SetFit/amazon_massive_scenario_en-US", "massive-en-US"),
             ("nvidia/Aegis-AI-Content-Safety-Dataset-1.0", "aegis2"),
@@ -49,7 +49,7 @@ class TestResolution:
             "fancyzhx/ag_news",
             "SetFit/sst5",
             "my-org/internal-tickets",
-            # New training sources: must stay clean under alias-segment matching.
+            # Training sources: must stay clean under alias segment matching.
             "stanfordnlp/snli",
             "facebook/anli",
             "SetFit/qqp",
@@ -70,12 +70,8 @@ class TestResolution:
         assert resolve(innocent) is None
 
     def test_subsets_that_did_not_run_are_blocked_too(self):
-        """The 7 subsets `s1-fast` skipped are still evaluation data.
-
-        They are the easy ones to forget, because nothing in the completed-run
-        leaderboard mentions them. Training on them contaminates the first full
-        suite we run, which is exactly when we would most want to trust it.
-        """
+        """The 7 subsets `s1-fast` skipped are still evaluation data: easy to
+        forget, since the completed-run leaderboard never mentions them."""
         unrun = [
             "massive-de-DE",
             "squad2",

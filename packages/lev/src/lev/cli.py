@@ -1,7 +1,4 @@
-"""`lev` — inspect the plan, serve the model, fit calibration.
-
-Every subcommand that costs GPU time prints its budget first.
-"""
+"""`lev`: plan a run, build the data, train, package, publish and serve the model."""
 
 from __future__ import annotations
 
@@ -14,8 +11,8 @@ from pathlib import Path
 def _measure_tokens(config, data_dir: str, sample: int = 1500) -> dict:
     """Tokenise real rendered prompts and report the length distribution.
 
-    The budget rests on `avg_tokens_per_example`, and a guessed value is the
-    easiest way to be wrong by an order of magnitude about how long a run takes.
+    The budget rests on `avg_tokens_per_example`; a guessed value was once off
+    by 10x (ADR-016).
     """
     import statistics
 
@@ -103,8 +100,8 @@ def cmd_check_data(args: argparse.Namespace) -> None:
 
 
 def _preset_names() -> list[str]:
-    """Imported lazily: `train.config` is cheap, but keeping every CLI import
-    behind its command is what lets `lev route` run without the train extra."""
+    """Lazy, like every CLI import, so `lev plan` and `lev check-data` run
+    without the train extra."""
     from .train.config import PRESETS
 
     return sorted(PRESETS)

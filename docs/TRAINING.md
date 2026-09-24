@@ -1,8 +1,8 @@
 # Training
 
-Read [`ARCHITECTURE.md`](ARCHITECTURE.md) §5 for *why* the pipeline looks like this and
+Read [`ARCHITECTURE.md`](ARCHITECTURE.md) §5 for _why_ the pipeline looks like this and
 [`DECISIONS.md`](DECISIONS.md) for the alternatives that were rejected. This document is
-the *how*.
+the _how_.
 
 ---
 
@@ -18,7 +18,7 @@ Steps 1 and 2 need **no training at all** and deliver most of the value. Do them
 5  RL with a belief reward                                         only after 1-4
 ```
 
-The evidence for that ordering: on S1Bench, an *untuned* 27B with a label-token readout
+The evidence for that ordering: on S1Bench, an _untuned_ 27B with a label-token readout
 scores 0.7582 — one point behind Jev. The gap that matters is calibration (0.1214 vs
 0.0764), and step 2 closes most of it for the cost of fitting one scalar.
 
@@ -28,15 +28,14 @@ scores 0.7582 — one point behind Jev. The gap that matters is calibration (0.1
 
 ```bash
 uv sync --extra serve
-uv run lev serve --model Qwen/Qwen3.5-4B-Base --port 8000
+uv run lev serve --model Qwen/Qwen3.5-4B --prompt-style chat --port 8000
 ```
 
-> **Use an instruct checkpoint for the *zero-shot* baseline.** Measured on
-> `Qwen3.5-4B-Base`: Choice reaches 0.958 accuracy, but Noul collapses to 0.292 —
-> exactly the positive base rate, because a base model answers "yes" to every
-> 9-point rating prompt. `-Base` is the right choice for the fine-tune; it is the
-> wrong one for an untrained server.
-> [ADR-007.](DECISIONS.md#adr-007--noul-from-nine-rating-tokens)
+> **Use the instruct checkpoint.** Measured on `Qwen3.5-4B-Base`: Choice reaches
+> 0.958 accuracy, but Noul collapses to 0.292 — exactly the positive base rate,
+> because a base model answers "yes" to every 9-point rating prompt
+> ([ADR-007](DECISIONS.md#adr-007--noul-from-nine-rating-tokens)). The instruct
+> checkpoint is also the better starting point for the fine-tune (ADR-020).
 
 Measure it with the same harness that measures Jev:
 
@@ -58,12 +57,15 @@ test — `calibrate.fit()` raises on a split named `test`/`eval`/`holdout`, beca
 fitting on test labels produces a profile that looks excellent and means nothing.
 
 ```bash
-modal run modal/app.py::calibrate --preset 4b --split calibration
+modal run modal/app.py::calibrate --preset 4b-instruct --split calibration
 ```
 
-One temperature is fitted **per `(question_type, readout_mode)` bucket**. A global
-scalar under-serves at least one bucket: the three types produce differently shaped
-distributions, and Mode A and Mode B produce them by different mechanisms.
+One temperature is fitted **per `(question_type, readout_mode)` bucket**, and per
+option-count band for Choice. A global scalar under-serves at least one bucket: the
+three types produce differently shaped distributions, and Mode A and Mode B produce
+them by different mechanisms. Each bucket is fitted two ways (every row weighted
+equally, or every task family weighted equally) and keeps whichever transfers
+better to a held-out family ([ADR-028](DECISIONS.md#adr-028--skip-split-label-codes-when-serving-calibrate-for-families-the-model-has-not-seen)).
 
 A bucket with fewer than 50 samples is left unfitted at `T=1.0` (the identity) rather
 than fitted on noise, and never borrows another bucket's scalar.
@@ -100,46 +102,47 @@ uv run lev check-data sources.txt
 
 It resolves aliases, so `tals/vitaminc`, `paws-x`, `google/boolq`,
 `nvidia/HelpSteer2` and `rajpurkar/squad_v2` are all caught. Contamination would
-*improve* our headline number while invalidating it, which is why this raises
+_improve_ the headline number while invalidating it, which is why this raises
 rather than warns.
 
 ### The sources
 
-Twenty-nine sources over twenty-five public corpora, chosen so that the *question* carries information
+Twenty-nine sources over 26 public datasets, chosen so that the _question_ carries information
 the state does not. The first mixture had nine sources with one fixed
 instruction each, and the model learned to ignore the instruction entirely --
 the state identified the answer set on its own. See ADR-020.
 
-| Source | Primitive | Options | What it adds |
-|---|---|---|---|
-| `fancyzhx/ag_news` | Choice | 4 | small, well-separated options |
-| `dair-ai/emotion` | Choice | 6 | overlapping options |
-| `fancyzhx/dbpedia_14` | Choice | 14 | mid-size option set |
-| `ehovy/race` | Choice | 4 per row | passage + question; options differ every row |
-| `tau/commonsense_qa` | Choice | 5 per row | commonsense QA |
-| `allenai/sciq` | Choice | 4 per row | science QA with supporting context |
-| `allenai/openbookqa` | Choice | 4 per row | fact + question |
-| `allenai/ai2_arc` (Easy) | Choice | 3–5 per row | grade-school science |
-| `stanfordnlp/snli`, `facebook/anli` | Choice | 3 | NLI -- the answer is a relation between two fields |
-| `pietrolesci/nli_fever` | Choice | 3 | claim + evidence → SUPPORTS / REFUTES / NOT ENOUGH INFO |
-| `benayas/snips` | Choice | 7 | a second, small intent taxonomy |
-| `legacy-datasets/banking77` | Choice | **77** | **Mode B** |
-| `clinc/clinc_oos` | Choice | **151** | **Mode B** at the extreme |
-| `SetFit/sst5`, `Yelp/yelp_review_full` | Score | 5 | ordered sentiment levels |
-| `openbmb/UltraFeedback` | Score | 5 | helpfulness rubric over instruction + response |
-| `stanfordnlp/imdb`, `cornell-movie-review-data/rotten_tomatoes` | Noul | 2 | sentiment, long and short states |
-| `SetFit/mrpc`, `SetFit/qqp` | Noul | 2 | paraphrase, plus word-swapped negatives so overlap is not the answer |
-| `tasksource/parade` | Noul | 2 | paraphrase between high-overlap definitions |
-| `ChilleD/StrategyQA` | Noul | 2 | yes/no needing the given facts |
-| race / sciq / openbookqa as yes/no | Noul | 2 | "is the proposed answer correct?" -- yes on a factual axis |
-| `lmsys/toxic-chat`, `toxigen/toxigen-data` | Noul | 2 | **yes = toxic**: the bad outcome is the yes |
-| `PKU-Alignment/BeaverTails` | Noul | 2 | safety of a response; yes = safe, negated half the time |
+| Source                                                          | Primitive | Options     | What it adds                                                         |
+| --------------------------------------------------------------- | --------- | ----------- | -------------------------------------------------------------------- |
+| `fancyzhx/ag_news`                                              | Choice    | 4           | small, well-separated options                                        |
+| `dair-ai/emotion`                                               | Choice    | 6           | overlapping options                                                  |
+| `fancyzhx/dbpedia_14`                                           | Choice    | 14          | mid-size option set                                                  |
+| `ehovy/race`                                                    | Choice    | 4 per row   | passage + question; options differ every row                         |
+| `tau/commonsense_qa`                                            | Choice    | 5 per row   | commonsense QA                                                       |
+| `allenai/sciq`                                                  | Choice    | 4 per row   | science QA with supporting context                                   |
+| `allenai/openbookqa`                                            | Choice    | 4 per row   | fact + question                                                      |
+| `allenai/ai2_arc` (Easy)                                        | Choice    | 3–5 per row | grade-school science                                                 |
+| `stanfordnlp/snli`, `facebook/anli`                             | Choice    | 3           | NLI -- the answer is a relation between two fields                   |
+| `pietrolesci/nli_fever`                                         | Choice    | 3           | claim + evidence → SUPPORTS / REFUTES / NOT ENOUGH INFO              |
+| `benayas/snips`                                                 | Choice    | 7           | a second, small intent taxonomy                                      |
+| `legacy-datasets/banking77`                                     | Choice    | **77**      | **Mode B**                                                           |
+| `clinc/clinc_oos`                                               | Choice    | **151**     | **Mode B** at the extreme                                            |
+| `SetFit/sst5`, `Yelp/yelp_review_full`                          | Score     | 5           | ordered sentiment levels                                             |
+| `openbmb/UltraFeedback`                                         | Score     | 5           | helpfulness rubric over instruction + response                       |
+| `stanfordnlp/imdb`, `cornell-movie-review-data/rotten_tomatoes` | Noul      | 2           | sentiment, long and short states                                     |
+| `SetFit/mrpc`, `SetFit/qqp`                                     | Noul      | 2           | paraphrase, plus word-swapped negatives so overlap is not the answer |
+| `tasksource/parade`                                             | Noul      | 2           | paraphrase between high-overlap definitions                          |
+| `ChilleD/StrategyQA`                                            | Noul      | 2           | yes/no needing the given facts                                       |
+| race / sciq / openbookqa as yes/no                              | Noul      | 2           | "is the proposed answer correct?" -- yes on a factual axis           |
+| `lmsys/toxic-chat`, `toxigen/toxigen-data`                      | Noul      | 2           | **yes = toxic**: the bad outcome is the yes                          |
+| `PKU-Alignment/BeaverTails`                                     | Noul      | 2           | safety of a response; yes = safe, negated half the time              |
 
 Every source carries paraphrased instructions and every Noul source a negation
 that flips the target, so no polarity is constant. Choice option sets are
 subsampled, shuffled and sometimes stripped of descriptions in the train split.
-The held-out splits keep each source's canonical question, so the exported eval
-set and the fitted temperatures describe what is actually served.
+The test split keeps each source's canonical question, so the exported eval set
+has one question per source; the calibration split varies option sets (not
+wording) so every option-count band has rows to fit on.
 
 banking77 and clinc_oos are the large-taxonomy sources (over 26 options,
 `labels.LABEL_OPTION_CAP`); `default_weights()` gives the pair **25%** of the
@@ -154,43 +157,42 @@ Dropped, with reasons: `CogComp/trec`, `takala/financial_phrasebank`,
 `mteb/mtop_intent` are script-backed and `datasets>=5` refuses them.
 `DeepPavlov/hwu64` loads, and is the 64-intent schema MASSIVE inherited via
 SLURP -- training on it would make massive-en-US a seen taxonomy, so the guard
-now blocks it.
+blocks it.
 
 ### Two failure modes the pipeline is built to prevent
 
 **A head slice is not a sample.** Most of these corpora ship grouped by label, so
 `imdb[:400]` is 400 negative reviews and `dbpedia_14[:400]` is one class out of
-fourteen. `load_source` shuffles with a fixed seed before it cuts. This one is
-nasty because it is invisible downstream: every split drawn from a skewed sample
-is skewed identically, so the splits still agree with each other.
+fourteen. `load_source` shuffles with a fixed seed before it cuts; otherwise every
+split drawn from the skewed sample is skewed identically and nothing downstream
+notices.
 
 **A Noul's label is a rating, not a class.** A Noul is read out as nine rating
 tokens and collapsed by `noul_probability`, so supervising "yes" with the raw
-class `1` teaches rating 1 — which reads back as P(yes) = 0.125. The model learns
-to answer *no* on every positive example while the loss looks healthy. Binary
-labels are mapped to the ends of the scale, 0 and 8.
+class `1` teaches rating 1, which reads back as P(yes) = 0.125. Binary labels
+are mapped to the ends of the scale, 0 and 8.
 
 ### Splits: three, and split before mixing
 
-| Split | Share | Purpose |
-|---|---|---|
-| `train` | 80% | the fine-tune |
-| `calibration` | 10% | fitting the temperature — never train, never test |
-| `test` | 10% | the held-out eval, exported for levbench |
+| Split         | Share | Purpose                                           |
+| ------------- | ----- | ------------------------------------------------- |
+| `train`       | 80%   | the fine-tune                                     |
+| `calibration` | 10%   | fitting the temperature — never train, never test |
+| `test`        | 10%   | the held-out eval, exported for levbench          |
 
-Assignment is a blake2b hash of a stable per-row key, not an RNG draw: the same
-row lands in the same split on any machine, in any dataset order, on any re-run.
-Python's `hash()` is salted per process and would not reproduce tomorrow.
+Assignment is a blake2b hash of a per-row key (source, position within the source,
+text), not an RNG draw, so it reproduces on any machine and re-run for the same
+row order; a re-ordered corpus re-splits. Python's `hash()` is salted per process.
 
 Splitting happens **before** mixing. Mixing first would let one underlying row
-appear in train and in test wearing two different layouts — a contamination leak
-with our own data rather than S1Bench's, subtler, and flattering in the same way.
+appear in train and in test under two different layouts, a leak that flatters
+the result.
 
 Two coverage checks run, and both are needed:
 
-- every label *observed* must appear in train — otherwise its error rate
+- every label _observed_ must appear in train — otherwise its error rate
   measures nothing;
-- every label the *question offers* must be observed at all — this is the one
+- every label the _question offers_ must be observed at all — this is the one
   that catches an undersampled banking77, where 3 intents out of 77 would
   satisfy the first check and still be junk.
 
@@ -199,13 +201,13 @@ supplies two.
 
 ### The knobs
 
-| Knob | Default | Why |
-|---|---|---|
-| `schema_first_fraction` | 0.5 | Both cache layouts must work at inference ([ADR-008](DECISIONS.md#adr-008--both-prompt-layouts-trained-5050)) |
-| `abstain_fraction` | 0.1 | Teaches spreading mass instead of confident guessing ([ADR-012](DECISIONS.md#adr-012--abstain-means-taking-the-state-away)) |
-| `limit_per_source` | 20,000 | rows sampled per source; raise it if coverage fails |
+| Knob                    | Default | Why                                                                                                                         |
+| ----------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `schema_first_fraction` | 0.5     | Both cache layouts must work at inference ([ADR-008](DECISIONS.md#adr-008--both-prompt-layouts-trained-5050))               |
+| `abstain_fraction`      | 0.1     | Teaches spreading mass instead of confident guessing ([ADR-012](DECISIONS.md#adr-012--abstain-means-taking-the-state-away)) |
+| `limit_per_source`      | 20,000  | rows sampled per source; raise it if coverage fails                                                                         |
 
-Abstain examples are built by pairing a question with a state from a *different*
+Abstain examples are built by pairing a question with a state from a _different_
 source and supervising a uniform distribution. Flagging an otherwise-answerable
 row `abstain=True` is worse than no augmentation: the state still determines the
 answer, so the only thing learned is doubt where there should be none.
@@ -215,9 +217,9 @@ answer, so the only thing learned is doubt where there should be none.
 ## Step 4 — the fine-tune
 
 ```bash
-make smoke                 # ALWAYS first: 0.8B, ~5 min of H100
-make plan PRESET=4b        # confirm the budget
-make train PRESET=4b       # ~2 h
+make smoke                          # always first: 0.8B, ~5 min of H100
+make plan PRESET=4b-instruct        # confirm the budget
+make train PRESET=4b-instruct       # ~2 h
 ```
 
 ### The budget, with the arithmetic visible
@@ -231,41 +233,38 @@ H100         ~400 TFLOP/s sustained bf16 (not the 990 peak)
              2.46e18 / 4e14 = 6.1e3 s = 1.7 hours
 cross-check  18,750 steps @ 32 examples/step = 0.33 s/step
 
-The 128 tokens is **measured**, not assumed: the mean over 1,500 rendered
-prompts from the real mixture, tokenised with the Qwen3.5 tokenizer. Per source
-it runs 38 (clinc_oos) to 305 (imdb); p95 is 390 and the longest seen is 1,104.
-An earlier version of this file guessed 1,200 and therefore quoted 16 hours --
-a 10x error, on the number you use to decide whether a run is affordable. Run
+The 128 tokens is **measured** (a 121-token mean over 1,500 rendered prompts from
+the real mixture under the Qwen3.5 tokenizer, rounded up). Per source it runs
+38 (clinc_oos) to 305 (imdb); p95 is 390 and the longest seen is 1,104. A
+guessed 1,200 once put the estimate at 16 hours (ADR-016). Run
 `lev plan --data data/mixture` to re-measure after changing the mixture.
 
 At a 128-token mean the batch size matters more than the sequence cap: a batch
 of 8 would make 75,000 optimiser steps and the run would be bound by step
 overhead long before it was bound by FLOPs. Hence `per_device_batch = 32`.
 
-**This arithmetic still under-predicts, and the first real run proved it.**
-It assumes the model computes on the real tokens; it computes on the padded
-rectangle. Batches are length-bucketed, which takes padding from 4.43x to
-1.43x, and the linear-attention kernels are installed. Treat ~2 h as a floor
-rather than an estimate until a full run lands — the measured figure before
-those two fixes was 23 h. [ADR-017.](DECISIONS.md#adr-017--batches-are-length-bucketed-and-the-budget-was-wrong-again)
+This arithmetic assumes the model computes on the real tokens; it computes on
+the padded rectangle. Batches are length-bucketed, which takes padding from
+4.43x to 1.43x, and the linear-attention kernels are installed, so treat ~2 h
+as a floor. [ADR-017.](DECISIONS.md#adr-017--batches-are-length-bucketed-and-the-budget-was-wrong-again)
 ```
 
 `make plan` recomputes this from the config, so changing any knob shows the new cost
-*before* you rent the GPU.
+_before_ you rent the GPU.
 
 ### Objective
 
-Cross-entropy alone optimises the argmax and tolerates overconfidence, which is exactly
-the failure we are trying to beat. So the loss is a **proper scoring rule**:
+Cross-entropy alone optimises the argmax and tolerates overconfidence. So the loss
+is a **proper scoring rule**:
 
 ```
-loss = CE  +  0.50 * Brier  +  0.25 * ordinal   (ordinal: Score under Mode B only)
+loss = CE  +  0.50 * Brier  +  0.25 * ordinal   (ordinal: Score and Noul rows)
 ```
 
-The ordinal term exists because Mode B loses something Mode A gets free: under Mode A a
-Score's levels are unordered symbols and ordering lives in the prompt text; under a
-shared matching head, nothing forces level *i+1* to score above level *i*. `ordinal_mae`
-is tracked as its own metric because accuracy hides this entirely.
+The ordinal term weights probability mass by its squared distance from the true
+level, so an ordered scale does not treat every wrong level alike: without it,
+Noul rating 4 is as wrong as rating 0 when the truth is 8, and under Mode B
+nothing forces Score level _i+1_ to score above level _i_.
 
 ### Watching a run
 
@@ -284,21 +283,14 @@ Losses are windowed **per readout mode**, not blended. The two sit at different
 scales — Mode B starts near `ln(K)`, so ~5.0 for a 151-option question — and a
 single average hides which one is moving.
 
-Rate, throughput and ETA are measured over the window since the last report,
-not cumulatively. Startup — weight load, allocator warmup, and a Triton JIT
-compile that can run for minutes — is a one-off, and a cumulative average never
-stops paying for it. On the 0.8B smoke that was 0.33 it/s reported against a
-2.50 it/s reality, and an ETA wrong by the same factor. **Read the second
+Rate, throughput and ETA are measured over the window since the last report, not
+cumulatively: startup (weight load, a Triton JIT compile of minutes) made a
+cumulative rate read 0.33 it/s against 2.50 on the 0.8B smoke. **Read the second
 progress line, not the first.**
 
-Throughput counts the tokens actually fed to the model, from the attention
-mask, not `avg_tokens_per_example × batch`. That constant was wrong by 10×
-once (ADR-016); a throughput readout derived from it would have agreed with the
-mistake instead of exposing it.
-
-Flushing matters more than it sounds: Python block-buffers stdout when it is
-not a tty, so an unflushed `print` shows nothing for two hours and then
-everything at once. Every write in `ProgressLog` is flushed.
+Throughput counts real tokens from the attention mask, not
+`avg_tokens_per_example × batch`, so it can contradict a wrong plan (ADR-016).
+Every write is flushed: Python block-buffers stdout when it is not a tty.
 
 `history.json` is rewritten at every checkpoint, not only at the end, so a run
 that dies at step 17,000 still leaves its loss curve behind.
@@ -319,41 +311,40 @@ batches it had not yet seen, on the learning rate it had reached, and
 place, a preemption's auto-resume would take the stale highest step, and
 `serve` would pick up the old temperatures for the new weights.
 
-A checkpoint written before this existed carries weights only; resuming one
-restores the adapter and head and starts the optimiser and schedule fresh,
-which is what every resume did before ([ADR-021](DECISIONS.md#adr-021--a-checkpoint-carries-the-training-state-and-a-run-resumes-by-default)).
-
-`smoke` always starts fresh: a smoke test that resumed the previous smoke would
-skip the very steps it exists to exercise.
+A weights-only checkpoint (from before [ADR-021](DECISIONS.md#adr-021--a-checkpoint-carries-the-training-state-and-a-run-resumes-by-default))
+restores the adapter and head and starts the optimiser and schedule fresh.
+`smoke` always starts fresh, so it never skips the steps it tests.
 
 ### Presets
 
-| Preset | Backbone | Adaptation | State | Headroom | Hours |
-|---|---|---|---|---|---|
-| `smoke` | Qwen3.5-0.8B-Base | LoRA r32 | 1.9 GB | 78.1 GB | minutes |
-| `2b` | Qwen3.5-2B-Base | full FT | 32.0 GB | 48.0 GB | 8 |
-| `4b` | Qwen3.5-4B-Base | LoRA r32 | 8.3 GB | 71.7 GB | 16 |
-| **`4b-instruct`** | **Qwen3.5-4B** (instruct), **chat prompts** | **LoRA r32, lr 5e-5** | **8.3 GB** | **71.7 GB** | **16** |
-| `9b` | Qwen3.5-9B-Base | LoRA r32 | 18.3 GB | 61.7 GB | 36 |
+| Preset            | Backbone                                    | Adaptation            | State      | Headroom    | Est. hours |
+| ----------------- | ------------------------------------------- | --------------------- | ---------- | ----------- | ---------- |
+| `smoke`           | Qwen3.5-0.8B-Base                           | LoRA r32              | 1.9 GB     | 78.1 GB     | minutes    |
+| `2b`              | Qwen3.5-2B-Base                             | full FT               | 32.0 GB    | 48.0 GB     | 0.9        |
+| `4b`              | Qwen3.5-4B-Base                             | LoRA r32              | 8.3 GB     | 71.7 GB     | 1.7        |
+| **`4b-instruct`** | **Qwen3.5-4B** (instruct), **chat prompts** | **LoRA r32, lr 5e-5** | **8.3 GB** | **71.7 GB** | **1.7**    |
+| `9b`              | Qwen3.5-9B-Base                             | LoRA r32              | 18.3 GB    | 61.7 GB     | 3.8        |
 
-`4b-instruct` is the recommended start after ADR-020: frozen, the instruct
-checkpoint scores 0.719 on S1Bench (reflex-4b); the `4b` fine-tune scored 0.489.
-It trains in the `chat` prompt style -- the ChatML turns the backbone was
-trained on, worth 5.7 points frozen over `plain` (ADR-027). The style is
-recorded in the release manifest and applied by the server; the Base presets
-stay `plain`.
+Hours are `make plan`'s floor estimates. `4b-instruct` is the released preset
+(ADR-020): reflex-4b (these instruct weights plus one temperature) scores 0.719
+on S1Bench, where the `4b` Base fine-tune scored 0.489. It trains in the `chat`
+prompt style, worth 5.7 points frozen over `plain` (ADR-027); the style is
+recorded in the release manifest and applied when serving. The Base presets stay
+`plain`.
 
-A 16-hour run means you can afford about a dozen. **Budget the H100 for ablations, not
-one heroic run.**
+**Budget the H100 for ablations, not one heroic run.**
 
 ---
 
 ## Step 4b — serve what you trained
 
 ```bash
-uv run lev serve --checkpoint checkpoints/lev-4b --model Qwen/Qwen3.5-4B-Base
+uv run lev serve --checkpoint checkpoints/lev-instruct --model Qwen/Qwen3.5-4B --prompt-style chat
 uv run levbench eval --backend lev --tasks data/eval
 ```
+
+Or in-process: `lev.load("checkpoints/lev-instruct", model_id="Qwen/Qwen3.5-4B",
+prompt_style="chat")`.
 
 `--checkpoint` takes the output directory and resolves the newest `step-N`
 inside it, a flat release directory, or a Hub id. It loads the base model,
@@ -363,9 +354,9 @@ overrides it. `GET /health` reports which checkpoint was resolved, whether a
 Mode B head loaded, whether the profile is calibrated, the Noul readout and the
 option cap — check it before reading any number off an eval.
 
-A checkpoint directory is an *adapter*, not a model. Pointing
-`AutoModelForCausalLM` at one does not work, which is why `--model` names the
-base — except for a packaged release, whose `lev_release.json` names it.
+A checkpoint directory is an _adapter_, not a model, so `--model` and
+`--prompt-style` name the base and format it was trained with — except for a
+packaged release, whose `lev_release.json` records both.
 
 ### Releasing the weights
 
@@ -406,61 +397,8 @@ Ranked by what they would actually change:
 
 ---
 
-## What has actually been run
+## What has been run
 
-A full pass on `Qwen/Qwen3.5-0.8B-Base`, on CPU, against a mixture built from
-all nine live sources:
-
-```
-train      30 steps, 666 s          mode A: 20 steps   mode B: 10 steps
-                                    every loss finite, both modes exercised
-checkpoint step-30/                 adapter_model.safetensors  mode_b_head.pt
-                                    tokenizer.json  adapter_config.json
-resume     load_checkpoint()        one "default" adapter, 192 LoRA tensors,
-                                    head weights restored
-serve      base + adapter + head    Choice / Score / Noul / 40-option Mode B
-                                    all answered, output_tokens = 0
-```
-
-**The loss did not decrease**, and that is the honest reading: 30 steps at
-batch 2 is noise, not learning. Mode A went 11.72 → 9.29 and Mode B 5.23 → 5.07
-between the first and last thirds, which is within the step-to-step spread.
-What the run demonstrates is that the path executes and produces a usable
-checkpoint — not that training works. Mode B sitting at ~5.0 is a useful sanity
-check on its own: `ln(151) = 5.02`, so the untrained head is exactly at chance.
-
-Two bugs came out of running it that no test had caught:
-
-- **every loss was `nan`.** Padded candidate slots carry a `-inf` logit and a
-  zero target probability, so the plain product is `0 * -inf`. One padded slot
-  poisons the batch mean, and backward still runs, so the symptom is a nan loss
-  rather than a crash.
-- **SIGSEGV part-way through loading weights.** `device_map="auto"` had
-  accelerate dispatching to MPS. It reads as a corrupt download rather than a
-  placement bug.
-
----
-
-## What is and is not implemented
-
-| | Status |
-|---|---|
-| Schema, prompt layouts, router, label codes | **done, tested** |
-| Calibration fitting, ECE, profile I/O | **done, tested** |
-| Contamination guard (13 subsets) | **done, tested** |
-| Training config + budget arithmetic | **done, verified** |
-| Data loaders, splits, mixture | **done — 23 sources, augmentation on the train split** |
-| Held-out eval export | **done — 2,760 items, ±4pts** |
-| Collator, both readouts, loss | **done, exercised on a real backbone** |
-| Training loop, checkpointing | **done — runs, writes adapter + head** |
-| Modal app, image, volumes | **image builds on Modal** |
-| Modal `download` / `build_data` / `smoke` | **run green on Modal** |
-| Modal `train` / `calibrate` / `evaluate` | **complete 4B run, calibrated and scored** ([ADR-018](DECISIONS.md#adr-018--what-the-first-trained-checkpoint-actually-shows)) |
-| Modal `serve` | **runs**; scored on S1Bench over HTTP ([FINDINGS §12](FINDINGS.md)) |
-| Decision engine (prefill, fork, readout) | **runs**; two-order averaging, binary Noul, option cap (ADR-020) |
-| Mode B head | **trains and serves**; transfer to an unseen taxonomy untested (Q10) |
-| S1Bench harness (`lev s1bench export`) | **done, validated against Jev's own numbers** |
-
-Everything marked "not yet run" says so in its module docstring too. No trained
-checkpoint has been evaluated, so no accuracy or calibration number here comes from
-a model this repository produced.
+Three 4B runs have been trained, calibrated and scored on S1Bench; what each run
+changed and measured is in [FINDINGS §12–16](FINDINGS.md), and the component
+status table is in [STATUS.md](STATUS.md).

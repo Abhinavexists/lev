@@ -1,12 +1,9 @@
 """Score a trained checkpoint on a held-out split.
 
-Runs the same forward path as serving -- route, collate, read the candidate
-logits -- and reports accuracy and calibration per source, with and without the
-fitted temperature. Reporting both is the point: accuracy is unaffected by
-temperature, so a single set of numbers cannot show whether calibration helped.
-
-Evaluating on `test` is correct; *fitting* on it is not, which is why
-`calibrate.fit` refuses that split and this module never calls it.
+Runs the training forward path (route, collate, candidate logits) and reports
+accuracy and calibration per source, with and without the fitted temperature;
+accuracy is the same in both, so only the pair shows whether calibration helped.
+This module evaluates on `test` and never fits.
 """
 
 from __future__ import annotations
@@ -22,12 +19,10 @@ from ..metrics import brier, log_loss
 def accuracy_interval(accuracy: float, n: int, z: float = 1.96) -> float:
     """95% half-width on an accuracy estimate from `n` items.
 
-    Printed beside every accuracy because the evaluation is not bit-reproducible:
+    Printed beside every accuracy because evaluation is not bit-reproducible:
     bf16 reductions and the Triton linear-attention kernels do not pin their
-    reduction order, so logits differ in the last bits between runs and items
-    near a decision boundary flip. Two runs of the same checkpoint on the same
-    data have differed by one item in 200. Without the interval a reader takes
-    that 0.5-point move for a result.
+    reduction order, and two runs of one checkpoint have differed by one item in
+    200.
     """
     if n <= 0:
         return 1.0
@@ -129,9 +124,8 @@ def evaluate_split(
 ) -> tuple[EvalReport, EvalReport]:
     """Return (uncalibrated, calibrated) reports over `split`.
 
-    Both come from one forward pass: the temperature is applied to stored raw
-    logits afterwards, so the two reports describe the same predictions and any
-    difference between them is the temperature alone.
+    Both come from one forward pass, with the temperature applied to stored raw
+    logits, so any difference is the temperature alone.
     """
     import torch
 
@@ -165,14 +159,13 @@ def evaluate_split(
 
     routes = RouteCache(tokenizer, config.max_label_options, Style(config.prompt_style))
     collator = DecisionCollator(tokenizer, max_seq_len=config.max_seq_len, routes=routes)
-    # Bucketed like training: every row is scored exactly once whatever the
-    # batch order, so the 4.4x padding saving is free here.
+    # Bucketed like training: each row is scored once whatever the order.
     batcher = ModeBatcher(
         tokenizer, batch_size=batch_size, bucket_window=config.bucket_window, routes=routes
     )
     device = device_of(model)
 
-    # (source, question type, mode) -> raw logits and gold index per row.
+    # (source, question type, mode, option count) -> (raw logits, gold index) rows.
     collected: dict[tuple[str, str, str], list[tuple[list[float], int]]] = {}
     with torch.no_grad():
         for group in batcher(rows):
@@ -186,9 +179,8 @@ def evaluate_split(
     resolved = str(resolve_checkpoint(checkpoint_dir))
     plain = EvalReport(split=split, checkpoint=resolved, calibrated=False)
     tuned = EvalReport(split=split, checkpoint=resolved, calibrated=bool(profile.temperatures))
-    # Rows of one source may carry different option counts (the calibration
-    # split varies them), and the temperature depends on the count; score each
-    # group at its own temperature, then report per source.
+    # A source's rows may differ in option count, which sets the temperature, so
+    # each group is scored at its own temperature and then reported per source.
     per_source: dict[tuple[str, str, str], list[tuple[list[float], int, float]]] = {}
     for (source, qtype, mode, width), samples in collected.items():
         t = profile.temperature(qtype, mode, width)

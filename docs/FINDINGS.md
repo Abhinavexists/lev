@@ -824,6 +824,12 @@ Jev on aegis2 and helpsteer2, better calibrated than Jev on massive (the
 option-count bands: `choice:A:large` T=1.66 fitted on 1,515 rows). Held-out
 weighted 0.807, ECE 0.180 → 0.061, on a harder 29-source split.
 
+> **The S1Bench ECE figures in this section are not a valid lev-vs-Jev comparison.**
+> They were measured before levbench binned ECE on each answer's top probability:
+> lev's rows binned on its Gini `confidence`, Jev's on its chance-corrected maximum,
+> two different statistics. The held-out ECE (0.061) comes from `lev.train.evaluate`
+> and is unaffected. The S1Bench comparison has to be re-run to be quoted.
+
 What worked, by target: word-swapped negatives took paws from 0.612 to 0.716
 (the shortcut is mostly unlearned, not gone -- still 4 under frozen, and
 confidently wrong at ECE 0.235); large lettered sets took massive to within

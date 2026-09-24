@@ -17,13 +17,8 @@ from lev.types import Noul  # noqa: E402
 
 class TestDecisionLoss:
     def test_padded_slots_do_not_produce_nan(self, train_config):
-        """The regression from the first smoke run: every loss was `nan`.
-
-        Padded candidates carry a logit of `-inf` so they win no softmax mass,
-        and their target probability is 0, so a plain product is `0 * -inf`.
-        One padded slot anywhere poisons the batch mean, and because backward
-        still runs the symptom is a nan loss rather than a crash.
-        """
+        """The first smoke run's bug: a padded slot has logit -inf and target 0,
+        so a plain product is `0 * -inf` = NaN, poisoning the batch mean."""
         logits = torch.tensor(
             [[1.0, 2.0, 0.5, 0.1], [0.3, 1.2, float("-inf"), float("-inf")]],
             requires_grad=True,
@@ -102,12 +97,8 @@ class TestDecisionLoss:
 
 class TestOrdinalCoverage:
     def test_noul_rows_are_flagged_ordinal(self, batching_tokenizer):
-        """A Noul's scale is the most explicitly ordered thing in the schema.
-
-        Its prompt says "0 = certainly no, 8 = certainly yes" and its target is
-        one of the two ends. Leaving it out of the ordinal term makes rating 4
-        as wrong as rating 0 when the truth is 8.
-        """
+        """The scale runs "0 = certainly no" to "8 = certainly yes": without the
+        ordinal term, rating 4 is as wrong as rating 0 when the truth is 8."""
         collator = DecisionCollator(batching_tokenizer, max_seq_len=512)
         batch = collator([an_example(Noul(instructions="urgent?"), target=8)])
         assert batch.ordinal.tolist() == [True]
@@ -132,8 +123,7 @@ class TestOrdinalCoverage:
 class TestEvalScoring:
     """`score` turns raw logits into the numbers a run is judged on.
 
-    Temperature must move calibration and leave accuracy alone -- that is the
-    whole reason the report is printed twice.
+    Temperature must move calibration and leave accuracy alone.
     """
 
     def confident_but_wrong(self):

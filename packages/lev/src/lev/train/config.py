@@ -1,8 +1,7 @@
 """Training configuration, with the H100 budget encoded as arithmetic.
 
-Every default here traces to a measurement in docs/ARCHITECTURE.md §5. The
-`estimate` methods exist so that changing a knob shows you the new cost in hours
-before you rent the GPU, rather than after.
+Defaults trace to measurements in docs/ARCHITECTURE.md §5; the estimate
+properties show a knob's cost in H100 hours before the GPU is rented.
 """
 
 from __future__ import annotations
@@ -24,16 +23,15 @@ FLOPS_PER_PARAM_PER_TOKEN = 8.0
 
 @dataclass
 class TrainConfig:
-    # Qwen3.5-4B-Base: 32 layers = 24 linear + 8 full attention, 262k context,
-    # natively multimodal. The hybrid split is why a persistent prefix cache is
-    # affordable without pretraining one. See §5.1.
+    # Qwen3.5-4B-Base: 32 layers (24 linear + 8 full attention), 262k context.
+    # Only 8 layers hold K/V, which makes a prefix cache cheap (§5.1).
     model_id: str = "Qwen/Qwen3.5-4B-Base"
     params_b: float = 4.0
     hidden_size: int = 2560
     dtype: str = "bfloat16"
 
-    # LoRA, not full fine-tune: 4B full-FT needs ~64GB of optimiser state and
-    # leaves ~16GB for activations, which is too tight at long context. §5.2.
+    # LoRA: a 4B full fine-tune needs ~64 GB of optimiser state, leaving ~16 GB
+    # for activations, too tight at long context (§5.2).
     use_lora: bool = True
     lora_rank: int = 32
     lora_alpha: int = 64
@@ -47,70 +45,57 @@ class TrainConfig:
         "up_proj",
         "down_proj",
     )
-    # Mode B's head is new parameters and trains at full precision regardless of
-    # LoRA freezing the backbone. This was the non-obvious part of choosing LoRA.
+    # The Mode B head is new parameters and trains in full even though LoRA
+    # freezes the backbone.
     train_mode_b_head: bool = True
     mode_b_proj_dim: int = 512
-    # None: a question routes to Mode A whenever the tokenizer expresses its
-    # option codes in single tokens, exactly as the server routes (ADR-025), so
-    # Mode A trains on every set size it will serve. Mode B's data comes from
-    # the large-taxonomy sources' full option sets, which stay above the limit
-    # (`sources.augmentation_map`). ADR-026.
+    # None routes to Mode A whenever the tokenizer can express the codes, as the
+    # server does (ADR-025). Mode B trains on the large taxonomies' full option
+    # sets, which exceed that limit (`sources.augmentation_map`, ADR-026).
     max_label_options: int | None = None
-    # `prompt.Style`: "plain" (Context/Question/Answer) or "chat" (ChatML with a
-    # system prompt, the instruct backbone's native format). A model property:
-    # serving must use the same style, so the release manifest records it.
+    # `prompt.Style`: "plain" or "chat" (the instruct backbone's ChatML format).
+    # Serving must match, so the release manifest records it.
     prompt_style: str = "plain"
 
     # Data.
     n_examples: int = 200_000
-    # Measured, not assumed: a 121-token mean over 1,500 rendered prompts from
-    # the real mixture under the Qwen3.5 tokenizer. Per source the mean runs 38
-    # (clinc_oos) to 305 (imdb); p95 is 390 and the longest seen is 1,104. A
-    # guessed value here put the 4B budget out by 10x (ADR-016), so re-measure
-    # with `lev plan --data <dir>` after changing the mixture.
+    # Measured at a 121-token mean over 1,500 rendered prompts (rounded up here);
+    # per source 38 (clinc_oos) to 305 (imdb), p95 390, longest 1,104. A guessed
+    # value put the 4B budget out by 10x (ADR-016); re-measure with
+    # `lev plan --data <dir>` after changing the mixture.
     avg_tokens_per_example: int = 128
-    # A truncation cap, not the training length. The collator pads to the
-    # longest row in the batch, so a generous cap costs nothing except on the
-    # rare long row it saves.
+    # A truncation cap, not the training length: batches pad to their longest row.
     max_seq_len: int = 2_048
-    # Trained 50/50 so both cache layouts work at inference. §5.5.
+    # 50/50, so both layouts work at inference (§5.5).
     schema_first_fraction: float = 0.5
-    # Examples whose answer is not determinable from the state, teaching the model
-    # to spread mass instead of guessing confidently. decider's trick. §5.6.
+    # Unanswerable examples with a uniform target, teaching the model to spread
+    # mass instead of guessing (decider's trick, §5.6).
     abstain_fraction: float = 0.1
 
     # Optimisation.
     epochs: int = 3
-    # Sized for the data, not for a 4k-token guess. At a ~128-token mean, a
-    # batch of 8 makes 75,000 optimiser steps for 600k examples and the run
-    # becomes step-overhead bound long before it becomes FLOP bound. 32 keeps
-    # the H100 fed and still fits comfortably under the memory headroom below.
+    # At a ~128-token mean, a batch of 8 makes 75,000 steps for 600k examples and
+    # the run is step-overhead bound; 32 keeps the H100 fed within memory.
     per_device_batch: int = 32
-    # Batches are formed from length-sorted windows of this many batches. A
-    # batch pads to its longest row, so mixing a 1,300-token review with 31
-    # short tickets spends 4.43x of the forward pass on padding. Sorting within
-    # a window brings that to 1.43x while keeping the order random. ADR-017.
+    # Batches come from length-sorted windows of this many batches: unsorted,
+    # padding costs 4.43x the real tokens; sorted within a window, 1.43x, with
+    # the order still random (ADR-017).
     bucket_window: int = 64
     grad_accum: int = 1
     learning_rate: float = 1e-4
     warmup_ratio: float = 0.03
     weight_decay: float = 0.0
     gradient_checkpointing: bool = True
-    # Proper scoring rule: cross-entropy plus a Brier term. Calibration is the
-    # objective, not an afterthought.
+    # Proper scoring rule: cross-entropy plus a Brier term.
     brier_weight: float = 0.5
-    # Applies to every ordered readout -- Score and Noul, under both modes.
-    # See readout/mode_b.py for why ordinality stops being free under Mode B.
+    # Every ordered readout: Score and Noul, both modes (see readout/mode_b.py).
     ordinal_weight: float = 0.25
 
     # Bookkeeping.
     seed: int = 17
-    # A long run on a preemptible H100 will be interrupted. Checkpointing
-    # every ~2000 steps costs a few seconds and bounds the loss to that much.
+    # Bounds what a preempted run loses, for a few seconds per checkpoint.
     checkpoint_every: int = 2_000
-    # How often to print progress. A silent run is indistinguishable from a
-    # hung one, and on Modal the only thing you can see is stdout.
+    # On Modal stdout is the only view of a run, and silence looks like a hang.
     log_every: int = 25
     output_dir: str = "checkpoints/lev"
 
@@ -124,9 +109,7 @@ class TrainConfig:
 
     @property
     def tokens_per_step(self) -> int:
-        # The *work* per step, which is the padded batch, not `max_seq_len`.
-        # Billing the cap would inflate every downstream estimate by the ratio
-        # between the cap and the data -- here about 16x.
+        # The work per step is the padded batch, not `max_seq_len` (~16x larger).
         return self.avg_tokens_per_example * self.per_device_batch * self.grad_accum
 
     @property
@@ -135,8 +118,7 @@ class TrainConfig:
 
     @property
     def steps_per_epoch(self) -> int:
-        # Counted in examples. An epoch is one pass over the data, and how many
-        # optimiser steps that takes depends on the batch, not on token budgets.
+        # An epoch is one pass over the examples.
         return max(1, self.n_examples // self.examples_per_step)
 
     @property
@@ -205,15 +187,15 @@ class TrainConfig:
 # Named presets matching the backbone comparison in §5.1.
 PRESETS: dict[str, TrainConfig] = {
     "4b": TrainConfig(),
-    # The instruct checkpoint of the same backbone. Frozen, it scores 0.719 on
-    # S1Bench (reflex-4b); the Base fine-tune scored 0.489. Starting from a
-    # model that already follows instructions makes zero-shot judgement the
-    # floor rather than zero, and a gentler learning rate protects it. ADR-020.
+    # The instruct checkpoint of the same backbone. reflex-4b (these weights plus
+    # one temperature) scores 0.719 on S1Bench; the Base fine-tune scored 0.489.
+    # Instruction following makes zero-shot judgement the floor, and the lower
+    # learning rate protects it (ADR-020).
     "4b-instruct": TrainConfig(
         model_id="Qwen/Qwen3.5-4B",
         learning_rate=5e-5,
-        # The format the instruct backbone was trained on. Frozen, it scores
-        # 0.710 on S1Bench in this style against 0.653 in `plain` (ADR-027).
+        # Frozen, these weights score 0.710 on S1Bench in `chat` against 0.653 in
+        # `plain` (ADR-027).
         prompt_style="chat",
         output_dir="checkpoints/lev-instruct",
     ),
@@ -239,7 +221,7 @@ PRESETS: dict[str, TrainConfig] = {
         epochs=1,
         max_seq_len=1_024,
         per_device_batch=2,  # CPU-runnable; `make smoke-local` uses this
-        checkpoint_every=0,  # one checkpoint at the end is the whole point
+        checkpoint_every=0,  # one checkpoint, at the end
         output_dir="checkpoints/lev-smoke",
     ),
 }

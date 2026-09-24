@@ -1,18 +1,14 @@
 """FastAPI server for `/v1/systemone`.
 
-Wire-identical to TypeSafe's endpoint, so the benchmark measures us and Jev with
-the same code path and one changed flag:
+Wire-identical to TypeSafe's endpoint, so levbench measures lev and Jev through
+the same code path:
 
     levbench eval --backend jev --base-url http://localhost:8000
 
-Error codes mirror the real API (422 validation, 429 rate limit, 529 overloaded)
-so client retry logic behaves identically against either.
-
-Serves the base backbone, or a trained checkpoint when `--checkpoint` names one:
-the LoRA adapter, the Mode B head and any `calibration.json` beside them are all
-picked up. Start it with `lev serve` and read `/health` before trusting a number
-off it -- that is where you see which checkpoint resolved and whether a
-calibration profile is actually in effect.
+Status codes follow the real API: 422 for a malformed request, 529 while the
+model is still loading. Loading is `lev.model.load`. Check `/health` before
+trusting a number: it shows which checkpoint resolved and whether calibration is
+in effect.
 """
 
 from __future__ import annotations

@@ -1,19 +1,18 @@
 """The two prompt layouts, and where each one is cut for caching.
 
-A layout exists to make one part of the input a stable prefix, so the forward pass
-over that prefix can be computed once and reused. Which part you want stable depends
-on the workload, so we build both and train on both.
+A layout makes one part of the input a stable prefix that can be computed once
+and reused. Training uses both (half the examples each); serving defaults to
+state-first.
 
     STATE-FIRST   [state] | [question + options + "Answer:"]
-                  ^cache            ^forked per question
-                  Default. One state, many questions -- the shared-state win.
+                  ^shared   ^one suffix per question
+                  One state, many questions.
 
     SCHEMA-FIRST  [all questions + options] | [state + "Answer:"]
-                  ^cache across requests      ^varies per request
-                  One schema, many states -- high-volume batch classification.
+                  ^shared across requests     ^varies per request
+                  One schema, many states: high-volume batch classification.
 
-decider measured schema-first's accuracy cost precisely, and we inherit it as a
-routing rule rather than a preference (docs/ARCHITECTURE.md §5.5):
+decider measured schema-first's accuracy cost (docs/ARCHITECTURE.md §5.5):
   fixed label set        -1.5 pts
   options vary per item  -5 pts
   50-219 options         -5 to -24 pts
@@ -39,14 +38,12 @@ class Layout(StrEnum):
 class Style(StrEnum):
     """How the text is dressed for the model.
 
-    `plain`: `Context: ... Question: ... Options: ... Answer:` -- what the first
-    two models trained on. `chat`: the ChatML turns an instruct checkpoint was
-    trained on, with a system prompt, headed sections, `A. option` lines, an
-    explicit "respond with only the letter" and Qwen's empty think block --
-    reflex's layout. Measured on the same frozen weights, reflex's prompts
-    score 0.719 on S1Bench against 0.653 for `plain` (FINDINGS §15), so the
-    style is a model property: recorded in the release manifest, applied
-    identically in training and serving.
+    `plain`: `Context: ... Question: ... Options: ... Answer:`. `chat`: reflex's
+    ChatML layout, with a system prompt, headed sections, `A. option` lines, an
+    explicit "respond with only the letter" and Qwen's empty think block. On the
+    same frozen instruct weights `chat` scores 0.710 on S1Bench against 0.653 for
+    `plain` (ADR-027). The style is a property of the weights: recorded in the
+    release manifest and applied identically in training and serving.
     """
 
     PLAIN = "plain"
@@ -92,8 +89,7 @@ class Rendered:
 def render_state(state) -> str:
     if isinstance(state, str):
         return state
-    # sort_keys so an identical dict always produces an identical prefix -- an
-    # unsorted dump silently defeats prefix caching.
+    # sort_keys: an identical dict must produce an identical prefix.
     return json.dumps(state, sort_keys=True, ensure_ascii=False, indent=None)
 
 
@@ -113,24 +109,20 @@ def render_question(
 ) -> str:
     """Render one question. `codes` are Mode A label codes; None means Mode B.
 
-    `order` lists the candidates in the sequence they should appear, as indices
-    into the question's own candidate order. Codes are assigned by position, so
-    rendering the same question under two orders and averaging the readouts
-    cancels the model's preference for whichever letter comes first -- the
-    position bias reflex measured and corrects the same way.
+    `order` gives the display sequence as indices into the question's own
+    candidate order. Codes are assigned by position, so averaging two orders
+    cancels the model's preference for the first letter (as reflex does).
 
-    A Noul with exactly two codes is the binary yes/no readout, used when no
-    trained adapter exists: a stock checkpoint cannot rate 0-8 (ADR-007) but can
-    pick between two lettered options.
+    A Noul with exactly two codes is the binary yes/no readout for an untrained
+    checkpoint, which cannot rate 0-8 (ADR-007) but can pick a lettered option.
     """
     if style is Style.CHAT:
         return _render_question_chat(name, question, codes, order)
     lines = [f"Question: {question.instructions or name}"]
 
     if isinstance(question, Choice):
-        # No codes means Mode B, which does not list the options: the head
-        # embeds each candidate's own text, so listing 151 intents would cost
-        # ~700 tokens per prompt and buy nothing.
+        # Mode B does not list options: the head embeds each candidate's text,
+        # and listing 151 intents would cost ~700 tokens per prompt.
         if codes:
             lines.append("Options:")
             items = _ordered(list(question.criteria.items()), order)
@@ -222,9 +214,8 @@ def render_content(value: JSONContent) -> str:
 def candidate_texts(question: Question) -> list[str]:
     """The strings Mode B scores: each option's own text, not a label code.
 
-    A rendering concern, so it lives beside the other renderers -- and both the
-    serving engine and the training collator need it, while neither may import
-    the other.
+    Lives here because both the serving engine and the training collator need
+    it.
     """
     if isinstance(question, Noul):
         return list(NOUL_RATING_TOKENS)

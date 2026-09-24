@@ -89,11 +89,8 @@ class TestCheckpointCadence:
         return saved
 
     def test_the_final_step_is_not_checkpointed_twice(self, tmp_path, monkeypatch):
-        """A total that is a multiple of `checkpoint_every` used to save twice.
-
-        Locally that is a wasted write; on Modal it is a second multi-hundred-MB
-        adapter dump and a second Volume commit for an identical result.
-        """
+        """A total that is a multiple of `checkpoint_every` saves once; on Modal a
+        duplicate is a second multi-hundred-MB adapter write and Volume commit."""
         saved = self.run(tmp_path, monkeypatch, max_steps=12, checkpoint_every=6)
         assert saved == [6, 12], f"expected [6, 12], got {saved}"
 
@@ -199,8 +196,8 @@ class TestResume:
         assert summary["history"][0]["step"] == 0
 
     def test_weights_only_checkpoint_restarts_the_schedule(self, tmp_path, monkeypatch):
-        """A checkpoint from before ADR-021 has no training state: resume its
-        weights, but count from zero, as every resume did then."""
+        """A checkpoint without training state (as before ADR-021) restores its
+        weights and counts from zero."""
         self.run(tmp_path, monkeypatch, max_steps=6, persist=False)
         saved, _, summary = self.run(tmp_path, monkeypatch, max_steps=6)
         assert saved == [3, 6]

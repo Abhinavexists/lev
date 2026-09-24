@@ -1,14 +1,12 @@
 """The `/v1/systemone` wire schema.
 
-Deliberately identical to TypeSafe's public schema, so any client written against
-Jev works against us by changing `base_url` and nothing else. That compatibility is
-what lets `levbench` measure us and Jev with the same code path.
+Identical to TypeSafe's public schema, so a client written against Jev works
+against lev by changing `base_url`, and `levbench` measures both the same way.
 
-One intentional divergence, documented in docs/ARCHITECTURE.md §5.4: our `NoulAnswer`
-carries `probabilities` and `confidence`. Jev's does not — its Noul is a bare float,
-which makes it the one question type you cannot calibrate from a response. We read
-Noul from nine rating tokens, so we have a real distribution and we return it. The
-`noul` field itself is identical, so clients that only read `.noul` are unaffected.
+One divergence (docs/ARCHITECTURE.md §5.4): lev's `NoulAnswer` also carries
+`probabilities` and `confidence`, because lev reads Noul from nine rating tokens
+and has a real distribution. Jev's Noul is a bare float. The `noul` field is
+identical, so clients that only read `.noul` are unaffected.
 """
 
 from __future__ import annotations
@@ -69,7 +67,7 @@ type Question = Annotated[Noul | Choice | Score, Field(discriminator="type")]
 class NoulAnswer(BaseModel):
     type: Literal["noul"] = "noul"
     noul: float
-    # A lev addition, absent from Jev — see the module docstring.
+    # lev only; see the module docstring.
     probabilities: dict[int, float] | None = None
     confidence: float | None = None
 
@@ -94,7 +92,7 @@ type Answer = Annotated[NoulAnswer | ChoiceAnswer | ScoreAnswer, Field(discrimin
 
 class Usage(BaseModel):
     input_tokens: int
-    # Always 0: nothing is generated, answers are read from a logit vector.
+    # Always 0: answers are read from logits, nothing is generated.
     output_tokens: int = 0
     cached_input_tokens: int = 0
 

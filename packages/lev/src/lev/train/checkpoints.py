@@ -1,16 +1,9 @@
 """Reading and writing training checkpoints.
 
-A checkpoint is the LoRA adapter, the Mode B head and the tokenizer together,
-plus the training state -- optimiser moments, schedule position, step and
-epoch, and the RNG state that reproduces the epoch's data order. The first
-three are what a server needs; the rest is what lets a preempted run continue
-from where it stopped instead of replaying it from good weights (ADR-021).
-An adapter without the head it was trained beside cannot serve Mode B, and a
-tokenizer mismatch silently changes which label token ids the readout reads --
-a failure that produces plausible numbers.
-
-Separate from `loop` so that `lev.server` and `lev.train.calibration_run`, which
-only ever *read* a checkpoint, do not have to import the training loop to do it.
+A checkpoint is the LoRA adapter, Mode B head and tokenizer (what serving
+needs) plus the training state that lets a preempted run continue exactly
+(ADR-021). Separate from `loop` so readers (`lev.model`,
+`lev.train.calibration_run`) need not import the training loop.
 """
 
 from __future__ import annotations
@@ -26,8 +19,7 @@ CALIBRATION = "calibration.json"
 def latest_checkpoint(output: str | Path) -> Path | None:
     """The newest `step-N` under `output` that holds adapter weights, or None.
 
-    Newest by step number rather than mtime, because a resumed run rewrites
-    older directories.
+    By step number, not mtime: a resumed run rewrites older directories.
     """
     source = Path(output)
     steps = sorted(
@@ -40,9 +32,8 @@ def latest_checkpoint(output: str | Path) -> Path | None:
 def fetch_checkpoint(spec: str | Path, cache_dir: str | None = None) -> Path:
     """A local directory as-is; a Hub id (`hf://org/name` or `org/name`) downloaded.
 
-    Anything that exists on disk is local. Otherwise a string with exactly one
-    slash and no path separators beyond it is treated as a Hub repo, so a typo
-    in a local path fails as a missing repo rather than being silently created.
+    Anything on disk is local; otherwise only `org/name` is treated as a Hub
+    repo, so a mistyped local path fails instead of reaching the Hub.
     """
     local = Path(spec)
     if local.exists():
@@ -59,10 +50,8 @@ def resolve_checkpoint(path: str | Path, cache_dir: str | None = None) -> Path:
     """Accept a `step-N` directory, the parent holding several, a flat release
     directory, or a Hub id for one.
 
-    `save_checkpoint` writes `<output_dir>/step-<n>`, but every caller naturally
-    names `<output_dir>` -- the preset's output directory is what appears in the
-    config, in the Modal volume layout and in the docs. Resolving the newest
-    step here means one spelling works everywhere.
+    `save_checkpoint` writes `<output_dir>/step-<n>`, while callers name
+    `<output_dir>`, so the newest step is resolved here.
     """
     source = fetch_checkpoint(path, cache_dir)
     if (source / "adapter_model.safetensors").is_file():
@@ -79,17 +68,16 @@ def resolve_checkpoint(path: str | Path, cache_dir: str | None = None) -> Path:
 def load_training_state(path: str | Path) -> dict | None:
     """The optimiser, schedule and position saved beside the weights, if any.
 
-    None for a checkpoint written before ADR-021 or by a run that saved weights
-    only; the caller then starts the optimiser and schedule fresh from the
-    restored weights, which is what every resume did before.
+    None for a weights-only checkpoint (including those from before ADR-021);
+    the caller then starts the optimiser and schedule fresh.
     """
     import torch
 
     file = resolve_checkpoint(path) / TRAINING_STATE
     if not file.is_file():
         return None
-    # `weights_only=False`: the payload carries the RNG state (a tuple), not
-    # just tensors. The file is ours, written by `save_checkpoint`.
+    # `weights_only=False`: the payload holds the RNG state (a tuple). The file
+    # is written by `save_checkpoint`, never downloaded.
     return torch.load(file, map_location="cpu", weights_only=False)
 
 
@@ -97,13 +85,10 @@ def load_checkpoint(model, head, path: str | Path) -> None:
     """Restore adapter and head weights into an already-built model.
 
     Not `model.load_adapter(path, adapter_name="default")`: `get_peft_model`
-    has already created an adapter under that name, so loading another one
-    there either errors or leaves two. Writing the state dict into the existing
-    adapter is the operation actually wanted, and it keeps the optimiser's
-    parameter list valid -- it was built from these exact tensors.
+    already created that adapter, so it would error or leave two. Writing into
+    the existing tensors also keeps the optimiser's parameter list valid.
 
-    A missing head file is fatal rather than ignored. Resuming a run with a
-    freshly initialised Mode B head would look like training and would silently
+    A missing head file is fatal: a freshly initialised head would silently
     discard every Mode B step taken before the preemption.
     """
     import torch
@@ -142,12 +127,10 @@ def save_checkpoint(
 ) -> Path:
     """Write adapters, head and tokenizer together, and the training state.
 
-    All three weights files, because a LoRA adapter without the head it was
-    trained beside cannot serve Mode B, and a tokenizer mismatch silently
-    changes which label token ids the readout reads -- a failure that produces
-    plausible numbers. `state` is what `run_training` needs to continue from
-    this exact step; it is written last, so a checkpoint interrupted mid-write
-    degrades to weights-only rather than to a corrupt state file.
+    Together because an adapter without its head cannot serve Mode B, and a
+    tokenizer mismatch silently changes which label token ids are read. `state`
+    is written last, so a write interrupted midway degrades to weights-only
+    rather than a corrupt state file.
     """
     import torch
 

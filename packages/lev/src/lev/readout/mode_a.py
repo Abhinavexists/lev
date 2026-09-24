@@ -2,15 +2,12 @@
 
     ... Options:  A: refund   B: replace   C: info
     Answer:
-            ^ the scored position -- we take the next-token logits here and keep
-              only the ids for " A", " B", " C". Nothing is sampled or generated.
+            ^ the scored position: its next-token logits, restricted to the ids
+              for " A", " B", " C". Nothing is sampled or generated.
 
-Zero added parameters, so this works on a stock checkpoint before any training.
-That is why build step 1 in docs/ARCHITECTURE.md §5.9 needs no GPU time at all.
-
-Verified against `Qwen/Qwen3.5-4B-Base`: the indexing below follows litjev's
-`output.logits[i, len(suffix_ids[i]) - 1, candidate_ids[i]]` and produces sane
-distributions on a real checkpoint.
+No added parameters, so it works on a stock checkpoint before any training. The
+indexing follows litjev's `output.logits[i, len(suffix_ids[i]) - 1,
+candidate_ids[i]]`, verified on `Qwen/Qwen3.5-4B-Base`.
 """
 
 from __future__ import annotations
@@ -24,8 +21,8 @@ import torch
 class LabelTokenReadout:
     """Scores candidates by their single-token label id.
 
-    `tokenizer` must be the one the router verified against -- using a different
-    tokenizer silently changes which ids are read.
+    `tokenizer` must be the one the router verified against; another tokenizer
+    silently changes which ids are read.
     """
 
     tokenizer: object
@@ -54,14 +51,14 @@ class LabelTokenReadout:
 
         Args:
             logits: `(batch, seq, vocab)` from one forward pass.
-            last_positions: `(batch,)` index of each row's final input token --
-                the position whose next-token distribution we read. Rows are
-                right-padded, so this is *not* `seq - 1` for every row.
+            last_positions: `(batch,)` index of each row's final input token,
+                whose next-token distribution is read. Rows are right-padded, so
+                this is not `seq - 1` for every row.
             candidate_ids: per-row token ids to keep.
 
         Returns:
-            One 1-D tensor of raw logits per row. Raw, not softmaxed: temperature
-            is applied later, per bucket (see `lev.calibrate`).
+            One 1-D tensor of raw logits per row; temperature is applied later,
+            per bucket (`lev.calibrate`).
         """
         out = []
         for row, ids in enumerate(candidate_ids):

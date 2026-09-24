@@ -1,16 +1,15 @@
-"""Temperature scaling — the cheapest large win available, per the benchmark data.
+"""Temperature scaling, the cheapest large calibration win.
 
-Untuned Qwen3.5 backbones sit at ECE 0.4252 on S1Bench. reflex -- same model family
-plus one fitted scalar -- reaches 0.0849. Jev is 0.0764. A single scalar per bucket
-is most of that gap, and almost none of the open reproductions bothered to fit one.
+On the S1Bench board, untuned Qwen3.5 backbones sit at ECE 0.4252; reflex, the
+same family plus one fitted scalar, reaches 0.0849; Jev is 0.0764.
 
-Two rules this module enforces structurally rather than by convention:
+Two rules are enforced in code:
 
-1. **Fit per bucket, not globally.** Choice, Score and Noul produce differently shaped
-   distributions, and Mode A and Mode B produce them by different mechanisms. One
-   global temperature under-serves at least one bucket, so the key is (type, mode).
-2. **Never fit on test.** `fit` takes an explicit split name and refuses `"test"`.
-   The calibration split must be disjoint from both train and test.
+1. **Fit per bucket.** Choice, Score and Noul produce differently shaped
+   distributions, and Mode A and Mode B produce them differently, so the key is
+   (type, mode), plus an option-count band for Choice.
+2. **Never fit on held-out data.** `fit` and `fit_for_transfer` take a split name
+   and refuse "test", "eval" and "holdout".
 """
 
 from __future__ import annotations
@@ -61,8 +60,8 @@ def fit_temperature(
 ) -> float:
     """Minimise NLL over temperature by ternary search.
 
-    NLL as a function of temperature is unimodal for a fixed set of logits, so
-    ternary search converges without gradients and without a dependency on torch.
+    NLL is unimodal in temperature for fixed logits, so this needs no gradients
+    and no torch.
     """
     if not samples:
         return 1.0
@@ -76,21 +75,17 @@ def fit_temperature(
     return (lo + hi) / 2
 
 
-# --- Calibration for data the model has not seen -------------------------
+# Calibration for task families the model has not seen. A temperature fitted on
+# held-out rows comes from the training distribution, where the model is most
+# reliable. Two fits are compared by how well each transfers to an unseen family:
 #
-# A temperature fitted on held-out *rows* is fitted on the training
-# distribution, where the model is at its most reliable; on a new task family
-# it is overconfident (S1Bench ECE ~0.14 against 0.06 in-distribution). Two
-# fits are compared by how well each transfers to a family it never saw:
+#   rows    every calibration row weighted equally
+#   family  every task family weighted equally, so large, easy, familiar families
+#           stop setting the temperature for small, hard ones
 #
-#   rows    every calibration row weighted equally (the original fit)
-#   family  every task family weighted equally, so the large, easy, familiar
-#           families stop setting the temperature for the small, hard ones
-#
-# Transfer is measured leave-one-family-out: fit on all families but one,
-# measure ECE on that one, average over families. The chosen fit is the one
-# with the lower leave-one-family-out ECE, per bucket. That rule is fixed here,
-# before any external benchmark is consulted (ADR-028).
+# Transfer is leave-one-family-out ECE: fit on all families but one, measure on
+# that one, average. Per bucket the lower one wins; the rule is fixed before any
+# external benchmark is consulted (ADR-028).
 
 MIN_FAMILIES_FOR_TRANSFER = 3
 
@@ -223,9 +218,8 @@ class CalibrationProfile:
         return f"{question_type}:{mode}" + (f":{band}" if band else "")
 
     def temperature(self, question_type: str, mode: str, n_options: int | None = None) -> float:
-        # Banded first, then the unbanded bucket a profile fitted before bands
-        # existed carries; 1.0 -- the identity -- when neither was fitted, so an
-        # unknown bucket degrades to raw softmax rather than to a borrowed scalar.
+        # Banded, then unbanded (profiles fitted before bands), then 1.0: an
+        # unfitted bucket gets raw softmax rather than a borrowed scalar.
         banded = self.key(question_type, mode, n_options)
         plain = self.key(question_type, mode)
         return self.temperatures.get(banded, self.temperatures.get(plain, 1.0))
@@ -264,9 +258,8 @@ def fit(
 ) -> CalibrationProfile:
     """Fit one temperature per bucket.
 
-    Refuses `split_name="test"`: fitting on test labels produces a profile that
-    looks excellent and means nothing, and it is the single easiest way to invalidate
-    the only number this project competes on.
+    Refuses "test", "eval" and "holdout": a profile fitted on test labels looks
+    excellent and means nothing.
     """
     if split_name.lower() in {"test", "eval", "holdout"}:
         raise ValueError(

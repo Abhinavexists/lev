@@ -52,11 +52,9 @@ class TestEvalDoorOpensOnlyOnEvalData:
 
 class TestStructuralSeparation:
     def test_s1bench_cannot_reach_the_mixture_builder(self) -> None:
-        """Enforced, not conventional: if someone imports `mixture` here to reuse
-        `Example`, the eval loaders gain a type the training path consumes, and
-        the separation becomes a naming convention. Checked in a fresh
-        interpreter because an in-process check would see the test suite's own
-        imports."""
+        """Importing `mixture` (e.g. to reuse `Example`) would give the eval loaders
+        a type the training path consumes. Checked in a fresh interpreter, since
+        in-process the test suite's own imports are visible."""
         probe = (
             "import sys; import lev.data.s1bench; "
             "leaked = sorted(m for m in sys.modules "

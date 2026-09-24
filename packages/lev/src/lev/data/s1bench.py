@@ -1,26 +1,18 @@
 """Load S1Bench evaluation subsets, for evaluation and nothing else.
 
-This is the one place in `lev` allowed to read the thirteen subsets that
-`contamination.assert_clean` refuses. The separation is structural rather than a
-flag: this module never imports `mixture` or `build`, its only output is a
-levbench task file, and `Example` -- the type `build_mixture` consumes -- is not
-in its vocabulary. There is no argument you can pass a training entry point that
-routes a blocked subset into the mixture, because the two sides share no type.
-`tests/test_s1bench.py` asserts that import closure rather than trusting it.
+The one place in `lev` allowed to read the 13 subsets `contamination.assert_clean`
+refuses. The separation is structural: this module never imports `mixture` or
+`build`, never produces an `Example`, and writes only levbench task files, so no
+training entry point can route a blocked subset into the mixture.
+`tests/test_s1bench.py` asserts that import closure. Every subset is read through
+`assert_eval_only`.
 
-Every subset is read through `assert_eval_only`, so this door opens only onto
-data the training door already refuses.
+The task files match `export_eval.py`'s, so one `levbench eval --tasks` run scores
+Jev and lev on identical files; a gap against Jev's published numbers means
+little until Jev has run the same files.
 
-Output is the same task-file shape `export_eval.py` writes, which is what lets
-one `levbench eval --tasks` run point at Jev and at lev and compare like with
-like. Validating the harness depends on that: our prompts are not Jev's, so a
-gap against Jev's published numbers is only interpretable once the *same* task
-files have been run through Jev itself.
-
-Six of the thirteen have a measured Jev accuracy to validate against -- the ones
-that executed in the `s1-fast` run. The other seven were intended and never ran,
-so they carry a published number with no independent measurement, and are absent
-from `EVAL_SUBSETS` until there is something to check a loader against.
+Only the 6 subsets that ran in `s1-fast` have a measured Jev accuracy to validate
+a loader against, so only they are in `EVAL_SUBSETS`.
 """
 
 from __future__ import annotations
@@ -39,11 +31,9 @@ from .contamination import assert_eval_only
 class EvalSubset:
     """One S1Bench subset: where to read it, and what Jev scored on it.
 
-    `jev_measured` is the accuracy observed in the `s1-fast` run recorded in
-    `data/s1bench-snapshot.json`; `jev_published` is TypeSafe's own figure. They
-    agree within 0.7pp on five of the six, so a harness whose prompts are
-    adequate should land in that band. `aegis2` is the exception at 3.2pp, where
-    only the measured number is a usable target.
+    `jev_measured` is the `s1-fast` accuracy in `data/s1bench-snapshot.json`;
+    `jev_published` is TypeSafe's figure. They agree within 0.7 pp on five of the
+    six; `aegis2` differs by 3.2 pp, so only its measured number is a target.
     """
 
     name: str
@@ -54,11 +44,10 @@ class EvalSubset:
     jev_published: float
     hf_config: str | None = None
     split: str = "validation"
-    # Script-backed repos have no parquet in `main`; `datasets>=5` will not
-    # execute the script, so the auto-converted branch is the only way in.
+    # Script-backed repos have no parquet in `main` and `datasets>=5` will not run
+    # the script, so this names the auto-converted branch.
     revision: str | None = None
-    # `massive`'s converted branch exposes locales as directories rather than
-    # builder configs, so the locale has to be named as a file path.
+    # `massive`'s converted branch exposes locales as directories, not configs.
     data_files: str | None = None
 
     @property
@@ -140,11 +129,8 @@ def get_subset(name: str) -> EvalSubset:
     return EVAL_SUBSETS[canonical]
 
 
-# --- Reading the subsets -------------------------------------------------
-#
-# Each reader returns `(question, items)`. Questions are built as real `lev.types`
-# models so the schema is validated here rather than at request time: a Score with
-# the wrong level count or a Choice with one option fails on load, not mid-run.
+# Each reader returns `(question, items)`, with questions built as `lev.types`
+# models so a malformed schema fails on load, not mid-run.
 
 
 @dataclass(frozen=True)
@@ -168,10 +154,8 @@ def humanise(label: str) -> str:
 def _sample(dataset, limit: int, seed: int):
     """Shuffle before limiting, always.
 
-    A head slice is not a sample: `massive`'s validation split is ordered such
-    that the first N rows under-cover the 60 intents, and the resulting accuracy
-    would not be comparable to Jev's over the same nominal N. Same lesson as
-    `sources.load_source`.
+    A head slice is not a sample: the first N rows of `massive`'s validation
+    split under-cover its 60 intents.
     """
     if limit < len(dataset):
         return dataset.shuffle(seed=seed).select(range(limit))
@@ -238,8 +222,7 @@ def _read_vitaminc(dataset) -> tuple[Choice, list[EvalItem]]:
 
 
 def _read_massive(dataset) -> tuple[Choice, list[EvalItem]]:
-    """60 intents: the only S1Bench subset that overflows single-token label
-    codes, so this is Mode B's one piece of external evidence."""
+    """60 intents, the largest option set here; within the 68-code Mode A limit."""
     names = dataset.features["intent"].names
     question = Choice(
         instructions="What is the user's intent?",
@@ -283,8 +266,7 @@ _READERS: dict[str, Callable] = {
 }
 
 
-# Sampling seed. Fixed so two runs of the harness score the same rows: an
-# accuracy that moves because the sample moved is not a measurement.
+# Fixed, so two harness runs score the same rows.
 SAMPLE_SEED = 20260922
 
 
@@ -327,11 +309,8 @@ def export(
 ) -> dict:
     """Write `<subset>.json` levbench task files, plus an `index.json`.
 
-    The same format `export_eval.export` writes, so one `levbench eval --tasks`
-    invocation scores these against Jev and against lev through identical code.
-    That shared path is what makes the comparison interpretable: our prompts are
-    not Jev's, so a gap only means something once the *same* files have been run
-    through Jev itself.
+    The same format as `export_eval.export`, so one `levbench eval --tasks`
+    run scores Jev and lev through identical code.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)

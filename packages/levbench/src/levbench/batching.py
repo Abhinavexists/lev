@@ -1,12 +1,9 @@
 """The batching sweep: one state, N questions, one call versus N calls.
 
-This is the cheapest high-signal experiment in the repo. It measures the
-project's central economic claim directly -- that input tokens are billed per
-*request*, so the cost of reading a large state is amortised across every
-question asked about it in the same call.
-
-Expectation if the claim holds: batched cost stays roughly flat as N grows
-while split cost grows linearly, giving a saving ratio that scales with N.
+Measures the central economic claim: input tokens are billed per *request*,
+so reading a large state is amortised across every question asked in the same
+call. If it holds, batched cost stays roughly flat as N grows while split cost
+grows linearly.
 """
 
 from __future__ import annotations
@@ -19,8 +16,8 @@ from typesafe_sdk import Choice, Noul, Score
 from . import pricing
 from .runner import call_once
 
-# Distinct questions over one shared document. Deliberately a mix of all three
-# primitives, since output-token cost differs between them.
+# One shared document; all three primitives, since output-token cost differs
+# between them.
 QUESTION_BANK: list[tuple[str, Any]] = [
     ("mentions_retention", Noul(instructions="The document discusses data retention periods.")),
     ("mentions_consent", Noul(instructions="The document discusses user consent.")),
@@ -108,9 +105,8 @@ def sweep(
             raise ValueError(f"Asked for {n} questions but the bank holds {len(bank)}")
         selected = dict(bank[:n])
 
-        # A full sweep of 1,2,4,8,13 fires 56 sequential requests. A rate limit
-        # or overload on the last one must not throw away every row already
-        # paid for, so each count is isolated and partial results are kept.
+        # The default sweep (1,2,4,8,13) sends 33 sequential requests; each count
+        # is isolated so a late rate limit keeps the rows already paid for.
         try:
             batched = call_once(client, state, selected)
             batched_cost = pricing.cost_usd(model, batched.input_tokens, batched.output_tokens)

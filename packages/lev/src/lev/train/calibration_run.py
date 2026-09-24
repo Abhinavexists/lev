@@ -1,13 +1,11 @@
 """Fit per-bucket temperatures after training, on a dedicated split.
 
-Separate from the fine-tune because re-fitting must not require re-training, and
-because the split used here must be disjoint from *both* train and test.
-`lev.calibrate.fit` refuses a split named test/eval/holdout for that reason.
+Separate from the fine-tune so re-fitting needs no re-training. The split must be
+disjoint from train and test (`lev.calibrate.fit` refuses test/eval/holdout).
 
-One temperature per (question type, readout mode). Not one global scalar: a
-Noul's nine-rating distribution and a 151-option Mode B distribution are not
-miscalibrated in the same direction or by the same amount, and a single scalar
-fitted across both lands between them and improves neither.
+One temperature per (question type, readout mode), plus an option-count band for
+Choice: a Noul's nine-rating distribution and a 151-option Mode B distribution are
+miscalibrated differently, and one scalar lands between them.
 """
 
 from __future__ import annotations
@@ -82,15 +80,11 @@ def collect_logits(
     batch_size: int = 16,
     limit: int | None = None,
 ) -> dict[str, list[tuple[list[float], int, str]]]:
-    """Raw (pre-softmax) candidate logits per bucket, keyed `"{type}:{mode}"`.
+    """Raw candidate logits per `CalibrationProfile.key` bucket, from the trained
+    model under `no_grad`, before any temperature.
 
-    Runs the *trained* engine over the calibration split under `no_grad`. The
-    logits collected are pre-temperature by construction -- fitting a
-    temperature on already-tempered scores would measure the previous fit.
-
-    Abstain rows are skipped: they have no single correct answer, and a
-    temperature is fitted against a gold index. Each sample carries its task
-    family (`sources.family_of`) for the transfer-selected fit.
+    Abstain rows are skipped: a temperature is fitted against a gold index. Each
+    sample carries its task family (`sources.family_of`) for the transfer fit.
     """
     import torch
 
@@ -128,8 +122,7 @@ def collect_logits(
             for i, example in enumerate(group):
                 width = int((~batch.candidate_mask[i]).sum())
                 sample = (logits[i, :width].tolist(), example.target, family_of(example.source))
-                # Banded and unbanded both: the banded bucket is what serving
-                # reads; the unbanded one is the fallback for bands too thin to fit.
+                # Banded for serving, unbanded as the fallback for thin bands.
                 for key in {
                     CalibrationProfile.key(example.question.type, batch.mode.value, width),
                     CalibrationProfile.key(example.question.type, batch.mode.value),

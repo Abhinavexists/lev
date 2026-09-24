@@ -1,20 +1,16 @@
 """Turn Examples into tensors the readouts can be trained through.
 
-Batches are **homogeneous in mode**. A mixed batch is possible -- you mask the
-two readouts against each other -- but the masking is where the bugs live, and a
-batch that is all Mode A or all Mode B needs no masking at all. `ModeBatcher`
-groups examples before they reach the collator.
+Batches are **homogeneous in mode** (`ModeBatcher` groups them), so the two
+readouts never need masking against each other.
 
-The scored position is the final token of the rendered prompt, i.e. the token
-whose *next-token* distribution is the answer. Rows are right-padded, so that is
-not `seq - 1` for every row, and `last_positions` carries the real index. Getting
-this wrong reads the logits of a pad token and trains on noise without failing.
+The scored position is the final token of the rendered prompt, whose next-token
+distribution is the answer. Rows are right-padded, so `last_positions` carries the
+real index; reading `seq - 1` would train on a pad token's logits without failing.
 
-Mode B needs one extra thing: a representation per candidate. Candidates are a
-property of the *question*, not the row, so the unique candidate strings for a
-batch are encoded once and shared -- 77 short rows rather than 8 x 77. This is
-NanoJev's "one backbone forward" arrangement, and it is what makes training a
-77-option question cost roughly what a 4-option one costs.
+Mode B also needs one representation per candidate. Candidates belong to the
+question, so a batch's unique candidate strings are encoded once and shared (77
+short rows, not 8 x 77), making a 77-option question cost about what a 4-option
+one does.
 """
 
 from __future__ import annotations
@@ -34,9 +30,8 @@ IGNORE_INDEX = -100
 class RouteCache:
     """Resolves a question's readout mode once per distinct question.
 
-    Re-tokenising an option set for each of 200k rows is the slowest thing in
-    the pipeline and returns the same answer every time. Both the batcher and
-    the collator need the route, so they share one of these.
+    Re-tokenising an option set for each of 200k rows would be the slowest step
+    in the pipeline; the batcher and collator share one cache.
     """
 
     def __init__(self, tokenizer, max_label_options: int | None = None, style: Style = Style.PLAIN):
@@ -46,10 +41,8 @@ class RouteCache:
         self._routes: dict[tuple[str, str, int], object] = {}
 
     def route_for(self, example: Example):
-        # The option count is part of the key because one source now carries
-        # many questions: subsampled option sets and per-row QA choices. The
-        # route depends only on the count, so this stays one entry per distinct
-        # size rather than one per row.
+        # Keyed on the option count: a source has many questions (subsampled
+        # option sets, per-row QA choices), and the route depends only on the count.
         key = (example.source, example.name, candidate_count(example.question))
         if key not in self._routes:
             self._routes[key] = route(
@@ -103,25 +96,17 @@ def render(example: Example, codes: list[str] | None, style: Style = Style.PLAIN
 class ModeBatcher:
     """Groups examples by readout mode and length, then emits fixed-size batches.
 
-    Routing happens here rather than in the loop because the route depends on the
-    tokenizer, and the whole point of the router is that the boundary is measured
-    rather than assumed. An example whose options do not fit single tokens goes to
-    Mode B; nothing is dropped and nothing is capped.
+    An example whose options do not fit single tokens goes to Mode B; nothing is
+    dropped or capped.
 
-    **Batches are length-bucketed**, and that is worth as much as everything else
-    in this file put together. A batch is padded to its longest row, so the model
-    computes on the rectangle, not on the real tokens. Measured through this
-    collator on the real mixture at batch 32, random batching spends **4.43x** of
-    every forward pass on padding -- one 1,300-token imdb review lands among 31
-    short banking tickets and drags the rectangle up to it. Bucketing brings that
-    to 1.43x, against a 1.03x floor. See ADR-017.
+    **Batches are length-bucketed.** A batch pads to its longest row: on the real
+    mixture at batch 32, random batching computes 4.43x the real tokens (one
+    1,300-token imdb review among 31 short tickets); bucketing brings that to
+    1.43x, against a 1.03x floor (ADR-017).
 
-    Sorting happens inside a shuffled *window*, not globally: a globally sorted
-    epoch would feed every short example before every long one, which correlates
-    batch composition with training order and with source. A window of
-    `bucket_window` batches is long enough to make batches homogeneous and short
-    enough that the order stays effectively random. Batch order is shuffled again
-    afterwards so length does not track step number.
+    Sorting happens within a window of `bucket_window` batches, not globally, so
+    length does not correlate with training order or source; batch order is then
+    shuffled.
     """
 
     def __init__(
@@ -147,9 +132,8 @@ class ModeBatcher:
     def length_of(example: Example) -> int:
         """Character count as a proxy for token count.
 
-        Tokenising twice -- once to bucket and once to collate -- would cost more
-        than the padding it saves. Characters and tokens correlate closely enough
-        that the buckets land at 1.43x against a 1.03x theoretical floor.
+        Tokenising twice would cost more than the padding it saves, and characters
+        track tokens closely enough (1.43x against a 1.03x floor).
         """
         return len(str(example.state))
 
@@ -175,8 +159,7 @@ class ModeBatcher:
                         for i in range(0, len(chunk), self.batch_size)
                     )
 
-        # Seeded on the epoch so the order differs between epochs and still
-        # reproduces on a re-run.
+        # Seeded on the epoch: differs between epochs, reproduces on a re-run.
         random.Random(self.seed + epoch).shuffle(batches)
         yield from (b for b in batches if b)
 
@@ -232,11 +215,8 @@ class DecisionCollator:
                     )
                 soft_targets[i, : n_candidates[i]] = torch.tensor(e.soft_target)
 
-        # Noul is ordinal too, and more explicitly so than Score: its prompt
-        # says "0 = certainly no, 8 = certainly yes" and its target is one of
-        # the two ends. Without this, predicting rating 4 when the truth is 8 is
-        # penalised exactly as hard as predicting 0 -- which is the failure the
-        # ordinal term exists to prevent, on the readout where it matters most.
+        # Noul is ordinal too ("0 = certainly no, 8 = certainly yes"): without
+        # this, rating 4 against a truth of 8 costs as much as rating 0.
         ordinal = torch.tensor(
             [e.question.type in ("score", "noul") for e in examples], dtype=torch.bool
         )
@@ -269,9 +249,8 @@ class DecisionCollator:
             max_length=self.max_seq_len,
             add_special_tokens=False,
         )
-        # The scored position is the last *real* token, which right-padding moves
-        # away from `seq - 1`. Derive it from the mask rather than from len(text):
-        # truncation can have shortened the row.
+        # The last real token, from the mask rather than len(text): truncation
+        # may have shortened the row.
         out["last_positions"] = out["attention_mask"].sum(dim=1).long() - 1
         if (out["last_positions"] < 0).any():
             raise ValueError("a prompt encoded to zero tokens")

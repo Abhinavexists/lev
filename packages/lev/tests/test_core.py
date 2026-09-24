@@ -157,9 +157,8 @@ class TestSchemaValidation:
 
 class TestOptionCap:
     def test_generous_tokenizer_still_routes_above_the_cap_to_mode_b(self):
-        """Qwen3.5 encodes every two-letter code up to `BP` as one token, so 60
-        options *are* expressible in Mode A. The cap, not the tokenizer, must
-        decide -- that regime was never trained and scored 0.291 on massive."""
+        """An explicit `max_label_options` forces Mode B even when the tokenizer
+        can express every code (Qwen3.5 encodes codes up to `BP` as one token)."""
         from string import ascii_uppercase
 
         from conftest import FakeTokenizer
@@ -374,9 +373,8 @@ class TestSkipMultiTokenCodes:
 
 class TestRoutePreviewMatchesServing:
     def test_lev_route_previews_the_mode_the_server_uses(self, tmp_path, monkeypatch, capsys):
-        """`lev route` exists to preview serving. A 60-option Choice is Mode A
-        when served (the tokenizer can express 60 codes); a preview defaulting to
-        the 26-option training threshold reported Mode B."""
+        """A 60-option Choice is Mode A when served, since the tokenizer can
+        express 60 codes, so the preview must say Mode A too."""
         import json
         import sys
         import types
@@ -404,7 +402,7 @@ class TestRoutePreviewMatchesServing:
         assert "mode A" in capsys.readouterr().out
 
     def test_lev_route_prints_a_mode_b_route_without_codes(self, tmp_path, monkeypatch, capsys):
-        """A Mode B route has no label codes; printing one used to raise TypeError."""
+        """A Mode B route has no label codes to print."""
         import json
         import sys
         import types

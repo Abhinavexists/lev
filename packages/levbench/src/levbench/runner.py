@@ -1,8 +1,7 @@
 """Backend-agnostic evaluation runner.
 
-Both backends expose the same `system_one(state, questions)` call and return the
-same answer types, so the benchmark code below is written once and the client is
-swapped. That interchangeability is the whole point of the vendor's adapter.
+Every backend exposes the same `system_one(state, questions)` call and answer
+types, so the benchmark is written once and only the client changes.
 """
 
 from __future__ import annotations
@@ -25,8 +24,8 @@ load_dotenv()
 class CallResult:
     answers: dict[str, Any]
     seconds: float
-    # The model the server says answered. Compared against the requested model
-    # so a silently-substituted default cannot masquerade as the one asked for.
+    # The model the server reports; compared with the requested one to catch a
+    # silently substituted default.
     served_by: str
     input_tokens: int
     output_tokens: int
@@ -77,13 +76,11 @@ class EvalReport:
         return {c.served_by for c in self.calls}
 
 
-#: A locally served `/v1/systemone` implementation, if you do not override it.
 DEFAULT_LOCAL_BASE_URL = "http://localhost:8000"
 
 
-# A self-hosted server may be scaling from zero: Modal's cold start for the 4B
-# model measured 20-55 s, against the SDK's 10 s default. The first move of a
-# demo, or the first item of an eval, must not fail on that.
+# A self-hosted server may be scaling from zero: Modal's 4B cold start measured
+# 20-55 s, against the SDK's 10 s default.
 DEFAULT_LOCAL_TIMEOUT = 120.0
 
 
@@ -111,13 +108,11 @@ def build_client(
             base_url = base_url or DEFAULT_LOCAL_BASE_URL
         from typesafe_sdk import TypeSafeClient
 
-        # A local server runs whatever checkpoint it loaded; asking for
-        # `jev-latest` there is meaningless, so leave the label to the server
-        # and correct it from the response below.
+        # A local server serves whatever it loaded; `run_eval` corrects the
+        # label from the response.
         resolved = model or ("jev-latest" if backend == "jev" else "local")
-        # Must be passed at construction -- `system_one` defaults `model=None`,
-        # which makes the server pick, so omitting it here would silently
-        # benchmark whatever the default is while labelling it `resolved`.
+        # Set at construction: `system_one` defaults to `model=None`, which lets
+        # the server pick and would label its default as `resolved`.
         kwargs: dict[str, Any] = {"model": resolved}
         if timeout is not None:
             kwargs["timeout"] = timeout
@@ -125,14 +120,11 @@ def build_client(
             kwargs["timeout"] = DEFAULT_LOCAL_TIMEOUT
         if base_url:
             kwargs["base_url"] = base_url
-            # Never forward the real Jev credential to a non-default host. The
-            # SDK always sends `Authorization: Bearer <key>`, so reusing
-            # TYPESAFE_API_KEY here would hand it to whatever server the user
-            # pointed at. Open reproductions need no credential at all; anyone
-            # fronting one with auth sets LEVBENCH_LOCAL_API_KEY explicitly.
-            # `or`, not a get() default: a variable that is *set but empty* --
-            # which is what copying .env.example gives you -- must fall back too,
-            # or the SDK sends a malformed `Authorization: Bearer ` header.
+            # Never forward TYPESAFE_API_KEY to a non-default host: the SDK always
+            # sends `Authorization: Bearer <key>`. A server behind auth takes
+            # LEVBENCH_LOCAL_API_KEY. `or` rather than a get() default, so a
+            # set-but-empty variable (as copied from .env.example) also falls
+            # back instead of sending a malformed `Bearer ` header.
             kwargs["api_key"] = os.environ.get("LEVBENCH_LOCAL_API_KEY") or "local"
         return TypeSafeClient(**kwargs), resolved
 
@@ -142,8 +134,7 @@ def build_client(
         resolved = model or "claude-opus-5"
         client = SystemOneAdapterClient(
             structured_outputs=True,
-            # Ask for full distributions, not just an argmax -- calibration
-            # metrics are meaningless without them.
+            # Full distributions, not an argmax: calibration metrics need them.
             llm_answer_mode="probabilities",
             normalize_probabilities=True,
             n_retry_malformed_structure=2,
@@ -156,14 +147,12 @@ def build_client(
 
 
 def _token_count(usage: Any, total_field: str, base_field: str) -> int:
-    """Read a token count, refusing to guess when the API reported nothing.
+    """Read a token count, preferring the adapter's `*_total` field.
 
-    The adapter's Usage adds `*_total` fields covering retried attempts, which
-    is what actually gets billed; the real SDK's Usage has only the base
-    fields, and types them `Optional[int]`. Both are checked with `is not
-    None` rather than truthiness, because a genuine 0 is a real measurement
-    and must not be confused with an absent one -- silently substituting 0
-    would book the call as free and drag the headline cost down.
+    `*_total` covers retried attempts, which is what gets billed; the SDK has
+    only the `Optional[int]` base field. A genuine 0 is a real count, so the
+    check is `is not None`, and an absent count raises rather than booking the
+    call as free.
     """
     for field_name in (total_field, base_field):
         value = getattr(usage, field_name, None)
@@ -179,8 +168,7 @@ def _usage_ints(usage: Any) -> tuple[int, int, int, int]:
     """Pull tokens and retry counts, tolerating both Usage shapes."""
     inp = _token_count(usage, "input_tokens_total", "input_tokens")
     out = _token_count(usage, "output_tokens_total", "output_tokens")
-    # Retry counters are adapter-only and genuinely absent on the real SDK,
-    # where 0 is the correct reading: Jev needs no schema retries.
+    # Adapter-only counters; absent on the SDK, where 0 is correct.
     schema = int(getattr(usage, "n_retries_malformed_structure", 0) or 0)
     transient = int(getattr(usage, "n_retries", 0) or 0)
     return inp, out, schema, transient
@@ -210,11 +198,10 @@ def run_eval(
     questions: dict[str, Any],
     concurrency: int = 1,
 ) -> EvalReport:
-    """Score every item. `concurrency` > 1 sends that many requests at once.
+    """Score every item, with up to `concurrency` requests in flight.
 
-    Per-call latency is unchanged by concurrency -- each `CallResult` still
-    times its own round trip -- but wall time falls, which is what a server
-    accepting concurrent inputs is for. Results keep item order.
+    Each call still times its own round trip, so concurrency lowers wall time,
+    not per-call latency. Results keep item order.
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -270,9 +257,8 @@ def _format_summary(report: EvalReport) -> list[str]:
     if n:
         lines.append(f"latency p50        {report.pct(0.5):.3f}s")
         lines.append(f"latency mean       {statistics.mean(report.latencies):.3f}s")
-        # A "p95" over a couple of dozen calls is just the second-slowest one,
-        # and on a cold connection that is mostly setup jitter. Report the tail
-        # honestly rather than dressing an order statistic up as a percentile.
+        # Under 100 calls a p95 is one order statistic, mostly connection
+        # setup; report the slowest call instead.
         if n >= 100:
             lines.append(f"latency p95        {report.pct(0.95):.3f}s")
         else:

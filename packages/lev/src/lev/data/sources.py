@@ -1,35 +1,28 @@
 """The training sources: public classification datasets, cast as typed questions.
 
-Every source is a plain labelled-classification dataset, deliberately. A Jev-like
-model is not learning world knowledge, it is learning to put *calibrated mass on a
-candidate set*, so the supervision it needs is a gold label plus an explicit option
-set -- which is exactly what a classification corpus is.
+The model learns to put calibrated mass on a candidate set, not world
+knowledge, so a gold label plus an explicit option set (a classification corpus)
+is the supervision it needs. The registry covers:
 
-Three things the registry has to get right:
+  primitives    Choice, Score and Noul all need supervision: a Choice-only
+                mixture teaches nothing about the 9-rating Noul readout or
+                Score's ordinal structure.
+  large sets    banking77 (77 intents) and clinc_oos (151) are the only sources
+                above 26 options; their full sets are the Mode B head's training
+                data, weighted up by `default_weights` (`MODE_B_SOURCES`).
+  cleanliness   every id is checked against the ADR-009 block list at import.
 
-  primitive coverage  Choice, Score and Noul all need supervision. A Choice-only
-                      mixture teaches nothing about the 9-rating-token Noul
-                      readout or the ordinal structure of Score.
-  Mode B coverage     banking77 (77 intents) and clinc_oos (151) are the *only*
-                      sources whose option sets overflow single-token label codes,
-                      so without them Mode B -- the differentiator -- never trains.
-                      `default_weights` weights them up; see `MODE_B_SOURCES`.
-  cleanliness         every id is checked against the ADR-009 block list when this
-                      module is imported, not when a loader runs.
+Label names come from each dataset's `ClassLabel` rather than being retyped: a
+reordered list would silently become a wrong gold answer.
 
-Label names come from the dataset's own `ClassLabel` feature rather than being
-retyped here: a silently reordered label list becomes a wrong gold answer, and no
-offline test would catch it.
+Every id is parquet-backed and loads under `datasets>=5`, which no longer runs
+dataset scripts. `CogComp/trec` and `takala/financial_phrasebank` have no parquet
+mirror with their label names, so they are omitted; `PolyAI/banking77` is
+script-backed, so `legacy-datasets/banking77` (same corpus, `ClassLabel` intact)
+is used instead.
 
-Every id is parquet-backed and loads under `datasets>=5`, which no longer executes
-dataset scripts. That ruled out three otherwise-good candidates. `CogComp/trec` and
-`takala/financial_phrasebank` have no parquet mirror carrying their label names, and
-are omitted rather than pinned to a reordered third-party copy. `PolyAI/banking77` is
-script-backed, so the registry uses `legacy-datasets/banking77` -- the same corpus
-with its `ClassLabel` intact.
-
-**Loadability is not covered by the test suite**, which injects fake loaders so it
-can run offline. A dead or renamed id surfaces only on the next real `data build`.
+**Loadability is not tested**: the suite injects fake loaders, so a dead or
+renamed id surfaces only on the next real `data build`.
 """
 
 from __future__ import annotations
@@ -46,21 +39,18 @@ from ..types import Choice, Noul, Question, Score
 from .contamination import assert_clean
 from .mixture import Augment, Example
 
-# Sources with more options than the Mode A policy cap are the Mode B training
-# signal. The cap, not the tokenizer, draws this line -- see `labels.LABEL_OPTION_CAP`.
+# Above this many options a source is a large taxonomy (`labels.LABEL_OPTION_CAP`).
 SINGLE_TOKEN_CODE_CEILING = LABEL_OPTION_CAP
 
-# Sources known to exceed the ceiling but whose label names are read from the
-# dataset at load time, so `label_names` is None and the count is not visible
-# in the registry.
+# Large taxonomies whose label names are read at load time, so the registry
+# cannot count them.
 _LARGE_OPTION_SETS = frozenset({"banking77", "clinc_oos"})
 
 Primitive = Literal["choice", "score", "noul"]
 
-# Mode B's share of the mixture. Deliberately not proportional to corpus size:
-# only two of the nine sources exercise the candidate-path head, so a
-# size-weighted mixture would give it a few percent and it would not train.
-# See ADR-013.
+# Mode B's share of the mixture, not proportional to corpus size: only 2 of the
+# 29 sources train the candidate-path head, which a size-weighted mixture would
+# starve (ADR-013).
 MODE_B_SHARE = 0.25
 
 
@@ -74,12 +64,11 @@ Reader = Callable[[dict, random.Random], Row | None]
 class SourceSpec:
     """One HuggingFace dataset, and how to read a typed question out of it.
 
-    `instructions` is the canonical wording, used for the held-out splits.
-    `paraphrases` are alternatives the training mixture samples from, and
-    `negations` (Noul only) ask the opposite question so the target flips. With
-    one fixed wording per source the state alone identified the answer set and
-    the model learned to ignore the question -- measured on aegis2, where
-    "is this unsafe?" and "is this safe?" returned the same number. ADR-020.
+    `instructions` is the canonical wording, used for the held-out splits;
+    training samples `paraphrases`, and `negations` (Noul only) flip the target.
+    With one fixed wording per source the model learned to ignore the question:
+    on aegis2 "is this unsafe?" and "is this safe?" returned the same number
+    (ADR-020).
 
     `reader` handles sources whose rows are not `text_field` + `label_field`:
     QA sets with per-row options, sentence pairs, nested rating annotations.
@@ -103,17 +92,15 @@ class SourceSpec:
 
     @property
     def is_mode_b(self) -> bool:
-        """True when the option set is over the Mode A cap."""
+        """True for a large taxonomy (more than 26 options)."""
         if self.name in _LARGE_OPTION_SETS:
             return True
         return bool(self.label_names) and len(self.label_names) > SINGLE_TOKEN_CODE_CEILING
 
 
-# --- Per-row readers -------------------------------------------------------
-#
-# Each returns `(state, options, target)` or a list of them, or None to skip the
-# row. `options` is None when the source has a fixed label set. The `rng` is the
-# loader's seeded stream, so a reader that shuffles stays reproducible.
+# Per-row readers return `(state, options, target)`, a list of them, or None to
+# skip the row. `options` is None for a fixed label set. `rng` is the loader's
+# seeded stream, so shuffling readers stay reproducible.
 
 
 def _read_race(row: dict, rng: random.Random) -> Row | None:
@@ -196,10 +183,10 @@ def _read_pair(first: str, second: str, adversarial: float = 0.0) -> Reader:
     """Sentence pairs with a 0/1 paraphrase label.
 
     With `adversarial` > 0, that fraction of positive pairs also yields a
-    negative: the second sentence with two words exchanged. mrpc and qqp
-    reward lexical overlap; PAWS is built from exactly these word-swapped,
-    high-overlap non-paraphrases, and the first model learned the shortcut
-    (S1Bench paws 0.612). PAWS itself is evaluation data and blocked.
+    negative with two words of the second sentence exchanged. mrpc and qqp
+    reward lexical overlap; PAWS (blocked evaluation data) is built from exactly
+    these high-overlap non-paraphrases, and the second run learned the shortcut
+    (S1Bench paws 0.612).
     """
 
     def reader(row: dict, rng: random.Random) -> list[Row] | None:
@@ -250,10 +237,9 @@ def _read_strategyqa(row: dict, rng: random.Random) -> Row | None:
 def yes_no_from_choices(reader: Reader) -> Reader:
     """Turn a multiple-choice reader into a yes/no one.
 
-    Each MC row yields two Noul rows: the gold option proposed ("yes") and one
-    wrong option proposed ("no"). This is passage-grounded yes/no supervision
-    without any new corpus, and it puts "yes" on a factual axis rather than a
-    sentiment one -- the polarity the first model never learned.
+    Each MC row yields two Noul rows: the gold option proposed ("yes") and a
+    wrong one ("no"). Grounded yes/no supervision with no new corpus, putting
+    "yes" on a factual axis rather than a sentiment one.
     """
 
     def wrapped(row: dict, rng: random.Random) -> list[Row] | None:
@@ -286,8 +272,8 @@ def _read_toxigen(row: dict, rng: random.Random) -> Row | None:
 
 
 def _read_beavertails(row: dict, rng: random.Random) -> Row | None:
-    # `is_safe` True -> yes. A "yes = good" Noul, paired in the registry with a
-    # negation ("is this response harmful?") so polarity is not a constant.
+    # `is_safe` True -> yes; the registry's negation keeps polarity from being
+    # constant.
     return {"prompt": row["prompt"], "response": row["response"]}, None, int(bool(row["is_safe"]))
 
 
@@ -471,7 +457,7 @@ REGISTRY: dict[str, SourceSpec] = {
         label_names=SNIPS_INTENTS,
         reader=_read_snips,
     ),
-    # Mode B: option sets over the Mode A cap.
+    # Large taxonomies: their full sets train the Mode B head.
     "banking77": SourceSpec(
         name="banking77",
         hf_id="legacy-datasets/banking77",
@@ -718,11 +704,9 @@ def adjacency_map() -> dict[str, frozenset[str]]:
 def _noul_rating(label: int) -> int:
     """Map a binary class onto the ends of the 0-8 rating scale.
 
-    A Noul is not read out as two options, it is read out as nine rating tokens
-    and collapsed by `noul_probability`. So the supervision index is a *rating*,
-    and passing the raw class through would train "yes" as rating 1 -- which
-    `noul_probability` reads back as P(yes) = 0.125. The model would be learning
-    to answer no on every positive example while the loss looked healthy.
+    Noul is read from nine rating tokens, so the target is a rating: passing the
+    raw class through would train "yes" as rating 1, which `noul_probability`
+    reads back as P(yes) = 0.125.
     """
     return 0 if int(label) == 0 else len(NOUL_RATING_TOKENS) - 1
 
@@ -730,8 +714,8 @@ def _noul_rating(label: int) -> int:
 def humanise(label: str) -> str:
     """`card_arrival` -> `card arrival`; `Sci/Tech` is left alone.
 
-    banking77 and clinc_oos ship snake_case intent ids. Feeding those to the
-    model as option text trains it on a token distribution no real request uses.
+    banking77 and clinc_oos ship snake_case intent ids, which no real request
+    would use as option text.
     """
     spaced = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", label)
     return re.sub(r"[_\-]+", " ", spaced).strip()
@@ -776,14 +760,11 @@ def load_source(
 ) -> Iterator[Example]:
     """Yield Examples from one source, sampling rather than truncating.
 
-    `limit` **shuffles first**. A head slice looks equivalent and is not: most of
-    these corpora ship grouped by label, so `imdb[:400]` is 400 negative reviews
-    and `dbpedia_14[:400]` is one class out of fourteen. Training on that teaches
-    a prior on the label and it is invisible downstream, because every split
-    drawn from it is biased the same way and the splits still agree with each
-    other. The shuffle is seeded, so the sample stays reproducible.
+    `limit` **shuffles first** (seeded): most of these corpora ship grouped by
+    label, so `imdb[:400]` is 400 negative reviews, and every split drawn from a
+    head slice is biased the same way, so nothing downstream notices.
 
-    `load_dataset` is injectable purely so the tests can run without a network.
+    `load_dataset` is injectable so tests run offline.
     """
     if load_dataset is None:
         from datasets import load_dataset  # noqa: PLC0415
@@ -837,8 +818,8 @@ def load_source(
                     raise ValueError(f"{spec.name}: reader gave no options and spec has no labels")
                 yield emit(state, fixed_question, target, len(names), i)
             else:
-                # Per-row options; duplicates would collapse in the criteria map
-                # and silently shift the gold index.
+                # Duplicate options would collapse in the criteria map and shift
+                # the gold index.
                 if len(set(options)) != len(options):
                     continue
                 question = Choice(
@@ -853,20 +834,18 @@ def _blank(state) -> bool:
     return not any(str(v).strip() for v in state.values())
 
 
-# The smallest option set a large-taxonomy source is cut down to. Between this
-# and the tokenizer's single-token limit the rows train Mode A on sets far
-# larger than any small source offers -- the regime massive-en-US lives in,
-# where the first instruct model trailed the frozen backbone by 8 points.
+# The smallest set a large taxonomy is cut down to, so Mode A trains on sets far
+# larger than any small source offers: massive-en-US's regime, where the first
+# instruct model trailed the frozen backbone by 8 points.
 LARGE_SET_MIN_OPTIONS = 15
 
 
 def augmentation_map() -> dict[str, Augment]:
     """Per-source training augmentation, read off the registry.
 
-    Large-taxonomy sources keep their full option set half the time -- that is
-    the Mode B head's training data -- and are otherwise cut down to anywhere
-    from `LARGE_SET_MIN_OPTIONS` up, so the label-token readout also learns
-    large lettered sets. Everything else may be cut down to two. ADR-026.
+    Large taxonomies keep their full option set half the time (the Mode B head's
+    data) and are otherwise cut to `LARGE_SET_MIN_OPTIONS` or more, so Mode A
+    also learns large lettered sets. Everything else may be cut to two (ADR-026).
     """
     return {
         name: Augment(
@@ -882,9 +861,8 @@ def augmentation_map() -> dict[str, Augment]:
 def default_weights() -> dict[str, float]:
     """Sampling weight per source: `MODE_B_SHARE` to Mode B, the rest by primitive.
 
-    The remainder is split evenly across the three primitives, then evenly within
-    each, so no readout is starved regardless of how many sources happen to
-    supply it.
+    The remainder splits evenly across the three primitives, then within each,
+    so no readout is starved by having few sources.
     """
     mode_b_sources = sorted(MODE_B_SOURCES)
     sources_by_primitive: dict[str, list[str]] = {}
@@ -898,7 +876,6 @@ def default_weights() -> dict[str, float]:
         for name in group:
             weights[name] = per_primitive / len(group)
 
-    # Normalise against float drift so the mixture's sum-to-one check cannot
-    # fail on rounding alone.
+    # Renormalise so float drift cannot fail the mixture's sum-to-one check.
     total = sum(weights.values())
     return {name: weight / total for name, weight in sorted(weights.items())}

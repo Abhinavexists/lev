@@ -1,25 +1,21 @@
 """Benchmark task sets: a built-in smoke fixture, and file-backed eval sets.
 
-The built-in set is 24 hand-labelled support tickets. Its labels were authored
-by hand for this repository -- not a vendor benchmark, not an independent public
-dataset. Items were chosen to be unambiguous; the `frustration` levels are the
-softest of the three and should be read as the weakest signal.
+The built-in set is 24 support tickets labelled by hand for this repository,
+not a public benchmark. Items were chosen to be unambiguous; `frustration` is
+the softest of the three labels.
 
-**24 items cannot detect a training improvement.** The 95% interval on a single
-accuracy estimate there is roughly +/-17 points, so a run that moved accuracy by
-5 points is indistinguishable from one that moved it by nothing. Treat the
-built-in set as a smoke fixture -- does the server answer, are the types right --
-and point `--tasks` at a real held-out file before reading anything into a
-number. `lev data eval` writes one from the mixture's test split.
+**24 items cannot detect a training improvement:** the 95% interval on one
+accuracy estimate is about +/-16 points. Use the built-in set as a smoke fixture
+(does the server answer, are the types right) and point `--tasks` at a held-out
+file for real numbers; `lev data eval` writes one from the mixture's test split.
 
 A task file is JSON:
 
     {"questions": {"<name>": {"type": "choice"|"score"|"noul", ...}},
      "items": [{"state": "...", "labels": {"<name>": <truth>}}]}
 
-levbench reads that file and nothing else. It deliberately does not import
-`lev`: a measuring instrument that imports the thing it measures is not an
-instrument (ADR-010), so the exporter lives on the model side of the fence.
+levbench reads that file and nothing else. It does not import `lev`, so the
+exporter lives on the model side (ADR-010).
 """
 
 from __future__ import annotations
@@ -256,10 +252,9 @@ def dataset(path: str | Path | None = None) -> tuple[list[Any], dict[str, Any]]:
 def detectable_difference(n: int, baseline: float = 0.8, z: float = 1.96) -> float:
     """Roughly the smallest accuracy change `n` items can distinguish.
 
-    The half-width of the normal-approximation interval for one proportion, so
-    comparing two runs needs a wider margin still. Use it to decide whether a
-    task set is large enough to be worth reading: the built-in 24-item fixture
-    lands around +/-16 points, which cannot resolve any plausible training gain.
+    The half-width of the normal-approximation interval for one proportion;
+    comparing two runs needs a wider margin still. The built-in 24-item fixture
+    lands around +/-16 points.
     """
     if n <= 0:
         return 1.0

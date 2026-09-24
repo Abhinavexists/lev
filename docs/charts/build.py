@@ -4,7 +4,7 @@
     uv run python docs/charts/build.py
 
 Inputs, all checked in:
-  logs/jev-s1bench-*.txt            Jev on the S1Bench task files, our harness
+  logs/jev-s1bench-*.txt            Jev on the S1Bench task files, through levbench
   logs/lev-s1bench-final.txt        lev on the same files, same laptop
   history.json                      lev iterations and speed measurements, each
                                     with the FINDINGS section it was recorded in
@@ -71,9 +71,6 @@ def table(headers, rows) -> str:
         '<details class="tbl"><summary>Data</summary>'
         f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></details>"
     )
-
-
-# --- charts ----------------------------------------------------------------
 
 
 def leaderboard(rows, vmin=0.2, vmax=0.8) -> str:
@@ -227,9 +224,6 @@ def line(xs, values, refs, ymin, ymax) -> str:
         )
     out.append("</svg>")
     return "".join(out)
-
-
-# --- page ------------------------------------------------------------------
 
 
 def size_label(params_m) -> str:

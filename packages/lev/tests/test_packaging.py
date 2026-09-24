@@ -1,9 +1,8 @@
-"""Guards against the repo's own configuration drifting from its documentation.
+"""Guards against the repo's configuration drifting from its documentation.
 
-Every documented command is run from the repo root, so an extra that exists only
-on a member package is not reachable by the command the docs give you. That is a
-real bug shipped once already: `docs/TRAINING.md` said `uv sync --extra serve`
-while the root forwarded only `train`.
+Documented commands run from the repo root, so an extra defined only on a member
+package is unreachable (`docs/TRAINING.md` once documented `uv sync --extra serve`
+while the root forwarded only `train`).
 """
 
 from __future__ import annotations
@@ -68,9 +67,8 @@ def test_known_extras_are_present(expected):
 def _inspect_cli(tool: str) -> tuple[set[str], dict[str, set[str]]]:
     """Build the real parser and read back its subcommands and option choices.
 
-    Introspection rather than a regex over the source: a regex breaks as soon
-    as a choice list moves into a constant, and it never checked that the
-    parser accepts the value -- only that the text appeared in a file.
+    Introspection, not a regex over the source, so it checks what the parser
+    actually accepts.
     """
     import argparse
     import importlib
@@ -116,11 +114,7 @@ def _documented_flag_values(flag: str) -> dict[str, set[str]]:
 
 
 def test_every_documented_backend_exists():
-    """A `--backend x` in the docs must be a choice the CLI actually accepts.
-
-    Same failure shape as the missing `serve` extra: the docs tell you to run
-    something the tool rejects.
-    """
+    """A `--backend x` in the docs must be a choice the CLI accepts."""
     _, choices = _inspect_cli("levbench")
     accepted = choices["--backend"]
     for value, where in sorted(_documented_flag_values("--backend").items()):
@@ -136,9 +130,8 @@ CODE_SPANS = re.compile(r"```[a-z]*\n(.*?)```|`([^`\n]+)`", re.S)
 def _documented_commands(tool: str) -> dict[str, set[str]]:
     """Every `uv run <tool> <sub>` the docs tell you to run.
 
-    Only inside code -- fenced blocks and inline backticks. Scanning prose too
-    matches things like "levbench must not import lev" and turns a useful guard
-    into a nuisance.
+    Only inside fenced blocks and inline backticks; prose like "levbench must
+    not import lev" would otherwise match.
     """
     found: dict[str, set[str]] = {}
     sources = [ROOT / "README.md", ROOT / "Makefile", ROOT / "CONTRIBUTING.md"]
@@ -163,12 +156,7 @@ def _documented_commands(tool: str) -> dict[str, set[str]]:
 
 @pytest.mark.parametrize("tool", ["lev", "levbench"])
 def test_every_documented_subcommand_is_registered(tool):
-    """The docs are the interface. A command they name has to parse.
-
-    Same failure shape as the missing `serve` extra, and it recurs every time a
-    CLI grows: the docs get the new command and the parser does not, or the
-    command gets renamed and the docs keep the old spelling.
-    """
+    """Every command the docs name has to parse."""
     registered, _ = _inspect_cli(tool)
 
     for name, where in sorted(_documented_commands(tool).items()):

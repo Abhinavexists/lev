@@ -19,13 +19,14 @@ test the parts most likely to contain bugs on a laptop.
 git clone <this repo> && cd lev
 curl -LsSf https://astral.sh/uv/install.sh | sh   # if you don't have uv
 make setup
-make test          # 68 tests, no GPU, no network, no API keys
+make test          # the full suite: no GPU, no network, no API keys
 ```
 
-Expected: `68 passed`. If that works, everything below is optional until you train.
+Tests that need torch skip on a bare `uv sync`; the rest must pass. If they do,
+everything below is optional until you train.
 
 ```bash
-make plan                      # the H100 budget for the 4B preset
+make plan PRESET=4b-instruct   # the H100 budget for the released preset
 make plan PRESET=9b            # ...or any other preset
 uv run lev --help
 uv run levbench --help
@@ -58,8 +59,8 @@ uv sync --extra modal
 uv run modal setup
 ```
 
-The default backbone is public, so **no credential is needed**. If you point at a
-gated one, export a token and the app passes it through:
+The backbones are public, so **no credential is needed**. For a gated one,
+export a token and the app passes it through:
 
 ```bash
 export HF_TOKEN=hf_...
@@ -75,26 +76,16 @@ export LEV_HF_SECRET=huggingface
 ### The order
 
 ```bash
-modal run modal/app.py::download --model-id Qwen/Qwen3.5-4B-Base   # once, ~8 GB
-modal run modal/app.py::build_data --limit-per-source 20000        # CPU, no GPU
-make smoke                                                         # ~5 min H100
-make train PRESET=4b                                               # ~2 h H100
-make calibrate PRESET=4b                                           # the temperatures
-modal serve modal/app.py                                           # /v1/systemone
+modal run modal/app.py::download --model-id Qwen/Qwen3.5-4B  # once, ~8 GB
+modal run modal/app.py::build_data --limit-per-source 20000   # CPU, no GPU
+make smoke                                                    # ~5 min H100
+make train PRESET=4b-instruct                                 # ~2 h H100
+make calibrate PRESET=4b-instruct                             # the temperatures
+make deploy PRESET=4b-instruct                                # /v1/systemone
 ```
 
-Warm the model cache once (~8 GB into a Volume, so later runs skip the download):
-
-```bash
-modal run modal/app.py::download --model-id Qwen/Qwen3.5-4B-Base
-```
-
-Build the data on **CPU**, not on the H100 — this is downloads, and paying GPU rates
-to wait on a CDN is the most avoidable line on the bill:
-
-```bash
-modal run modal/app.py::build_data --limit-per-source 20000
-```
+`download` warms the model cache (~8 GB into a Volume). `build_data` runs on CPU:
+it is downloads, and there is no reason to pay GPU rates to wait on a CDN.
 
 Then **always run the smoke test before the real thing**:
 
@@ -103,11 +94,9 @@ make smoke      # 0.8B, 40 steps, ~5 min of H100
 ```
 
 It exercises the whole path — image, volumes, **both readout modes**, the loss, and a
-checkpoint write — and fails if only one mode was covered, so Mode B cannot ship
-untested. If the data volume is empty it builds a small mixture first, so a fresh
-workspace needs exactly this one command — though it builds that mixture *on the
-GPU*, so for a real run do `build_data` first. Finding a bug here costs minutes;
-finding it most of the way through the real run does not.
+checkpoint write — and fails if only one mode was covered. If the data volume is
+empty it builds a small mixture first, on the GPU, so for a real run do
+`build_data` first.
 
 You can prove the same path with no GPU and no Modal account at all:
 
@@ -123,12 +112,13 @@ make smoke-local STEPS=20     # 0.8B on CPU; slow, but it is the real loop
 | `lev-checkpoints` | adapters, calibration profiles | written *during* training so a preemption is survivable |
 | `lev-data` | prepared mixtures | reused across runs and ablations |
 
-`modal serve` exposes whichever preset `SERVE_PRESET` names in `modal/app.py`
-(`4b` by default) and falls back to the untrained backbone, loudly, if that
-preset has no checkpoint yet — serving uncalibrated is a legitimate first step,
-so it warns rather than refusing to start. `GET /health` reports which
-checkpoint was resolved, whether a Mode B head loaded, and whether a calibration
-profile is in effect. Check it before reading a number off any eval.
+The server exposes the preset named by `LEV_SERVE_PRESET` (`make deploy PRESET=...`
+sets it), else `SERVE_PRESET` in `modal/app.py` (`4b`). With no checkpoint for
+that preset it serves the untrained backbone with a warning. `GET /health`
+reports which checkpoint resolved, whether a Mode B head loaded, and whether a
+calibration profile is in effect; check it before reading a number off any eval.
+`make serve` gives an ephemeral dev URL that any other `modal run` on the app
+takes over, so use `make deploy` for anything you benchmark.
 
 ---
 
@@ -141,7 +131,7 @@ uv sync --extra train
 uv run python -c "
 from lev.train.config import PRESETS
 from lev.train.loop import run_training
-run_training(PRESETS['4b'], data_dir='data', model_cache='~/.cache/huggingface')
+run_training(PRESETS['4b-instruct'], data_dir='data/mixture', model_cache='~/.cache/huggingface')
 "
 ```
 
@@ -157,10 +147,10 @@ run_training(PRESETS['4b'], data_dir='data', model_cache='~/.cache/huggingface')
 | OOM at 4 k context | Check `make plan` headroom. Below ~20 GB, `validate()` should already have refused |
 | LoRA loss flat, nothing learns | `enable_input_require_grads()` missing alongside gradient checkpointing — activations arrive with no `grad_fn` and adapters get no gradient |
 | `chunk_gated_delta_rule is falling back to its reference PyTorch implementation` | Speed, not correctness — but 24 of the 32 layers are linear-attention, so it matters. The image installs `flash-linear-attention` for this ([ADR-017](DECISIONS.md#adr-017--batches-are-length-bucketed-and-the-budget-was-wrong-again)) |
-| `causal_conv1d was requested, but nvcc was not found` / `NameError: bare_metal_version` | `causal-conv1d` is a CUDA source build and `debian_slim` has no compiler. It is deliberately not in the image: it would need an `nvidia/cuda:*-devel` base to accelerate only the short depthwise conv. Leave it out |
+| `causal_conv1d was requested, but nvcc was not found` / `NameError: bare_metal_version` | `causal-conv1d` is a CUDA source build; the image uses an `nvidia/cuda:*-devel` base for its compiler. If the build breaks on a version bump, delete that `pip_install` line: runs get slower, not wrong |
 | `ModuleNotMountable` — "lev has no spec - might not be installed?" | A stale `add_local_python_source`, which resolves the package through the local interpreter and so needs it installed in whichever Python runs `modal`. The app mounts the source directory instead; if you see this, your `modal/app.py` predates that fix |
-| `no cache-fork API` | Your `transformers` predates hybrid-cache batch expansion. Upgrade, or run one forward per question (correct, slower) |
-| `No training mixture is defined` | The data volume is empty. `make data` locally, or `modal run modal/app.py::build_data` |
+| The cache fork fails under `prefix_mode="fork"` | It needs `transformers` 5.x (`reorder_cache` on a hybrid cache). Upgrade, or use the default `prefix_mode="single"` |
+| `data directory ... does not exist` | The data volume is empty. `make data` locally, or `modal run modal/app.py::build_data` |
 | `labels appear outside train but never in it` | `--limit-per-source` is too small for a 77- or 151-option source. Raise it |
 | `never show some of the options their question offers` | Same cause, caught earlier: the sample never contains some options at all |
 | `Dataset scripts are no longer supported` | A source without a parquet mirror. `datasets>=5` dropped script execution; see the source table in [TRAINING.md](TRAINING.md) |

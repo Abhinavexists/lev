@@ -1,18 +1,9 @@
-"""The contamination guard. This is a build requirement, not hygiene.
+"""The contamination guard: no S1Bench evaluation subset may reach training.
 
-Our one differentiating claim is calibration measured on S1Bench's evaluation
-subsets. Three models on that leaderboard self-declare training contamination, and
-their numbers cannot be trusted because of it. If any blocked subset reaches our
-training mixture, the number we are competing on becomes worthless -- and the
-failure is silent, because a contaminated model looks *better*.
-
-So the guard raises rather than warns, and it runs before training, not after.
-
-Candidate data sources and their known risk:
-  decider's registry (~95 public datasets)  -- CONTAINS several of the thirteen
-  Nimble (2,676 train / 324 test)           -- synthetic contrastive pairs
-  NanoJev observed-event data               -- good for the calibration objective
-  teacher-generated states                  -- safe if the teacher is not shown the thirteen
+A blocked subset in the mixture invalidates every S1Bench number, silently,
+because a contaminated model looks *better*; three models on the leaderboard
+self-declare exactly this. So the guard raises rather than warns, before
+training. decider's registry (~95 public datasets) contains several of the 13.
 """
 
 from __future__ import annotations
@@ -20,11 +11,9 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-# Every S1Bench evaluation subset -- all 13 in `published_jev`, not just the 6
-# that executed in the `s1-fast` run. The other 7 were intended and unrun; they
-# are still evaluation data, and training on them would contaminate any future
-# full-suite comparison. Blocking only what happened to run is how you get a
-# result that looks good and means nothing.
+# All 13 S1Bench evaluation subsets in `published_jev`, not just the 6 the
+# `s1-fast` run executed: the other 7 are still evaluation data for any future
+# full-suite comparison.
 BLOCKED_SUBSETS: frozenset[str] = frozenset(
     {
         # ran in s1-fast
@@ -104,11 +93,10 @@ def normalise(name: str) -> str:
 # Derived from the constants above, so build it once rather than per lookup.
 _BLOCKED_BY_NORMALISED: dict[str, str] = {normalise(s): s for s in BLOCKED_SUBSETS}
 _ALIASES_BY_NORMALISED: dict[str, str] = {normalise(a): t for a, t in _ALIASES.items()}
-# Bare aliases (`massive`, `aegis`, `squad-v2`) as segment sets, so that a
-# re-hosted copy under a new name -- `SetFit/amazon_massive_intent_en-US`,
-# `nvidia/Aegis-AI-Content-Safety-Dataset-1.0` -- is caught the way a blocked
-# subset name inside a longer id already is. Both of those passed the guard
-# before this existed. Org-qualified aliases stay exact-match only.
+# Bare aliases (`massive`, `aegis`, `squad-v2`) as segment sets, so a re-hosted
+# copy under a new name (`SetFit/amazon_massive_intent_en-US`,
+# `nvidia/Aegis-AI-Content-Safety-Dataset-1.0`) is caught like a blocked subset
+# name inside a longer id. Org-qualified aliases stay exact-match only.
 _ALIAS_SEGMENTS: tuple[tuple[frozenset[str], str], ...] = tuple(
     (frozenset(alias.split("-")), target)
     for alias, target in _ALIASES_BY_NORMALISED.items()
@@ -133,8 +121,7 @@ def resolve(name: str) -> str | None:
         if normalised_subset in segments:
             return subset
     # Likewise for a bare alias: every segment of `squad-v2` present, in any order.
-    # Deliberately conservative -- a false block costs one dataset, a miss costs
-    # the result.
+    # Conservative on purpose: a false block costs one dataset, a miss the result.
     for alias_segments, subset in _ALIAS_SEGMENTS:
         if alias_segments <= segments:
             return subset
@@ -154,10 +141,8 @@ def assert_eval_only(dataset_name: str) -> str:
     """The mirror of `assert_clean`: raise unless `dataset_name` *is* a blocked
     subset, and return the subset it resolves to.
 
-    The evaluation harness has to load the thirteen, so it needs a door the
-    training path does not have. Making that door open only onto blocked subsets
-    is what stops it becoming a general-purpose loader -- one that would quietly
-    grow a second route into the mixture and undo the guard it sits beside.
+    The evaluation loader must read the 13, and accepting only blocked subsets
+    keeps it from becoming a second route into the training mixture.
     """
     subset = resolve(dataset_name)
     if subset is None:

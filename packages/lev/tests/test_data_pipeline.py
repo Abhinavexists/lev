@@ -1,9 +1,7 @@
 """The data pipeline: registry, sampling, splits, and the guards around them.
 
-Everything here runs offline: `load_source` takes an injected `load_dataset`, so
-a network would only add a slower test that fails when HF is down. Nothing here
-checks that the real dataset ids still resolve -- a dead or renamed id surfaces
-on the next `lev data build`.
+Offline: `load_source` takes an injected `load_dataset`. Nothing here checks
+that the real dataset ids resolve; a dead id surfaces on the next `lev data build`.
 """
 
 from __future__ import annotations
@@ -89,8 +87,8 @@ class TestRegistry:
     def test_mode_b_gets_a_material_share_of_the_mixture(self):
         weights = default_weights()
         share = sum(weights[n] for n in MODE_B_SOURCES)
-        # Size-proportional weighting would give Mode B a few percent and it
-        # would not learn. This asserts the deliberate over-weighting survives.
+        # Size-proportional weighting would starve Mode B; this keeps the
+        # over-weighting.
         assert share >= 0.2, f"Mode B is only {share:.1%} of the mixture"
 
     def test_weights_are_a_distribution_over_known_sources(self):
@@ -120,12 +118,8 @@ class TestQuestions:
 
 class TestSampling:
     def test_limit_samples_rather_than_truncates(self):
-        """The bug this guards: `imdb[:400]` is 400 negative reviews.
-
-        A head slice of a label-sorted corpus yields one class, trains a prior on
-        the label, and is invisible afterwards because every split drawn from it
-        is skewed identically.
-        """
+        """A head slice of a label-sorted corpus yields one class (`imdb[:400]` is
+        400 negative reviews)."""
         spec = REGISTRY["dbpedia_14"]
         loader = label_sorted_loader(14, 100, text_field="content")
         rows = list(load_source(spec, limit=140, load_dataset=loader))
@@ -138,12 +132,8 @@ class TestSampling:
         assert a == b
 
     def test_noul_labels_land_on_the_ends_of_the_rating_scale(self):
-        """A Noul is read out as nine rating tokens, not two options.
-
-        Passing the raw class through would supervise "yes" as rating 1, which
-        `noul_probability` reads back as P(yes)=0.125 -- the model learns to say
-        no on every positive example and the loss looks fine.
-        """
+        """The raw class would supervise "yes" as rating 1, which
+        `noul_probability` reads back as P(yes) = 0.125."""
         loader = label_sorted_loader(2, 20)
         rows = list(load_source(REGISTRY["imdb"], load_dataset=loader))
         assert {e.target for e in rows} == {0, len(NOUL_RATING_TOKENS) - 1}
@@ -230,11 +220,7 @@ class TestSplits:
             check_coverage(splits)
 
     def test_option_never_observed_at_all_raises(self):
-        """The check a per-label split cannot make on its own.
-
-        If a sample only ever contains 2 of 4 options, both are in train, the
-        first check passes, and the mixture is still junk.
-        """
+        """A sample holding 2 of 4 options passes the in-train check but not this."""
         splits = {
             Split.TRAIN: [make("s", 0, 1), make("s", 1, 2)],
             Split.CALIBRATION: [],
@@ -266,11 +252,8 @@ class TestAbstain:
         return list(build_mixture(spec, loaders))
 
     def test_abstain_examples_carry_a_foreign_state(self, mixture):
-        """Flagging an answerable row `abstain` teaches doubt where there is none.
-
-        The question has to become genuinely unanswerable, which means taking the
-        state away, not labelling the row differently.
-        """
+        """An abstain row must be unanswerable, so its state is replaced, not just
+        its label."""
         abstained = [e for e in mixture if e.abstain]
         assert abstained
         assert all(not str(e.state).startswith(e.source) for e in abstained)
@@ -294,13 +277,8 @@ class TestModeBCeiling:
 
 
 class TestAbstainDonors:
-    """Adjacent sources cannot supply an abstain state.
-
-    "A different source" is not the same as "a source that cannot answer this".
-    imdb and rotten_tomatoes are both movie reviews, so swapping one for the
-    other leaves the question perfectly answerable -- and it gets labelled
-    uniform, which is the exact mislabelling the augmentation exists to avoid.
-    """
+    """Adjacent sources cannot supply an abstain state: an imdb question is still
+    answerable from a rotten_tomatoes review."""
 
     def test_adjacency_is_symmetric_and_excludes_self(self):
         from lev.data.sources import adjacency_map
@@ -783,9 +761,8 @@ class TestBuildDataset:
         raise AssertionError(f"unexpected source {hf_id}")
 
     def test_every_split_draws_from_every_source(self, tmp_path):
-        """The loaders are built in a loop; a closure that captured the loop
-        variable late would make every split draw from the last source alone,
-        and every other check -- coverage, round trip -- would still pass."""
+        """The loaders are built in a loop; a late-bound closure would make every
+        split draw from the last source while coverage and round-trip checks pass."""
         from lev.data.build import SPLIT_FILES, build_dataset, read_jsonl
 
         manifest = build_dataset(
@@ -810,8 +787,8 @@ class TestBuildDataset:
         assert set(manifest["sources"]) == {"ag_news", "imdb"}
 
     def test_held_out_splits_keep_the_canonical_question(self, tmp_path):
-        """Augmentation varies the train split only; an exported eval needs one
-        question per source."""
+        """The test split keeps each source's canonical wording, since an exported
+        eval needs one question per source."""
         from lev.data.build import SPLIT_FILES, build_dataset, read_jsonl
         from lev.data.splits import Split
 

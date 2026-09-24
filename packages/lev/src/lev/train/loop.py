@@ -1,13 +1,11 @@
 """The LoRA fine-tune loop.
 
-Objective is a proper scoring rule -- cross-entropy plus a Brier term, plus an
-ordinal term for Score under Mode B. Calibration is the thing we are competing on,
-so it is in the loss rather than bolted on at the end. (A temperature is *also*
-fitted afterwards; the two are complementary, not alternatives.)
+The objective is a proper scoring rule: cross-entropy plus a Brier term, plus an
+ordinal term for the ordered types (Score and Noul). A temperature is also fitted
+afterwards; the two complement each other.
 
-Run `make smoke` (or `modal run modal/app.py::smoke`) before the real preset --
-it exercises data, routing, collation, both readouts, loss and checkpoint write on
-a small backbone in a few minutes.
+Run `make smoke` before a real preset: it exercises data, routing, collation, both
+readouts, loss and checkpoint write on a small backbone in a few minutes.
 """
 
 from __future__ import annotations
@@ -39,15 +37,12 @@ def build_model(config: TrainConfig, model_cache: str | None = None):
 
     tokenizer = AutoTokenizer.from_pretrained(config.model_id, cache_dir=model_cache)
     if tokenizer.pad_token_id is None:
-        # Right-padding is what the collator assumes, and `last_positions` is
-        # derived from the attention mask, so the pad token's identity does not
-        # reach the loss. It only has to exist.
+        # Rows are right-padded and `last_positions` comes from the attention mask,
+        # so the pad token only has to exist.
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
 
-    # bfloat16 on CPU is supported but glacial, and `make smoke-local` is
-    # documented as a thing you run on a laptop. Fall back rather than let the
-    # documented command appear to hang.
+    # bfloat16 on CPU is glacial, and `make smoke-local` runs on a laptop.
     dtype = getattr(torch, config.dtype)
     if dtype is torch.bfloat16 and not torch.cuda.is_available():
         print("no CUDA; training in float32 instead of bfloat16")
@@ -56,11 +51,8 @@ def build_model(config: TrainConfig, model_cache: str | None = None):
     model = AutoModelForCausalLM.from_pretrained(
         config.model_id,
         dtype=dtype,
-        # `device_map="auto"` is for the multi-GPU case and is actively harmful
-        # elsewhere: on an Apple machine accelerate dispatches to MPS and the
-        # process dies with SIGSEGV part-way through loading, which reads as a
-        # corrupt download rather than a placement bug. One H100 does not need
-        # sharding anyway, and `make smoke` has to run on a laptop.
+        # Multi-GPU only: on an Apple machine accelerate dispatches to MPS and
+        # the process dies with SIGSEGV part-way through loading.
         device_map="auto" if torch.cuda.device_count() > 1 else None,
         cache_dir=model_cache,
     )
@@ -69,8 +61,8 @@ def build_model(config: TrainConfig, model_cache: str | None = None):
 
     if config.gradient_checkpointing:
         model.gradient_checkpointing_enable()
-        # Required, or checkpointed activations arrive with no grad_fn and the
-        # LoRA adapters receive no gradient at all -- a silent no-op run.
+        # Without it, checkpointed activations have no grad_fn and the LoRA
+        # adapters get no gradient: a silent no-op run.
         model.enable_input_require_grads()
 
     if config.use_lora:
@@ -90,23 +82,19 @@ def build_model(config: TrainConfig, model_cache: str | None = None):
 
 
 def decision_loss(logits, targets, config: TrainConfig, ordinal=False, soft_targets=None):
-    """Cross-entropy + Brier (+ ordinal for Score), over a padded candidate set.
+    """Cross-entropy + Brier (+ ordinal for Score and Noul), over a padded
+    candidate set.
 
     Cross-entropy alone optimises the argmax and tolerates overconfidence; the
-    Brier term penalises the whole probability vector, which is what makes the
-    result calibratable. Both are proper scoring rules, and calibration is the
-    one axis this project competes on, so they belong in the loss rather than
-    only in a temperature fitted afterwards.
+    Brier term penalises the whole probability vector.
 
     Args:
         logits: `(B, K)`, already `-inf` at padded candidate slots.
         targets: `(B,)` gold index, or `IGNORE_INDEX` where the row is an
             abstain example with no single correct answer.
-        ordinal: `(B,)` bool, True for Score rows, or a bare bool.
-        soft_targets: `(B, K)` target distribution, read for the rows where
-            `targets` is `IGNORE_INDEX`. Those rows carry a uniform vector:
-            with no evidence in the state, every candidate is equally supported,
-            and spreading mass is the calibrated answer rather than a hedge.
+        ordinal: `(B,)` bool, True for Score and Noul rows, or a bare bool.
+        soft_targets: `(B, K)` target distribution for the `IGNORE_INDEX` rows:
+            uniform, since with no evidence every candidate is equally supported.
     """
     import torch
     import torch.nn.functional as F
@@ -123,14 +111,9 @@ def decision_loss(logits, targets, config: TrainConfig, ordinal=False, soft_targ
     if soft_targets is not None and (~hard).any():
         target_dist[~hard] = soft_targets[~hard].to(probs.dtype)
 
-    # One cross-entropy over both kinds of row: with a one-hot target this is
-    # exactly F.cross_entropy, so the hard rows are unaffected by supporting
-    # the soft ones.
-    #
-    # `torch.where`, not a plain product: a padded slot carries a logit of -inf
-    # and a target of 0, so the product is `0 * -inf` = NaN. One padded slot
-    # poisons the batch mean, and backward still runs, so the symptom is a nan
-    # loss rather than a crash.
+    # One cross-entropy over both kinds of row; with a one-hot target it equals
+    # F.cross_entropy. `torch.where`, not a product: a padded slot has logit -inf
+    # and target 0, and `0 * -inf` is NaN, which poisons the batch mean.
     weighted = torch.where(target_dist > 0, target_dist * log_probs, torch.zeros_like(log_probs))
     ce = -weighted.sum(dim=-1).mean()
     brier = ((probs - target_dist) ** 2).sum(dim=-1).mean()
@@ -149,24 +132,19 @@ def decision_loss(logits, targets, config: TrainConfig, ordinal=False, soft_targ
 def candidate_logits(model, batch, head=None):
     """One forward pass -> `(B, K)` logits over the batch's candidate set.
 
-    Mode A reads the vocabulary logits at the answer boundary and keeps the
-    label-token ids. No parameters are added, which is why it works on a stock
-    checkpoint before any training at all.
-
-    Mode B reads hidden states instead and scores candidate *text* through the
-    matching head. The candidate strings were pooled by the collator, so a
-    77-option question costs one extra short forward rather than 77.
+    Mode A keeps the label-token ids from the vocabulary logits at the answer
+    boundary. Mode B scores candidate text through the matching head; the
+    collator pools candidate strings, so a 77-option question costs one extra
+    short forward, not 77.
     """
     import torch
 
     from ..router import Mode
 
     if batch.mode is Mode.LABEL_TOKEN:
-        # Project only the positions that are read. The full (B, seq, V)
-        # logits tensor at V=248,320 is ~28 GiB for a 32 x 1,900-token batch
-        # -- the OOM the chat-style prompts hit at step 6,075 -- when Mode A
-        # needs one position per row. `logits_to_keep` takes the distinct
-        # answer positions; each row then picks its own column.
+        # Project only the answer positions: the full (B, seq, V) logits at
+        # V=248,320 is ~28 GiB for a 32 x 1,900-token batch (the OOM chat-style
+        # prompts hit at step 6,075). Each row then picks its own column.
         keep, column = torch.unique(batch.last_positions, return_inverse=True)
         out = model(
             input_ids=batch.input_ids,
@@ -198,20 +176,18 @@ def candidate_logits(model, batch, head=None):
 
         flat = batch.candidate_index.reshape(-1)
         reprs = candidate_repr[flat].view(*batch.candidate_index.shape, -1)  # (B, K, H)
-        # The head is kept at full precision beside a bf16 backbone, so hidden
-        # states must be cast *up* to the head's dtype. Casting down to the
-        # activations' dtype instead raises on any GPU run, and is invisible on
-        # CPU where the backbone is fp32 and the two dtypes coincide.
+        # Cast hidden states up to the fp32 head. Casting down raises on GPU and
+        # is invisible on CPU, where both are fp32.
         target_dtype = next(head.parameters()).dtype
         logits = head(question_repr.to(target_dtype), reprs.to(target_dtype), batch.candidate_mask)
 
-    # Padded slots must not compete for softmax mass. Mode B already masks, but
-    # Mode A's gather returns a real (wrong) vocabulary logit in a padded slot.
+    # Mode B already masks padded slots; Mode A's gather returns a real (wrong)
+    # vocabulary logit there.
     return logits.float().masked_fill(batch.candidate_mask.to(logits.device), float("-inf"))
 
 
 def build_head(config: TrainConfig, model=None):
-    """The Mode B matching head, at full precision beside a quantised backbone."""
+    """The Mode B matching head, in fp32 beside the bf16 backbone."""
     import torch
 
     from ..readout.mode_b import CandidatePathReadout
@@ -244,10 +220,8 @@ def to_device(batch, device):
 def prepare_data(config: TrainConfig, data_dir: str):
     """Resolve and validate the training mixture. Must run before the model loads.
 
-    Loading a multi-GB checkpoint and *then* discovering the data is missing costs
-    real GPU minutes on Modal, and it is the failure that happens most often.
-    Raises with an actionable message rather than returning empty: a run that
-    silently trains on nothing wastes the whole budget.
+    Missing data is the most common failure, and finding it after loading a
+    multi-GB checkpoint wastes GPU minutes. Raises rather than returning empty.
     """
     from ..data.build import MANIFEST, load_split
     from ..data.splits import Split
@@ -263,9 +237,8 @@ def prepare_data(config: TrainConfig, data_dir: str):
     if not train:
         raise ValueError(f"{root / 'train.jsonl'} is empty")
 
-    # The guard again, at the last possible moment. The manifest only records
-    # what some earlier run loaded, possibly on another machine; re-checking is
-    # cheap and is the only place that catches a hand-edited mixture.
+    # The guard again, at the last moment: the only place a hand-edited mixture
+    # is caught.
     manifest_path = root / MANIFEST
     if manifest_path.is_file():
         import json
@@ -290,14 +263,12 @@ def run_training(
 ) -> dict:
     """Train, checkpointing periodically so a long run survives a preemption.
 
-    A run picks up where it stopped. With no `resume_from`, the newest `step-N`
-    under `config.output_dir` is resumed automatically -- `fresh=True` starts
-    over. A checkpoint carries the optimiser moments, the schedule position,
-    the step and epoch, and the RNG state that reproduces the epoch's data
-    order, so the resumed run continues at step N through the batches it had
-    not yet seen, on the learning rate it had reached. A checkpoint written
-    without that state (an older run) restores weights only and starts the
-    optimiser and schedule fresh, which is what every resume did before ADR-021.
+    With no `resume_from`, the newest `step-N` under `config.output_dir` is
+    resumed; `fresh=True` starts over. A checkpoint carries the optimiser
+    moments, schedule position, step, epoch, and the RNG state behind the
+    epoch's data order, so a resumed run continues through the batches it had
+    not seen, at the learning rate it had reached. Checkpoints from before
+    ADR-021 restore weights only.
     """
     import torch
     from torch.optim import AdamW
@@ -313,9 +284,8 @@ def run_training(
     if resume_from is None and not fresh and (found := latest_checkpoint(output)) is not None:
         resume_from = str(found)
         print(f"resuming from {found} (pass --fresh to start over)", flush=True)
-    # A fresh run must not leave the previous run's artefacts where the next
-    # preemption's auto-resume -- which takes the highest step -- or `serve`'s
-    # calibration lookup would find them. Moved, not deleted.
+    # Move, not delete, the previous run, so auto-resume (highest step) and the
+    # calibration lookup cannot pick it up.
     if fresh and (moved := set_aside_previous_run(output)) is not None:
         print(f"previous run moved to {moved}", flush=True)
 
@@ -327,8 +297,7 @@ def run_training(
         state = load_training_state(resume_from)
     device = device_of(model)
 
-    # One cache, so a question is routed once for the whole run rather than
-    # once for the batcher and again for the collator.
+    # One cache shared by batcher and collator, so each question routes once.
     routes = RouteCache(tokenizer, config.max_label_options, Style(config.prompt_style))
     collator = DecisionCollator(tokenizer, max_seq_len=config.max_seq_len, routes=routes)
     batcher = ModeBatcher(
@@ -347,10 +316,8 @@ def run_training(
     train = data["train"]
     steps_per_epoch = max(1, len(train) // (config.per_device_batch * config.grad_accum))
     total_steps = max_steps or steps_per_epoch * config.epochs
-    # The scheduler advances once per *optimiser* step, not once per micro-batch,
-    # so it must be sized in optimiser steps. Sizing it in micro-steps makes the
-    # cosine finish `grad_accum` times early and the tail of training run at a
-    # learning rate of zero.
+    # Sized in optimiser steps: sized in micro-steps, the cosine would finish
+    # `grad_accum` times early and the tail would train at a learning rate of 0.
     optimiser_steps = max(1, total_steps // config.grad_accum)
     scheduler = get_cosine_schedule_with_warmup(
         optimiser, int(optimiser_steps * config.warmup_ratio), optimiser_steps
@@ -391,12 +358,10 @@ def run_training(
     for epoch in range(start_epoch, config.epochs):
         if step >= total_steps:
             break
-        # Captured before the shuffle: a checkpoint inside this epoch stores it,
-        # so the resumed run reproduces the same order and skips what it saw.
+        # Before the shuffle, so a resumed run reproduces this epoch's order.
         rng_before_epoch = rng.getstate()
         order = list(train)
-        # Shuffled before bucketing so window membership differs per epoch; the
-        # batcher then sorts within each window and shuffles the batch order.
+        # Shuffled before bucketing so windows differ per epoch.
         rng.shuffle(order)
         groups = batcher(order, epoch=epoch)
         step_in_epoch = 0
@@ -460,17 +425,14 @@ def run_training(
                     },
                 )
                 last_saved = step
-                # Alongside the weights, not only at the end: a run that dies at
-                # step 17,000 should still leave its loss curve behind.
+                # So a run that dies late still leaves its loss curve.
                 _write_history(output, history, step, str(output))
             if step >= total_steps:
                 break
         if step >= total_steps:
             break
 
-    # Only if the interval save did not already land on this exact step --
-    # otherwise a total that happens to be a multiple of `checkpoint_every`
-    # writes the same adapter twice and commits the Volume twice for nothing.
+    # Unless the interval save already landed on this step.
     if step != last_saved:
         save_checkpoint(model, head, tokenizer, output, step, on_checkpoint)
     summary = _write_history(output, history, step, str(output))
