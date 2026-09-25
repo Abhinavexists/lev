@@ -24,7 +24,7 @@ tags:
 
 lev answers typed questions about a piece of context in a single forward pass. You give it a **state** (text, a ticket, an email, or JSON) and a set of yes/no, choice, and score questions. It reads each answer from the logits it already computed and returns calibrated probabilities over exactly the options you supplied. It is a LoRA adapter on Qwen3.5-4B, and it speaks TypeSafe's `/v1/systemone` protocol, so code written for the TypeSafe SDK works against it once you change the base URL.
 
-<div align="center" style="line-height: 1;"><img src="https://img.shields.io/badge/license-Apache--2.0-2a78d6?style=flat-square" alt="Apache-2.0" style="display: inline-block; vertical-align: middle; margin: 2px;"> <img src="https://img.shields.io/badge/base-Qwen3.5--4B-2a78d6?style=flat-square" alt="Qwen3.5-4B" style="display: inline-block; vertical-align: middle; margin: 2px;"> <img src="https://img.shields.io/badge/output%20tokens-0-2a78d6?style=flat-square" alt="Zero output tokens" style="display: inline-block; vertical-align: middle; margin: 2px;"> <img src="https://img.shields.io/badge/API-%2Fv1%2Fsystemone-2a78d6?style=flat-square" alt="/v1/systemone compatible" style="display: inline-block; vertical-align: middle; margin: 2px;"> <a href="https://github.com/Abhinavexists/lev"><img src="https://img.shields.io/badge/code-GitHub-14181f?style=flat-square&logo=github" alt="GitHub" style="display: inline-block; vertical-align: middle; margin: 2px;"></a></div>
+<div align="center" style="line-height: 1;"><img src="https://img.shields.io/badge/license-Apache--2.0-2a78d6?style=flat-square" alt="Apache-2.0" style="display: inline-block; vertical-align: middle; margin: 2px;"> <img src="https://img.shields.io/badge/base-Qwen3.5--4B-2a78d6?style=flat-square" alt="Qwen3.5-4B" style="display: inline-block; vertical-align: middle; margin: 2px;"> <img src="https://img.shields.io/badge/output%20tokens-0-2a78d6?style=flat-square" alt="Zero output tokens" style="display: inline-block; vertical-align: middle; margin: 2px;"> <img src="https://img.shields.io/badge/API-%2Fv1%2Fsystemone-2a78d6?style=flat-square" alt="/v1/systemone compatible" style="display: inline-block; vertical-align: middle; margin: 2px;"> <a href="https://github.com/Abhinavexists/lev"><img src="https://img.shields.io/badge/code-GitHub-14181f?style=flat-square&logo=github" alt="GitHub" style="display: inline-block; vertical-align: middle; margin: 2px;"></a> <a href="https://interfaze.ai/blog/jev-now-open-source-lev"><img src="https://img.shields.io/badge/Blog-lev-yellow" alt="Blog" style="display: inline-block; vertical-align: middle; margin: 2px;"></a> <a href="https://interfaze.ai"><img src="https://img.shields.io/badge/Built_by-Interfaze--ai-4C1" alt="interfaze" style="display: inline-block; vertical-align: middle; margin: 2px;"></a></div>
 
 <h2 align="center">68.9% on all 13 S1Bench subsets. 4B parameters. Zero output tokens.</h2>
 
@@ -211,6 +211,21 @@ The 69 ms is engine compute for a short request (a three-sentence state), measur
 - **Questions are answered independently.** Answers in one request do not condition on each other. Encode a joint decision as one choice, or ask in stages.
 - **English only.**
 - **Needs a GPU for real-time use.** It runs on CPU, but a 4B backbone there takes seconds per call, not milliseconds.
+
+## Hosted classification
+
+Text classification in Interfaze runs on a similar system to lev: the model reads the answer from the set of labels you define. The difference is that Interfaze is still token based, so it's a hybrid.
+
+| Item | lev | Interfaze |
+| :-- | :-- | :-- |
+| Output | Probabilities, zero output tokens | Tokens, returned as structured output |
+| Questions | Typed only: yes/no, choice, score | Any JSON schema, labels included |
+| In the same request | Classification only | OCR, web search, transcription, extraction, and more |
+| Where it runs | Your GPU | Interfaze API |
+
+Tokens cost a little speed, but they let one request classify a document while also reading, searching, and extracting from it. Define your labels as an enum in the schema, and the label comes back as a typed field.
+
+**Interfaze docs → [interfaze.ai/docs](https://interfaze.ai/docs)**
 
 ## Files
 

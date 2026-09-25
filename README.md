@@ -211,6 +211,21 @@ The data build refuses any source that resolves to one of the 13 S1Bench subsets
 - **Calibration is fitted on the training distribution.** Temperatures are chosen to transfer across task families, but a task very unlike the training mix may be less well calibrated. Check on your own data before gating on the probabilities.
 - **English only**, and a GPU for real-time use.
 
+## Hosted classification
+
+Text classification in Interfaze runs on a similar system to lev: the model reads the answer from the set of labels you define. The difference is that Interfaze is still token based, so it's a hybrid.
+
+| Item | lev | Interfaze |
+| :-- | :-- | :-- |
+| Output | Probabilities, zero output tokens | Tokens, returned as structured output |
+| Questions | Typed only: yes/no, choice, score | Any JSON schema, labels included |
+| In the same request | Classification only | OCR, web search, transcription, extraction, and more |
+| Where it runs | Your GPU | Interfaze API |
+
+Tokens cost a little speed, but they let one request classify a document while also reading, searching, and extracting from it. Define your labels as an enum in the schema, and the label comes back as a typed field.
+
+**Interfaze docs → [interfaze.ai/docs](https://interfaze.ai/docs)**
+
 ## Layout
 
 ```text
