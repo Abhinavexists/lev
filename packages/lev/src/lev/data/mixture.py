@@ -49,7 +49,7 @@ class Augment:
 
 @dataclass
 class MixtureSpec:
-    """Which sources to draw from, and in what proportion."""
+    """Whichsources to draw from, and in what proportion."""
 
     sources: dict[str, float] = field(default_factory=dict)
     n_examples: int = 200_000

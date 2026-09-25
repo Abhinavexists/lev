@@ -205,7 +205,7 @@ So: schema-first only for high-volume fixed-schema batch work; state-first by de
 
 **Accepted.** Enforced in code, not documentation.
 
-```
+```text
 ran in s1-fast (6)     vitaminc-dev  massive-en-US  boolq  helpsteer2  aegis2  paws
 intended, unrun (7)    massive-de-DE  squad2  multinli  civil_comments
                        summeval-relevance  summeval-consistency  pubmedqa
@@ -333,7 +333,7 @@ The general lesson, and the reason this is an ADR rather than a commit message: 
 
 The first `train --preset 4b` on Modal reported:
 
-```
+```text
 step 25/18750  0.1%  A=5.7621  B=5.1222  lr=4.45e-06  0.22 it/s  826 tok/s  eta 23:13:22  mem 29.3G
 ```
 

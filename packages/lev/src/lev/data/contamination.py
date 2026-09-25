@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-# All 13 S1Bench evaluation subsets, not only the six the public board completed.
+# All 13 S1Bench evaluation
 BLOCKED_SUBSETS: frozenset[str] = frozenset(
     {
         "vitaminc-dev",

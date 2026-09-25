@@ -70,6 +70,7 @@ export LEV_HF_SECRET=huggingface
 ```
 
 <a id="deploy-knobs"></a>
+
 ### Deploy knobs
 
 Read on the machine where `modal deploy` runs — from the environment or from `.env` — never inside the container. The first group travels to the container as a Secret; the second sets decorator arguments, which are fixed at import.
@@ -92,7 +93,7 @@ Read on the machine where `modal deploy` runs — from the environment or from `
 ### The order
 
 ```bash
-modal run modal/app.py::download --model-id Qwen/Qwen3.5-4B  # once, ~8 GB
+modal run modal/app.py::download --model-id Qwen/Qwen3.5-4B   # once, ~8 GB
 modal run modal/app.py::build_data --limit-per-source 20000   # CPU, no GPU
 make smoke                                                    # ~5 min H100
 make train PRESET=4b-instruct                                 # ~2 h H100
@@ -138,7 +139,6 @@ uv run python -c "
 from lev.train.config import PRESETS
 from lev.train.loop import run_training
 run_training(PRESETS['4b-instruct'], data_dir='data/mixture', model_cache='~/.cache/huggingface')
-"
 ```
 
 ---

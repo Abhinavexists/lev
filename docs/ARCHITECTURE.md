@@ -136,7 +136,7 @@ The released model fine-tunes the instruct checkpoint, `Qwen/Qwen3.5-4B`, in its
 
 Verified from its `config.json`, not assumed:
 
-```
+```text
 num_hidden_layers   32
 layer_types         24 × linear_attention  +  8 × full_attention   (full_attention_interval 4)
 hidden_size         2560     head_dim 256    heads 16 / kv 4 (GQA)
@@ -174,7 +174,7 @@ LoRA r32 on `q,k,v,o,gate,up,down` ≈ 25–40 M trainable parameters. **The Fam
 
 ### 5.3 The readout — dual mode, and the part nobody else has
 
-```
+```bash
                        questions + option sets
                                  │
                     ┌────────────┴────────────┐
@@ -251,7 +251,7 @@ RL with a proper-score belief reward (decider v10) comes after a supervised base
 
 Assumptions stated so you can change them:
 
-```
+```text
 trainable model      4e9 params (backward cost is full-model even under LoRA)
 cost per token       ~8 × N FLOPs   (6 × N fwd+bwd, +33% for grad checkpointing)
                      = 8 × 4e9      = 3.2e10 FLOP/token

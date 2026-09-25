@@ -70,7 +70,7 @@ uv run lev data eval  --data data/mixture --out data/eval
 
 **The contamination guard runs before anything loads**, and it covers all **thirteen** S1Bench evaluation subsets, not just the six that executed in the `s1-fast` run ([ADR-009](DECISIONS.md#adr-009--all-thirteen-evaluation-subsets-are-banned-from-training)):
 
-```
+```text
 ran      vitaminc-dev  massive-en-US  boolq  helpsteer2  aegis2  paws
 unrun    massive-de-DE  squad2  multinli  civil_comments
          summeval-relevance  summeval-consistency  pubmedqa

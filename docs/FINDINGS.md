@@ -166,7 +166,7 @@ Independent open reproductions have converged on the same architecture, and it i
 
 ### The convergent mechanism
 
-```
+```text
 state + all questions
         ↓
 1. SHARED PREFILL      encode the state once  →  KV cache
@@ -329,7 +329,7 @@ The shift from the original: the win is **intra-request fan-out over a shared st
 [SDK] unless noted.
 
 ```text
-Endpoint      POST https://api.typesafe.ai/v1/systemone     [DOCS]
+Endpoint      POST https://api.typesafe.ai/v1/systemone      [DOCS]
 Auth          Authorization: Bearer <key>                    [DOCS]
 Env var       TYPESAFE_API_KEY
 Base URL env  TYPESAFE_BASE_URL   (default https://api.typesafe.ai)
