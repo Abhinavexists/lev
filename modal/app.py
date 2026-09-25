@@ -178,7 +178,7 @@ def download(model_id: str = "Qwen/Qwen3.5-4B-Base") -> str:
     gpu="H100",
     volumes=VOLUMES,
     secrets=SECRETS,
-    timeout=24 * 60 * 60,  # ~2h estimate; margin is cheap, a truncated run is not
+    timeout=24 * 60 * 60,  # the released run took 7.8 h; a truncated run costs everything
 )
 def train(
     preset: str = "4b",

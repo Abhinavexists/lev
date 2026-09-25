@@ -186,7 +186,7 @@ prompt           chat prompts, Mode A to the tokenizer limit
 data             200,000 examples x 128 tok x 3 epochs  = 0.08B tokens
 steps            18,750 (32 ex/step, ~4,096 tok/step)
 compute          2.46e+18 FLOPs
-H100 estimate    1.7 hours (0.1 days)
+H100 estimate    7.8 hours (0.3 days)
 memory           8.3 GB state, 71.7 GB headroom of 80 GB
 ```
 

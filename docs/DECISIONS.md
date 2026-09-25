@@ -88,7 +88,7 @@ Measured, on S1Bench's completed runs: reflex-4b (Qwen3.5-4B) **0.7189**; decide
 
 **The non-obvious part that made this safe:** Mode B's matching head is *new* parameters and trains at full precision regardless of LoRA freezing the backbone. Freezing the backbone does not prevent training a new head, which is what initially made this look like a trade-off and turns out not to be one.
 
-**Consequence:** a full run is ~2 h once measured (see ADR-016), so a dozen is cheap. Budget the H100 for **ablations, not one heroic run**.
+**Consequence:** a full run is 5–8 h measured (Q5), so a dozen is affordable. Budget the H100 for **ablations, not one heroic run**.
 
 ---
 
@@ -589,7 +589,7 @@ Serving now skips by default; training does not, so Mode B keeps its data. Mode 
 | **Q2** | Do Mode A and Mode B agree where both are valid? | Explicit eval ([ADR-005](#adr-005--dual-mode-readout-the-differentiator)). A correctness gate, not a nice-to-have |
 | **Q3** | Can a *state* cache persist across requests? | decider persists a **schema** cache; persisting state is unclaimed and is the genuinely novel direction |
 | **Q4** | Does Mode B cost accuracy under the ceiling? | Ablation: Mode B forced on small option sets vs Mode A |
-| **Q5** | How long does a 4B run actually take? | Read once at 23 h before bucketing, a cumulative-rate artefact (ADR-017). Sequence length and padding are measured, and the image installs both kernels (`flash-linear-attention`, `causal-conv1d`); record the wall clock of the next full run here |
+| ~~Q5~~ | ~~How long does a 4B run actually take?~~ | **7.8 h** for the released 4b-instruct run: 18,750 steps at ~1.5 s/step, read from its checkpoint times, excluding one restart. The plain-prompt runs took 4h50 and 5h53. `lev plan` is calibrated on the 7.8 h (the 23 h once read was a cumulative-rate artefact, ADR-017) |
 | ~~Q6~~ | ~~Does an instruct checkpoint fix zero-shot Noul?~~ | **Closed by ADR-018, reopened by ADR-020.** Training fixed it in-distribution (0.975/0.915) and broke it out of distribution (aegis2 0.312, below every constant predictor). The instruct checkpoint became the starting point (ADR-020), and the released model reads Noul from the trained rating scale |
 | **Q7** | Do the public training corpora transfer to support-triage states? | Train, then eval on both the generated set *and* the 24-item fixture. Agreement between them is the signal; the fixture alone cannot resolve it |
 | ~~Q9~~ | ~~How does lev compare to Jev on S1Bench?~~ | **Answered on identical task files**, harness validated against Jev's own numbers. On the earlier six-subset definitions: 0.489 macro in the first run (FINDINGS.md §12, ADR-020), 0.725 in the third, against Jev's 0.754 (§16). On all 13 subsets as S1Bench pins them: 0.689 against Jev's 0.761, and 0.719 on the board's six, level with reflex-4b (§17) |

@@ -12,7 +12,7 @@ Steps 1 and 2 need **no training at all** and deliver most of the value. Do them
 1  Mode A readout on a stock checkpoint, serving /v1/systemone     no GPU training
 2  Fit a temperature                                               ECE 0.43 -> ~0.08
 3  Add Mode B + the router                                         the differentiator
-4  LoRA fine-tune                                                   ~2 h on one H100
+4  LoRA fine-tune                                                   ~8 h on one H100
 5  RL with a belief reward                                         only after 1-4
 ```
 
@@ -159,7 +159,7 @@ Abstain examples are built by pairing a question with a state from a _different_
 ```bash
 make smoke                          # always first: 0.8B, ~5 min of H100
 make plan PRESET=4b-instruct        # confirm the budget
-make train PRESET=4b-instruct       # ~2 h
+make train PRESET=4b-instruct       # ~8 h
 ```
 
 ### The budget, with the arithmetic visible
@@ -169,16 +169,16 @@ cost/token   8 x N FLOPs      (6 x N fwd+bwd, +33% for gradient checkpointing)
              8 x 4e9        = 3.2e10 FLOP/token
 data         200,000 examples x 128 tokens x 3 epochs = 7.7e7 tokens
 compute      3.2e10 x 7.7e7 = 2.46e18 FLOPs
-H100         ~400 TFLOP/s sustained bf16 (not the 990 peak)
-             2.46e18 / 4e14 = 6.1e3 s = 1.7 hours
-cross-check  18,750 steps @ 32 examples/step = 0.33 s/step
+H100         ~88 TFLOP/s sustained, measured (not the 990 peak)
+             2.46e18 / 8.75e13 = 2.8e4 s = 7.8 hours
+measured     18,750 steps @ 32 examples/step, ~1.5 s/step on the released run
 ```
 
 The 128 tokens is **measured** (a 121-token mean over 1,500 rendered prompts from the real mixture under the Qwen3.5 tokenizer, rounded up). Per source it runs 38 (clinc_oos) to 305 (imdb); p95 is 390 and the longest seen is 1,104. A guessed 1,200 once put the estimate at 16 hours (ADR-016). Run `lev plan --data data/mixture` to re-measure after changing the mixture.
 
 At a 128-token mean the batch size matters more than the sequence cap: a batch of 8 would make 75,000 optimiser steps and the run would be bound by step overhead long before it was bound by FLOPs. Hence `per_device_batch = 32`.
 
-This arithmetic assumes the model computes on the real tokens; it computes on the padded rectangle. Batches are length-bucketed, which takes padding from 4.43x to 1.43x, and the linear-attention kernels are installed, so treat ~2 h as a floor. [ADR-017.](DECISIONS.md#adr-017--batches-are-length-bucketed-and-the-budget-was-wrong-again)
+The throughput is measured rather than assumed because the FLOP count is not the work done: the model computes on the padded rectangle (length bucketing takes padding from 4.43x to 1.43x), each step carries fixed overhead, and chat prompts add tokens the 128-token mean does not count. At the 400 TFLOP/s once assumed, this budget read 1.7 hours; the released run took 7.8. The plain-prompt 4B runs took 4h50 and 5h53, so `lev plan` reads high for them. [ADR-017.](DECISIONS.md#adr-017--batches-are-length-bucketed-and-the-budget-was-wrong-again)
 
 `make plan` recomputes this from the config, so changing any knob shows the new cost _before_ you rent the GPU.
 
@@ -224,12 +224,12 @@ A weights-only checkpoint (from before [ADR-021](DECISIONS.md#adr-021--a-checkpo
 | Preset            | Backbone                                    | Adaptation            | State      | Headroom    | Est. hours |
 | ----------------- | ------------------------------------------- | --------------------- | ---------- | ----------- | ---------- |
 | `smoke`           | Qwen3.5-0.8B-Base                           | LoRA r32              | 1.9 GB     | 78.1 GB     | minutes    |
-| `2b`              | Qwen3.5-2B-Base                             | full FT               | 32.0 GB    | 48.0 GB     | 0.9        |
-| `4b`              | Qwen3.5-4B-Base                             | LoRA r32              | 8.3 GB     | 71.7 GB     | 1.7        |
-| **`4b-instruct`** | **Qwen3.5-4B** (instruct), **chat prompts** | **LoRA r32, lr 5e-5** | **8.3 GB** | **71.7 GB** | **1.7**    |
-| `9b`              | Qwen3.5-9B-Base                             | LoRA r32              | 18.3 GB    | 61.7 GB     | 3.8        |
+| `2b`              | Qwen3.5-2B-Base                             | full FT               | 32.0 GB    | 48.0 GB     | 3.9        |
+| `4b`              | Qwen3.5-4B-Base                             | LoRA r32              | 8.3 GB     | 71.7 GB     | 7.8        |
+| **`4b-instruct`** | **Qwen3.5-4B** (instruct), **chat prompts** | **LoRA r32, lr 5e-5** | **8.3 GB** | **71.7 GB** | **7.8**    |
+| `9b`              | Qwen3.5-9B-Base                             | LoRA r32              | 18.3 GB    | 61.7 GB     | 17.6       |
 
-Hours are `make plan`'s floor estimates. `4b-instruct` is the released preset (ADR-020): reflex-4b (these instruct weights plus one temperature) scores 0.719 on S1Bench, where the `4b` Base fine-tune scored 0.489. It trains in the `chat` prompt style, worth 5.7 points frozen over `plain` (ADR-027); the style is recorded in the release manifest and applied when serving. The Base presets stay `plain`.
+Hours are `make plan`'s estimates, calibrated on the released 4b-instruct run (7.8 h measured). `4b-instruct` is the released preset (ADR-020): reflex-4b (these instruct weights plus one temperature) scores 0.719 on S1Bench, where the `4b` Base fine-tune scored 0.489. It trains in the `chat` prompt style, worth 5.7 points frozen over `plain` (ADR-027); the style is recorded in the release manifest and applied when serving. The Base presets stay `plain`.
 
 **Budget the H100 for ablations, not one heroic run.**
 

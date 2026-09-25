@@ -8,9 +8,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-# Effective bf16 throughput on one H100 with gradient checkpointing. Peak is
-# ~990 TFLOP/s; 400 is a realistic sustained figure and the number §5.8 quotes.
-H100_EFFECTIVE_FLOPS = 4.0e14
+# Sustained throughput measured on the released 4b-instruct run: 18,750 steps in
+# 7.8 h of training (~1.5 s/step, from checkpoint times), i.e. 2.46e18 FLOPs over
+# 28,100 s. Padded batches, per-step overhead and the chat template's extra tokens
+# are all inside it; peak bf16 is ~990 TFLOP/s. The plain-prompt 4B runs took
+# 4h50 and 5h53, so this reads high for them.
+H100_EFFECTIVE_FLOPS = 8.75e13
 
 H100_VRAM_GB = 80.0
 

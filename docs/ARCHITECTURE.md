@@ -258,14 +258,14 @@ cost per token       ~8 × N FLOPs   (6 × N fwd+bwd, +33% for grad checkpointin
 dataset              200,000 question-instances × 128 tokens (measured) = 2.56e7 tokens/epoch
 epochs               3                                          = 7.68e7 tokens
 total compute        3.2e10 × 7.68e7                            = 2.46e18 FLOPs
-H100 effective       ~400 TFLOP/s bf16 (realistic with checkpointing, not peak 990)
+H100 effective       ~400 TFLOP/s bf16 (assumed at design time; ~88 measured)
 ```
 
 **2.46e18 / 4e14 ≈ 6.1e3 s ≈ 1.7 GPU-hours** for the full 3-epoch run.
 
 Cross-check on step count: batch 32 gives 6,250 steps/epoch, 18,750 total.
 
-Two corrections this arithmetic has already needed, both from [ADR-016](DECISIONS.md#adr-016--sequence-length-is-measured-and-the-budget-was-wrong-by-10x) and [ADR-017](DECISIONS.md#adr-017--batches-are-length-bucketed-and-the-budget-was-wrong-again): the 128-token mean is measured, not assumed — an earlier guess of 1,200 put this at 16 hours — and the model computes on the padded batch rectangle, not on real tokens, which cost a further 4.4× until batches were length-bucketed. The first measured run sustained ~4,200 tok/s against a ~4-hour wall clock, so treat 1.7 h as a floor.
+Two corrections this arithmetic has already needed, both from [ADR-016](DECISIONS.md#adr-016--sequence-length-is-measured-and-the-budget-was-wrong-by-10x) and [ADR-017](DECISIONS.md#adr-017--batches-are-length-bucketed-and-the-budget-was-wrong-again): the 128-token mean is measured, not assumed — an earlier guess of 1,200 put this at 16 hours — and the model computes on the padded batch rectangle, not on real tokens, which cost a further 4.4× until batches were length-bucketed. The first measured run sustained ~4,200 tok/s against a ~4-hour wall clock, and the released run took 7.8 h, so 1.7 h was a floor by a factor of four; `lev plan` now uses the measured throughput.
 
 **A full run is hours, not days.** That is the real consequence of choosing LoRA on a 4B: you can afford many full runs, which means ablations — 2B vs 4B, Mode B on vs off, temperature per-type vs global — are affordable rather than aspirational. Budget the H100 for **ablations, not for one heroic run**.
 

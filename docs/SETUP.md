@@ -96,7 +96,7 @@ Read on the machine where `modal deploy` runs — from the environment or from `
 modal run modal/app.py::download --model-id Qwen/Qwen3.5-4B   # once, ~8 GB
 modal run modal/app.py::build_data --limit-per-source 20000   # CPU, no GPU
 make smoke                                                    # ~5 min H100
-make train PRESET=4b-instruct                                 # ~2 h H100
+make train PRESET=4b-instruct                                 # ~8 h H100
 make calibrate PRESET=4b-instruct                             # the temperatures
 make deploy PRESET=4b-instruct                                # /v1/systemone
 ```
