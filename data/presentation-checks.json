@@ -12,6 +12,8 @@
  "score_order_average": "off",
  "split_checks": false,
  "max_score_rows": 24,
+ "checkpoint_revision": "f8ef71157ec06a7d3b6435bc0756f9d735c33748",
+ "dtype": "torch.bfloat16",
  "packed_max_abs_diff": 0.0207,
  "checks": {
   "score": {

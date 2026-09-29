@@ -232,9 +232,24 @@ def _cuda():
     return torch.cuda if torch.cuda.is_available() else None
 
 
+def _snapshot_revision(checkpoint) -> str | None:
+    """The Hub commit a checkpoint was loaded from: the `snapshots/<sha>` directory name."""
+    parts = Path(checkpoint).parts if checkpoint else ()
+    return parts[parts.index("snapshots") + 1] if "snapshots" in parts[:-1] else None
+
+
+def _weights_dtype(engine) -> str | None:
+    model = getattr(engine, "_eager_model", None) or getattr(engine, "model", None)
+    try:
+        return str(next(model.parameters()).dtype)
+    except (AttributeError, StopIteration, TypeError):
+        return None
+
+
 def cmd_presentation_checks(args: argparse.Namespace) -> None:
-    """Label-free presentation checks (ADR-029). Exits non-zero when a metric drifts
-    from `--compare` beyond `--tolerance`, or, with `--enforce-gate`, below a gate."""
+    """Label-free presentation checks (ADR-029). With `--compare`, exits 2 when the run's
+    settings differ from the report's, and 1 when a metric drifts beyond `--tolerance`;
+    `--enforce-gate` also fails a check below its gate."""
     import time
 
     from . import presentation
@@ -257,6 +272,25 @@ def cmd_presentation_checks(args: argparse.Namespace) -> None:
         "max_score_rows": args.max_score_rows,
         "score_order_average": args.score_order_average,
     }
+    settings = {
+        "n_states": len(states),
+        "lang": args.lang,
+        "raw": args.raw,
+        "kinds": kinds,
+        **grouping,
+        "checkpoint_revision": _snapshot_revision(engine.checkpoint),
+        "dtype": _weights_dtype(engine),
+    }
+    saved = json.loads(Path(args.compare).read_text("utf-8")) if args.compare else None
+    if saved is not None:
+        # Metrics move with the order mode, the batching and the weights; compare like with like.
+        differ = presentation.settings_mismatch(saved, settings)
+        if differ:
+            print(
+                "presentation settings differ from the committed report: " + "; ".join(differ),
+                file=sys.stderr,
+            )
+            sys.exit(2)
     cuda = _cuda()
     if cuda:
         cuda.empty_cache()
@@ -284,11 +318,7 @@ def cmd_presentation_checks(args: argparse.Namespace) -> None:
     payload = {
         "checkpoint": args.checkpoint,
         "states": args.states,
-        "n_states": len(states),
-        "lang": args.lang,
-        "raw": args.raw,
-        "kinds": kinds,
-        **grouping,
+        **settings,
         "seconds": round(seconds, 1),
         "peak_vram": peak,
         "packed_max_abs_diff": packed,
@@ -298,9 +328,8 @@ def cmd_presentation_checks(args: argparse.Namespace) -> None:
         text = json.dumps(payload, indent=1, ensure_ascii=False) + "\n"
         Path(args.out).write_text(text, "utf-8")
     failures = []
-    if args.compare:
-        committed = json.loads(Path(args.compare).read_text("utf-8"))["checks"]
-        failures += presentation.drift(report, committed, args.tolerance)
+    if saved is not None:
+        failures += presentation.drift(report, saved["checks"], args.tolerance)
     if args.enforce_gate:
         failures += [
             f"{kind}.{check}: {r[check]['metric']:+.3f} below {r[check]['gate']:+.2f}"

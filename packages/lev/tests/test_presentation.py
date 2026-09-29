@@ -48,6 +48,7 @@ class FakeEngine:
 
     def __init__(self, slot0: float = 0.0, content: dict | None = None, packing: float = 0.0):
         self.slot0, self.content, self.packing, self.calls = slot0, content or {}, packing, 0
+        self.checkpoint = None  # a DecisionEngine's resolved checkpoint; None for a frozen base
 
     def system_one(self, state, questions):
         request = SystemOneRequest(state=state, questions=questions)
@@ -287,3 +288,48 @@ class TestCommittedReport:
             for check in ("identical", "first_slot"):
                 assert isinstance(committed["checks"][kind][check]["metric"], float)
         assert drift(committed["checks"], committed["checks"], 0.0) == []
+
+
+class TestCompareGuardsItsSettings:
+    """`--compare` compares like with like: settings first (exit 2), then metrics (exit 1)."""
+
+    def cli(self, monkeypatch, tmp_path, engine, *extra):
+        from lev.cli import main
+
+        monkeypatch.setattr("lev.model.load", lambda *a, **k: engine)
+        monkeypatch.setattr("lev.cli._cuda", lambda: None)
+        states = tmp_path / "states.jsonl"
+        states.write_text('{"state": "a"}\n{"state": "b"}\n', "utf-8")
+        main(["presentation-checks", str(states), "--packed", "0", *extra])
+
+    def committed(self, monkeypatch, tmp_path, engine) -> dict:
+        out = tmp_path / "report.json"
+        self.cli(monkeypatch, tmp_path, engine, "--out", str(out))
+        return json.loads(out.read_text("utf-8"))
+
+    def test_matching_settings_are_compared_metric_by_metric(self, monkeypatch, tmp_path):
+        engine = FakeEngine(slot0=-1.0)
+        saved = self.committed(monkeypatch, tmp_path, engine)
+        assert saved["score_order_average"] == "off" and saved["max_score_rows"] == 24
+        saved["checks"]["score"]["identical"]["metric"] += 0.5
+        path = tmp_path / "committed.json"
+        path.write_text(json.dumps(saved), "utf-8")
+        with pytest.raises(SystemExit) as exc:
+            self.cli(monkeypatch, tmp_path, engine, "--compare", str(path))
+        assert "score.identical" in str(exc.value.code)
+
+    def test_different_settings_are_refused_before_any_run(self, monkeypatch, tmp_path, capsys):
+        engine = FakeEngine(slot0=-1.0)
+        saved = self.committed(monkeypatch, tmp_path, engine)
+        saved["score_order_average"] = "reversed"
+        path = tmp_path / "committed.json"
+        path.write_text(json.dumps(saved), "utf-8")
+        calls = engine.calls
+        with pytest.raises(SystemExit) as exc:
+            self.cli(monkeypatch, tmp_path, engine, "--compare", str(path))
+        assert exc.value.code == 2
+        assert engine.calls == calls
+        assert (
+            "presentation settings differ from the committed report: "
+            "score_order_average (report: 'reversed', run: 'off')"
+        ) in capsys.readouterr().err
