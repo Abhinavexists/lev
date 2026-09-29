@@ -30,6 +30,7 @@ def create_app(
     max_pending: int = 64,
     max_batch_tokens: int = 16384,
     timeout: float = 30.0,
+    score_order_average: Literal["off", "reversed", "cyclic"] = "off",
 ) -> Any:
     from fastapi import FastAPI, HTTPException, Response
     from starlette.concurrency import run_in_threadpool
@@ -51,6 +52,7 @@ def create_app(
             compile=compile,
             max_label_options=max_label_options,
             skip_multi_token_codes=skip_multi_token_codes,
+            score_order_average=score_order_average,
         )
         state["batcher"] = Batcher(
             engine, max_pending=max_pending, max_batch_tokens=max_batch_tokens, timeout=timeout
@@ -73,6 +75,7 @@ def create_app(
             "noul_readout": config.noul_readout,
             "max_label_options": config.max_label_options,
             "order_average": config.order_average,
+            "score_order_average": config.score_order_average,
             "prefix_mode": config.prefix_mode,
             "compiled": config.compile,
             "prompt_style": config.prompt_style,

@@ -216,10 +216,100 @@ def cmd_serve(args: argparse.Namespace) -> None:
             prompt_style=args.prompt_style,
             max_pending=args.max_pending,
             max_batch_tokens=args.max_batch_tokens,
+            score_order_average=args.score_order_average,
         ),
         host=args.host,
         port=args.port,
     )
+
+
+def _cuda():
+    """`torch.cuda` when a GPU is in use, else None; torch is imported only here."""
+    try:
+        import torch
+    except ImportError:
+        return None
+    return torch.cuda if torch.cuda.is_available() else None
+
+
+def cmd_presentation_checks(args: argparse.Namespace) -> None:
+    """Label-free presentation checks (ADR-029). Exits non-zero when a metric drifts
+    from `--compare` beyond `--tolerance`, or, with `--enforce-gate`, below a gate."""
+    import time
+
+    from . import presentation
+    from .calibrate import CalibrationProfile
+    from .model import load
+
+    states = presentation.read_states(args.states)[: args.limit]
+    engine = load(
+        args.checkpoint,
+        model_id=args.model,
+        cache_dir=args.model_cache,
+        calibration=args.calibration,
+        score_order_average=args.score_order_average,
+    )
+    if args.raw:
+        engine.calibration = CalibrationProfile()
+    kinds = [k.strip() for k in args.kinds.split(",") if k.strip()]
+    grouping = {
+        "split_checks": args.split_checks,
+        "max_score_rows": args.max_score_rows,
+        "score_order_average": args.score_order_average,
+    }
+    cuda = _cuda()
+    if cuda:
+        cuda.empty_cache()
+        cuda.reset_peak_memory_stats()
+    started = time.perf_counter()
+    report = presentation.run(
+        engine.system_one, states, args.lang, kinds, args.slot0_min, **grouping
+    )
+    seconds = time.perf_counter() - started
+    packed = presentation.packed_consistency(
+        engine.system_one, states[: args.packed], args.lang, kinds, **grouping
+    )
+    peak = (
+        {
+            "allocated_gib": round(cuda.max_memory_allocated() / 2**30, 2),
+            "reserved_gib": round(cuda.max_memory_reserved() / 2**30, 2),
+        }
+        if cuda
+        else None
+    )
+    if cuda:
+        cuda.empty_cache()
+    print(presentation.to_markdown(report))
+    print(f"packed vs alone: max |dp| {packed:.2e} over {min(args.packed, len(states))} states")
+    payload = {
+        "checkpoint": args.checkpoint,
+        "states": args.states,
+        "n_states": len(states),
+        "lang": args.lang,
+        "raw": args.raw,
+        "kinds": kinds,
+        **grouping,
+        "seconds": round(seconds, 1),
+        "peak_vram": peak,
+        "packed_max_abs_diff": packed,
+        "checks": report,
+    }
+    if args.out:
+        text = json.dumps(payload, indent=1, ensure_ascii=False) + "\n"
+        Path(args.out).write_text(text, "utf-8")
+    failures = []
+    if args.compare:
+        committed = json.loads(Path(args.compare).read_text("utf-8"))["checks"]
+        failures += presentation.drift(report, committed, args.tolerance)
+    if args.enforce_gate:
+        failures += [
+            f"{kind}.{check}: {r[check]['metric']:+.3f} below {r[check]['gate']:+.2f}"
+            for kind, r in report.items()
+            for check in ("identical", "first_slot")
+            if not r[check]["passed"]
+        ]
+    if failures:
+        sys.exit("presentation checks failed:\n  " + "\n  ".join(failures))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -296,9 +386,56 @@ def main(argv: list[str] | None = None) -> None:
         default=16384,
         help="padded tokens per batched forward across requests (default 16384)",
     )
+    serve_parser.add_argument(
+        "--score-order-average",
+        choices=["off", "reversed", "cyclic"],
+        default="off",
+        help="average Score levels over reversed or all cyclic orders (2x / Kx rows; ADR-029)",
+    )
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8000)
     serve_parser.set_defaults(func=cmd_serve)
+
+    presentation_parser = sub.add_parser(
+        "presentation-checks",
+        help="label-free position checks for Score and Choice (ADR-029)",
+    )
+    presentation_parser.add_argument("states", help="JSONL with a `state` per line")
+    presentation_parser.add_argument("--checkpoint", default=None)
+    presentation_parser.add_argument("--model", default="Qwen/Qwen3.5-4B-Base")
+    presentation_parser.add_argument("--model-cache", default=None)
+    presentation_parser.add_argument("--calibration", default=None)
+    presentation_parser.add_argument("--lang", choices=["en", "ja"], default="en")
+    presentation_parser.add_argument("--kinds", default="score,choice")
+    presentation_parser.add_argument("--limit", type=int, default=None)
+    presentation_parser.add_argument(
+        "--raw", action="store_true", help="score without calibration (T = 1 everywhere)"
+    )
+    presentation_parser.add_argument(
+        "--score-order-average", choices=["off", "reversed", "cyclic"], default="off"
+    )
+    presentation_parser.add_argument(
+        "--packed", type=int, default=3, help="states for the packed-vs-alone check"
+    )
+    presentation_parser.add_argument(
+        "--split-checks",
+        action="store_true",
+        help="ask the identical and permuted questions in separate calls",
+    )
+    presentation_parser.add_argument(
+        "--max-score-rows",
+        type=int,
+        default=24,
+        help="Score rows per call before the probe is split (cyclic reads a level K times)",
+    )
+    presentation_parser.add_argument("--slot0-min", type=float, default=-0.20)
+    presentation_parser.add_argument("--out", default=None, help="write the report JSON here")
+    presentation_parser.add_argument("--compare", default=None, help="a committed report JSON")
+    presentation_parser.add_argument("--tolerance", type=float, default=0.05)
+    presentation_parser.add_argument(
+        "--enforce-gate", action="store_true", help="also fail when a check is below its gate"
+    )
+    presentation_parser.set_defaults(func=cmd_presentation_checks)
 
     data_parser = sub.add_parser("data", help="build the training mixture and the eval set")
     data_sub = data_parser.add_subparsers(dest="data_command", required=True)
