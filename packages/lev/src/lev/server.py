@@ -22,6 +22,7 @@ def create_app(
     max_label_options: int | None = None,
     prompt_style: Literal["plain", "chat"] | None = None,
     skip_multi_token_codes: bool = True,
+    score_order_average: Literal["off", "reversed", "cyclic"] = "off",
 ) -> Any:
     from fastapi import FastAPI, HTTPException
 
@@ -42,6 +43,7 @@ def create_app(
             compile=compile,
             max_label_options=max_label_options,
             skip_multi_token_codes=skip_multi_token_codes,
+            score_order_average=score_order_average,
         )
 
     @app.get("/health")
@@ -59,6 +61,7 @@ def create_app(
             "noul_readout": config.noul_readout,
             "max_label_options": config.max_label_options,
             "order_average": config.order_average,
+            "score_order_average": config.score_order_average,
             "prefix_mode": config.prefix_mode,
             "compiled": config.compile,
             "prompt_style": config.prompt_style,
