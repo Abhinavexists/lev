@@ -581,6 +581,30 @@ Serving now skips by default; training does not, so Mode B keeps its data. Mode 
 
 ---
 
+## ADR-029 — Score is read in one order; measure the position effect, and offer averaging off by default
+
+**Open.** Proposed in [#1](https://github.com/Abhinavexists/lev/issues/1); the default is the maintainer's call.
+
+**Problem.** Choice and binary Noul are read in two orders and averaged, which cancels the preference for the first letter (ADR-020). Score is not: its levels keep the low-to-high order training uses, because reversing them measured -2.4 points on helpsteer2, inside sampling noise, on a prompt training never produces (FINDINGS §12). What that leaves was not measured. On `interfaze-ai/lev` with Score questions over the 290 states of sokudan's `bench_en`, an identical-option control (every level the same text, so levels differ only by position and code) put slot 0 at -0.332 below the mean in calibrated log-probability and -0.931 in raw scores, and the first slot won 0.270 of the decisions over all six orders of three levels, where an order-free readout is at 1/3 (#1). The check is the one NandhaKishorM/laya#259 added to Laya, whose gate is -0.20 on raw scores.
+
+**Options.**
+
+- (a) Average Score over orders by default: `reversed` (2 rows, as Choice) or `cyclic` (every rotation, K rows). Both show the model level orders training never produces; in the `chat` style each line still names its level (`(level i of K)`).
+- (b) Keep Score in one order by default, ship averaging as `EngineConfig.score_order_average` (off), and put the control in CI: `lev presentation-checks` against a committed report, failing on drift.
+
+**What is measured, fixed before the runs.** One checkpoint (`interfaze-ai/lev`, bf16, one RTX 5090), sokudan's `bench_en` (290) and `bench_ja` (300), `score_order_average` in {off, reversed, cyclic}:
+
+1. The identical-option control and the first-slot rate, for Score and Choice, with the shipped calibration and raw (an empty `CalibrationProfile`).
+2. Score RPS and accuracy on the benches' 3-level urgency question, with Choice and Noul on the same requests expected unchanged (Score rows are the only rows added).
+3. Milliseconds per three-question request, as the cost of each mode.
+4. With averaging off, every answer identical to the current code on the same items.
+
+Every result is reported whichever way it goes, including accuracy that does not improve.
+
+**Evidence.** Pending the runs above.
+
+---
+
 ## ADR-030 — The server batches across requests and refuses work it cannot do in time
 
 **Accepted.**
