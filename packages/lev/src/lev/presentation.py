@@ -246,6 +246,29 @@ def packed_consistency(
     return worst
 
 
+SETTINGS = (
+    "n_states",
+    "lang",
+    "raw",
+    "kinds",
+    "score_order_average",
+    "split_checks",
+    "max_score_rows",
+    "checkpoint_revision",
+    "dtype",
+)
+
+
+def settings_mismatch(saved: dict, run: dict) -> list[str]:
+    """Every recorded setting of `saved` that this run does not share, as
+    `<name> (report: X, run: Y)`. A setting the report never recorded is not checked."""
+    return [
+        f"{key} (report: {saved[key]!r}, run: {run.get(key)!r})"
+        for key in SETTINGS
+        if key in saved and saved[key] != run.get(key)
+    ]
+
+
 def drift(report: dict, snapshot: dict, tolerance: float) -> list[str]:
     """Every metric that moved more than `tolerance` from the committed report."""
     moved = []
