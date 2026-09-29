@@ -101,6 +101,12 @@ response = client.system_one(
 
 Python 3.12+. `lev.load` and `lev serve` read the release manifest for the base model, prompt format, calibration and head, so there is nothing to configure. The [model card](https://huggingface.co/interfaze-ai/lev) has the full walkthrough with real outputs.
 
+Or deploy that server hosted, with an API key in front of it and nothing to install:
+
+[![Deploy on InstaCloud](https://cdn.jsdelivr.net/gh/InsForge/instacloud-oss@main/assets/deploy-button.svg)](https://instacloud.com/templates/lev)
+
+The template is this repository's `lev serve` at the pinned release, with the Hub cache kept on a volume. Its manifest and Dockerfile are in [InsForge/instacloud-oss](https://github.com/InsForge/instacloud-oss/tree/main/templates/lev).
+
 ## Why it works
 
 ```mermaid
