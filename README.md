@@ -6,6 +6,10 @@ lev is an open System One decision model and the harness that measures it. Give 
 
 <p align="center"><a href="https://github.com/Abhinavexists/lev/actions/workflows/ci.yml"><img src="https://github.com/Abhinavexists/lev/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-2a78d6?style=flat-square" alt="Apache-2.0"></a> <a href="https://huggingface.co/interfaze-ai/lev"><img src="https://img.shields.io/badge/weights-interfaze--ai%2Flev-2a78d6?style=flat-square&logo=huggingface" alt="Weights on the Hugging Face Hub"></a> <img src="https://img.shields.io/badge/base-Qwen3.5--4B-2a78d6?style=flat-square" alt="Qwen3.5-4B"> <img src="https://img.shields.io/badge/output%20tokens-0-2a78d6?style=flat-square" alt="Zero output tokens"> <a href="https://interfaze.ai"> <img alt="interfaze" src="https://img.shields.io/badge/Built_by-Interfaze--ai-4C1"> </a></p>
 
+<p align="center">
+  Read full blog here: <a href="https://interfaze.ai/blog/jev-now-open-source-lev">https://interfaze.ai/blog/jev-now-open-source-lev</a>
+</p>
+
 <h2 align="center">68.9% on all 13 S1Bench subsets. 4B parameters. Zero output tokens.</h2>
 
 <p align="center"><strong>Qwen3.5-4B + LoRA on one H100.</strong> On the six subsets the public S1Bench board completed, level with reflex-4b and behind only Jev and three open models of 26B–35B.<br><a href="docs/FINDINGS.md#17-all-13-s1bench-subsets-on-the-pinned-items">Accuracy receipt</a> · <a href="docs/DECISIONS.md#adr-023--one-batched-forward-not-prefill-and-fork">Speed receipt</a></p>
@@ -100,6 +104,45 @@ response = client.system_one(
 ```
 
 Python 3.12+. `lev.load` and `lev serve` read the release manifest for the base model, prompt format, calibration and head, so there is nothing to configure. The [model card](https://huggingface.co/interfaze-ai/lev) has the full walkthrough with real outputs.
+
+## Hosted classification
+
+Text classification in Interfaze runs on a similar system to lev: the model reads the answer from the set of labels you define. The difference is that Interfaze is still token based, so it's a hybrid.
+
+| Item                | lev                               | Interfaze                                            |
+| :------------------ | :-------------------------------- | :--------------------------------------------------- |
+| Output              | Probabilities, zero output tokens | Tokens, returned as structured output                |
+| Questions           | Typed only: yes/no, choice, score | Any JSON schema, labels included                     |
+| In the same request | Classification only               | OCR, web search, transcription, extraction, and more |
+| Where it runs       | Your GPU                          | Interfaze API                                        |
+
+```bash
+  pip install interfaze
+```
+
+```python
+  import os
+  from typing import Literal
+  from pydantic import BaseModel, Field
+  from interfaze import Interfaze
+  
+  interfaze = Interfaze(api_key=os.environ["INTERFAZE_API_KEY"])
+  
+  class Ticket(BaseModel):
+      intent: Literal["refund", "cancel", "track", "other"]
+      urgent: bool = Field(..., description="Does this need a human within the hour?")
+  
+  response = interfaze.chat.completions.parse(
+      messages=[{"role": "user", "content": "Hi, I was charged twice for my order #4471 and I want a refund."}],
+      response_format=Ticket,
+  )
+  
+  print(response.choices[0].message.parsed)
+```
+
+Tokens cost a little speed, but they let one request classify a document while also reading, searching, and extracting from it. Define your labels as an enum in the schema, and the label comes back as a typed field.
+
+**Interfaze docs → [interfaze.ai/docs](https://interfaze.ai/docs)**
 
 ## Why it works
 
@@ -210,21 +253,6 @@ The data build refuses any source that resolves to one of the 13 S1Bench subsets
 - **Minimal edits and fine-grained ratings are weak.** Inputs that differ by one swapped word or number, and quality ratings over five levels, are where lev is least accurate and can be confidently wrong.
 - **Calibration is fitted on the training distribution.** Temperatures are chosen to transfer across task families, but a task very unlike the training mix may be less well calibrated. Check on your own data before gating on the probabilities.
 - **English only**, and a GPU for real-time use.
-
-## Hosted classification
-
-Text classification in Interfaze runs on a similar system to lev: the model reads the answer from the set of labels you define. The difference is that Interfaze is still token based, so it's a hybrid.
-
-| Item | lev | Interfaze |
-| :-- | :-- | :-- |
-| Output | Probabilities, zero output tokens | Tokens, returned as structured output |
-| Questions | Typed only: yes/no, choice, score | Any JSON schema, labels included |
-| In the same request | Classification only | OCR, web search, transcription, extraction, and more |
-| Where it runs | Your GPU | Interfaze API |
-
-Tokens cost a little speed, but they let one request classify a document while also reading, searching, and extracting from it. Define your labels as an enum in the schema, and the label comes back as a typed field.
-
-**Interfaze docs → [interfaze.ai/docs](https://interfaze.ai/docs)**
 
 ## Layout
 
