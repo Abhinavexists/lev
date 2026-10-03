@@ -1,13 +1,20 @@
 """FastAPI endpoints for typed decisions and model health.
 
 Malformed requests return 422; requests without a loaded engine return 529.
-`/health` reports the resolved checkpoint, readout settings and calibration.
+Concurrent requests share forwards (`lev.batcher`); past `max_pending` in
+flight a request gets 503 at once, and one queued past `timeout` seconds 504.
+`/health` reports the resolved checkpoint, readout settings and calibration,
+and stays responsive under load.
 """
 
 from __future__ import annotations
 
 from typing import Any, Literal
 
+# Module level: FastAPI resolves the endpoint's string annotations here.
+from fastapi import Request
+
+from .batcher import Batcher, ClientGone, Overloaded
 from .model import load
 from .types import SystemOneRequest, SystemOneResponse
 
@@ -22,17 +29,21 @@ def create_app(
     max_label_options: int | None = None,
     prompt_style: Literal["plain", "chat"] | None = None,
     skip_multi_token_codes: bool = True,
+    max_pending: int = 64,
+    max_batch_tokens: int = 16384,
+    timeout: float = 30.0,
 ) -> Any:
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI, HTTPException, Response
+    from starlette.concurrency import run_in_threadpool
 
     from . import __version__
 
     app = FastAPI(title="lev", version=__version__)
-    state: dict[str, Any] = {"engine": None}
+    state: dict[str, Any] = {"engine": None, "batcher": None}
 
     @app.on_event("startup")
     def _load() -> None:
-        state["engine"] = load(
+        engine = load(
             checkpoint_dir,
             model_id=model_id,
             cache_dir=model_cache,
@@ -43,9 +54,12 @@ def create_app(
             max_label_options=max_label_options,
             skip_multi_token_codes=skip_multi_token_codes,
         )
+        state["batcher"] = Batcher(engine, max_pending, max_batch_tokens, timeout)
+        state["engine"] = engine
 
+    # Async, so a saturated thread pool cannot starve it.
     @app.get("/health")
-    def health() -> dict:
+    async def health() -> dict:
         engine = state["engine"]
         if engine is None:
             return {"status": "loading", "model": model_id}
@@ -63,17 +77,35 @@ def create_app(
             "compiled": config.compile,
             "prompt_style": config.prompt_style,
             "skip_multi_token_codes": config.skip_multi_token_codes,
+            "in_flight": state["batcher"].pending,
+            "max_pending": max_pending,
         }
 
     @app.post("/v1/systemone", response_model=SystemOneResponse)
-    def system_one(request: SystemOneRequest) -> SystemOneResponse:
+    async def system_one(body: SystemOneRequest, request: Request) -> Any:
         if state["engine"] is None:
             raise HTTPException(status_code=529, detail="model still loading")
-        if not request.questions:
+        if not body.questions:
             raise HTTPException(status_code=422, detail="at least one question required")
         try:
-            return state["engine"].system_one(request.state, request.questions)
+            prepared = await run_in_threadpool(state["engine"].prepare, body.state, body.questions)
+            return await state["batcher"].submit(prepared, lambda: _disconnected(request))
         except (ValueError, TypeError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Overloaded as exc:
+            raise HTTPException(
+                status_code=503, detail=str(exc), headers={"Retry-After": "1"}
+            ) from exc
+        except TimeoutError as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except ClientGone:
+            return Response(status_code=499)  # nobody is listening; for the access log
 
     return app
+
+
+async def _disconnected(request: Request) -> None:
+    """Return when the client hangs up. The body is already read, so the next
+    ASGI message is the disconnect."""
+    while (await request.receive())["type"] != "http.disconnect":
+        pass
