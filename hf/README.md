@@ -48,7 +48,7 @@ It is built for the high-volume judgement calls inside a product: routing, moder
 pip install "lev[serve] @ git+https://github.com/Abhinavexists/lev#subdirectory=packages/lev"
 ```
 
-This needs Python 3.12 or newer and, for real-time use, a CUDA GPU. The `serve` extra installs torch, transformers, peft, and the HTTP server. The first load downloads the base model (Qwen/Qwen3.5-4B, about 8 GB) and this adapter (about 200 MB).
+This needs Python 3.12 or newer and, for real-time use, a CUDA GPU. The `serve` extra installs torch, transformers, peft, and the HTTP server. The first load downloads the base model (Qwen/Qwen3.5-4B, 9.3 GB of weights) and this release (about 205 MB: the 170 MB adapter, the 15 MB Mode B head and the tokenizer).
 
 ## Quickstart
 
@@ -125,7 +125,7 @@ response = client.system_one(
 print(response.answers["team"].choice, response.answers["bug"].noul)  # technical 0.92
 ```
 
-`GET /health` reports the loaded checkpoint, whether calibration is active, and the routing settings. The server batches every question in a request into one forward pass, and concurrent requests into shared forwards, so clients need not batch for throughput. Past `--max-pending` requests in flight it answers 503 at once rather than queueing, and it returns 422 with the reason for a malformed question.
+`GET /health` reports the loaded checkpoint, whether calibration is active, the routing settings, and requests in flight against `max_pending`. The server batches every question in a request into one forward pass, and concurrent requests into shared forwards, so clients need not batch for throughput. Past `--max-pending` requests in flight (default 64) it answers 503 at once rather than queueing; a request queued past 30 s gets 504, and a malformed question gets 422 with the reason.
 
 ## Benchmarks
 
@@ -150,7 +150,7 @@ print(response.answers["team"].choice, response.answers["bug"].noul)  # technica
 | pubmedqa | biomedical yes/no/maybe | 0.732 | **0.764** | 0.532 |
 | **macro** | | 0.689 | **0.761** | |
 
-lev and TypeSafe Jev ran through the same harness on all 3,880 items S1Bench scores, pinned by [Nimble](https://github.com/bespokelabsai/nimble)'s manifests. Our Jev run lands within 0.8 points of TypeSafe's published figure on every subset, so the harness is not the gap.
+lev and TypeSafe Jev ran through the same harness on all 3,880 items S1Bench scores, pinned by [Nimble](https://github.com/bespokelabsai/nimble)'s manifests. The Jev run lands within 0.8 points of TypeSafe's published figure on every subset, so the harness is not the gap.
 
 - **Noise:** at these sizes a per-subset difference needs roughly 5–9 points to be real. lev's leads on multinli and helpsteer2 are inside that.
 - **Where Jev is clearly ahead:** the minimal-edit pairs (paws −12.4, vitaminc −13.3) and summeval-consistency (−54.1), where lev rates most fully faithful summaries one level low. Fine-tuning introduced that: the untuned backbone scores 0.826.
@@ -173,7 +173,7 @@ A held-out split of the 29 training sources, with no row shared with training:
 | clinc_oos (151 intents) | 0.968 |
 | FEVER claim verification | 0.872\* |
 
-\* Measured on this checkpoint before the last serving update. That update routes choice sets of more than 68 options to label-token readout and re-selects the temperatures. The banking77 and clinc_oos rows come from after the update, which raised banking77 from 0.818. Smaller option sets are routed the same way as before.
+\* Measured on this checkpoint before the serving update that skips split label codes. That update routes choice sets of more than 68 options to label-token readout and re-selects the temperatures. The banking77 and clinc_oos rows come from after the update, which raised banking77 from 0.818. Smaller option sets are routed the same way as before.
 
 ### Speed
 

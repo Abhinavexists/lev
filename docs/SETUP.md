@@ -73,7 +73,7 @@ export LEV_HF_SECRET=huggingface
 
 ### Deploy knobs
 
-Read on the machine where `modal deploy` runs — from the environment or from `.env` — never inside the container. The first group travels to the container as a Secret; the second sets decorator arguments, which are fixed at import.
+Set on the machine where `modal deploy` runs, from the environment or `.env`; the container never reads `.env`. The first group travels to the container as a Secret; the second sets decorator arguments, which are fixed at import.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
@@ -87,15 +87,16 @@ Read on the machine where `modal deploy` runs — from the environment or from `
 | `LEV_SERVE_WARM` | `0` | Containers kept running. One removes the 20-55 s cold start, at the cost of an idle GPU |
 | `LEV_SERVE_REGION` | unset | A Modal region near the client; the measured 280 ms round trip is a continent, not a server |
 | `LEV_SERVE_SCALEDOWN` | `300` | Idle seconds before a container stops |
+| `LEV_SERVE_MAX` | unset | Container ceiling; unset means Modal's own limit. Pin it for a benchmark sweep, where a parallel client would otherwise open a GPU per burst of requests |
 
-> Leave these **commented** in `.env` rather than writing `VAR=`. The empty string is not the same as unset: `int("")` raises for the four numeric knobs, and an empty `LEV_SERVE_PRESET` fails the preset check instead of falling back to the default.
+> Leave these **commented** in `.env` rather than writing `VAR=`. For `LEV_SERVE_CONCURRENCY`, `LEV_SERVE_WARM` and `LEV_SERVE_SCALEDOWN` the empty string is not the same as unset: `int("")` raises at import. The other knobs treat an empty value as unset.
 
 ### The order
 
 ```bash
 modal run modal/app.py::download --model-id Qwen/Qwen3.5-4B   # once, ~8 GB
 modal run modal/app.py::build_data --limit-per-source 20000   # CPU, no GPU
-make smoke                                                    # ~5 min H100
+make smoke                                                    # 0.8B, 40 steps, ~5 min H100
 make train PRESET=4b-instruct                                 # ~8 h H100
 make calibrate PRESET=4b-instruct                             # the temperatures
 make deploy PRESET=4b-instruct                                # /v1/systemone
@@ -103,13 +104,7 @@ make deploy PRESET=4b-instruct                                # /v1/systemone
 
 `download` warms the model cache (~8 GB into a Volume). `build_data` runs on CPU: it is downloads, and there is no reason to pay GPU rates to wait on a CDN.
 
-Then **always run the smoke test before the real thing**:
-
-```bash
-make smoke      # 0.8B, 40 steps, ~5 min of H100
-```
-
-It exercises the whole path — image, volumes, **both readout modes**, the loss, and a checkpoint write — and fails if only one mode was covered. If the data volume is empty it builds a small mixture first, on the GPU, so for a real run do `build_data` first.
+**Always run `make smoke` before the real run.** It exercises the whole path — image, volumes, **both readout modes**, the loss, and a checkpoint write — and fails if only one mode was covered. If the data volume is empty it builds a small mixture first, on the GPU, so for a real run do `build_data` first.
 
 You can prove the same path with no GPU and no Modal account at all:
 
@@ -135,10 +130,7 @@ Nothing is Modal-specific except `modal/app.py`. With a local H100:
 
 ```bash
 uv sync --extra train
-uv run python -c "
-from lev.train.config import PRESETS
-from lev.train.loop import run_training
-run_training(PRESETS['4b-instruct'], data_dir='data/mixture', model_cache='~/.cache/huggingface')
+uv run lev train --preset 4b-instruct --data data/mixture   # -> checkpoints/lev-instruct
 ```
 
 ---
@@ -150,7 +142,7 @@ run_training(PRESETS['4b-instruct'], data_dir='data/mixture', model_cache='~/.ca
 | `FileNotFoundError: data/` | Run from the repo root, or check `repo_data_dir()` can walk up to it |
 | `ContaminationError` | Working as designed. A source collides with an evaluation subset — remove it ([ADR-009](DECISIONS.md#adr-009--all-thirteen-evaluation-subsets-are-banned-from-training)) |
 | `refusing to fit calibration on split 'test'` | Working as designed. Use a third split, disjoint from train and test |
-| OOM at 4 k context | Check `make plan` headroom. Below ~20 GB, `validate()` should already have refused |
+| OOM in training | Check `make plan` headroom. Below ~20 GB, `validate()` should already have refused |
 | LoRA loss flat, nothing learns | `enable_input_require_grads()` missing alongside gradient checkpointing — activations arrive with no `grad_fn` and adapters get no gradient |
 | `chunk_gated_delta_rule is falling back to its reference PyTorch implementation` | Speed, not correctness — but 24 of the 32 layers are linear-attention, so it matters. The image installs `flash-linear-attention` for this ([ADR-017](DECISIONS.md#adr-017--batches-are-length-bucketed-and-the-budget-was-wrong-again)) |
 | `causal_conv1d was requested, but nvcc was not found` / `NameError: bare_metal_version` | `causal-conv1d` is a CUDA source build; the image uses an `nvidia/cuda:*-devel` base for its compiler. If the build breaks on a version bump, delete that `pip_install` line: runs get slower, not wrong |

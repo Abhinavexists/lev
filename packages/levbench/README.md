@@ -1,6 +1,6 @@
 # levbench
 
-Benchmark harness for System One decision models: TypeSafe's Jev and any `/v1 systemone`-compatible server, through the same code path. Reports accuracy, log loss, Brier, ECE with reliability bins, selective accuracy, latency, tokens, cost and schema-retry counts.
+Benchmark harness for System One decision models: TypeSafe's Jev and any `/v1/systemone`-compatible server, through the same code path. Reports accuracy, log loss, Brier, ECE with reliability bins, selective accuracy, latency, tokens, cost and schema-retry counts.
 
 ```bash
 levbench eval --backend jev --tasks data/s1bench

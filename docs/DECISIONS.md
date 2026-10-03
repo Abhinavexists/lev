@@ -589,7 +589,7 @@ Serving now skips by default; training does not, so Mode B keeps its data. Mode 
 
 **Decision.** Three changes, none of which needs vLLM or SGLang:
 
-1. **Last-token projection.** The engine runs the decoder alone and applies `lm_head` only at each row's last real token. That gives `(rows, vocab)` logits, and the Mode B hidden state comes from the same gather instead of `output_hidden_states`' 33 layers. Same request: +0.06 GB. Against the old engine on a random Qwen3.5 with both layer kinds, max |Δp| is 1.7e-8 across Mode A and Mode B in both prefix modes; on the released weights (bf16, MPS) it is exactly 0 on nine S1Bench requests. `hidden_states[-1]` equals the decoder's `last_hidden_state` exactly, so the trained Mode B head sees the same vectors.
+1. **Last-token projection.** The engine runs the decoder alone and applies `lm_head` only at each row's last real token, giving `(rows, vocab)` logits; the Mode B hidden state comes from the same gather instead of `output_hidden_states`' 33 layers. Same request: +0.06 GB. Against the old engine on a random Qwen3.5 with both layer kinds, max |Δp| is 1.7e-8 across Mode A and Mode B in both prefix modes; on the released weights (bf16, MPS) it is exactly 0 on nine S1Bench requests. `hidden_states[-1]` equals the decoder's `last_hidden_state` exactly, so the trained Mode B head sees the same vectors.
 2. **Cross-request batching (`lev.batcher`).** One worker thread owns the GPU. A request is validated and tokenised (`DecisionEngine.prepare`), then queued. Each forward takes every queued request that fits `max_batch_tokens` (rows × widest row) and runs them as one batch (`DecisionEngine.answer`). There is no timer: batches grow only while a forward is already running, so an idle server adds no wait. Rows are independent, so a batched request has the same inputs as a solo one. This is what vLLM's continuous batching reduces to when there is no decode loop.
 3. **Admission control.** A request arriving with `max_pending` (64) already in flight gets 503 with `Retry-After` immediately. A request whose client disconnects, or that has waited past `timeout` (30 s, then 504), is dropped before the GPU. `/health` is async and reports `in_flight`.
 
@@ -610,7 +610,7 @@ Serving now skips by default; training does not, so Mode B keeps its data. Mode 
 
 | # | Question | How it gets settled |
 | --- | --- | --- |
-| ~~Q1~~ | ~~Is Jev's `confidence` normalised Gini?~~ | **Closed: no.** It is chance-corrected *max probability*, `(K·max − 1)/(K − 1)`, rounded to 2dp — mean abs error 0.0026 over 48 live answers. Gini shares the wrapper and has the wrong inner statistic. See FINDINGS.md §confidence |
+| ~~Q1~~ | ~~Is Jev's `confidence` normalised Gini?~~ | **Closed: no.** It is chance-corrected *max probability*, `(K·max − 1)/(K − 1)`, rounded to 2dp — mean abs error 0.0026 over 48 live answers. Gini shares the wrapper and has the wrong inner statistic. See FINDINGS.md §3 |
 | **Q2** | Do Mode A and Mode B agree where both are valid? | Explicit eval ([ADR-005](#adr-005--dual-mode-readout-the-differentiator)). A correctness gate, not a nice-to-have |
 | **Q3** | Can a *state* cache persist across requests? | decider persists a **schema** cache; persisting state is unclaimed and is the genuinely novel direction |
 | **Q4** | Does Mode B cost accuracy under the ceiling? | Ablation: Mode B forced on small option sets vs Mode A |

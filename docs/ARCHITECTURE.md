@@ -145,18 +145,18 @@ vocab_size          248320   tie_word_embeddings true
 image/video tokens  248056 / 248057         ← natively multimodal
 ```
 
-Four properties fall out of that config, and each one buys a part §3 said we wanted:
+Four properties fall out of that config, and each one buys a part §3 asked for:
 
-| Property | What it gives us free |
+| Property | What it gives for free |
 | --- | --- |
 | **Hybrid: only 8 of 32 layers hold K/V** | decider's persistent prefix cache (§3.3) **without pretraining a hybrid**. The other 24 layers carry conv/recurrent state, which is small and forkable |
 | **262 k context** | The 512-token trap (§4) cannot happen. 32 k states are unremarkable |
 | **Native image/video tokens** | reflex's multimodal states, at no extra cost |
 | **GQA 16/4, tied embeddings** | Small K/V footprint per cached state — the thing we fork per question |
 
-This is the same family decider used. Their 2B is 24 layers = **18 linear + 6 full** — exactly the "6 full-attention layers, 18 delta-net layers" their README describes. We are inheriting a validated choice, one size up.
+This is the same family decider used. Their 2B is 24 layers = **18 linear + 6 full** — exactly the "6 full-attention layers, 18 delta-net layers" their README describes. lev inherits a validated choice, one size up.
 
-**Why 4B and not another size.** Evidence, not preference: reflex-4b (Qwen3.5-4B) scores **0.7189** with temperature calibration; decider-2b scores **0.7033** with a full fine-tune. ~1.6 pp for 2× the parameters, and 4B still fits comfortably under LoRA. 9B doubles memory for accuracy we do not need, since **our target is calibration, not the accuracy crown**.
+**Why 4B and not another size.** Evidence, not preference: reflex-4b (Qwen3.5-4B) scores **0.7189** with temperature calibration; decider-2b scores **0.7033** with a full fine-tune. ~1.6 pp for 2× the parameters, and 4B still fits comfortably under LoRA. 9B doubles memory for accuracy we do not need, since **the target is calibration, not the accuracy crown**.
 
 **Named fallback:** `Qwen3.5-2B-Base` with a full fine-tune — decider's exact proven recipe. Use it if LoRA underfits the Family-B heads.
 
@@ -174,7 +174,7 @@ LoRA r32 on `q,k,v,o,gate,up,down` ≈ 25–40 M trainable parameters. **The Fam
 
 ### 5.3 The readout — dual mode, and the part nobody else has
 
-```bash
+```text
                        questions + option sets
                                  │
                     ┌────────────┴────────────┐
@@ -194,7 +194,7 @@ LoRA r32 on `q,k,v,o,gate,up,down` ≈ 25–40 M trainable parameters. **The Fam
      raw scores → temperature per type, mode and option band → softmax
 ```
 
-**The router's boundary is tokenizer-verified single-token-ness, not a fixed count.** LitJev rejects unsupported tokenizers rather than truncating, and that is the correct behaviour — but where LitJev *rejects*, we **fall through to Mode B**. That is the whole differentiator: the failure case of every Family-A implementation becomes our second mode.
+**The router's boundary is tokenizer-verified single-token-ness, not a fixed count.** LitJev rejects unsupported tokenizers rather than truncating, and that is the correct behaviour — but where LitJev *rejects*, lev **falls through to Mode B**. That is the whole differentiator: the failure case of every Family-A implementation becomes lev's second mode.
 
 **A and B must be measured against each other.** They compute distributions by different mechanisms, so:
 
@@ -211,12 +211,12 @@ LoRA r32 on `q,k,v,o,gate,up,down` ≈ 25–40 M trainable parameters. **The Fam
 
 **Score under Mode B needs care that Mode A does not.** Under A the levels are unordered symbols and ordering lives in the prompt. Under B, a shared matching head has nothing forcing level *i+1* to score above level *i*, so the loss adds an explicit ordinal term (applied to Noul rows as well, whose rating scale is equally ordered).
 
-**Noul returns a real distribution.** Nine rating tokens rather than a two-way yes/no (simple-jev, §3.4). This fixes the asymmetry FINDINGS §2 found in the real API, where `NoulAnswer` is a bare float with no `probabilities` and no `confidence`. Ours carries both, and is therefore calibratable like the other two types.
+**Noul returns a real distribution** over nine rating tokens (simple-jev, §3.4): under the rating readout lev's `NoulAnswer` carries `probabilities` and `confidence`, where the real API's is a bare float (FINDINGS §2), so Noul is calibratable like the other two types. The binary readout, the default for a frozen model, leaves `probabilities` empty.
 
 ### 5.5 Caching — two layouts, trained 50/50
 
-- **State-first** (default) — `Context … Question … Options … Answer:`. The state is the shared prefix. Serving runs one batched forward over prefix + suffix per question, which measured faster than prefilling once and forking the 8-layer K/V + conv state, because the forward is launch-bound at this size (ADR-023); the fork remains as `prefix_mode="fork"`.
-- **Schema-first** (opt-in) — questions/options before the state, so the schema is a state-independent prefix cached read-only **across requests**.
+- **State-first** (default) — `Context … Question … Options … Answer:`. The state is the shared prefix. Serving runs one batched forward over prefix + suffix per question, which measured faster than prefilling once and forking the 8-layer K/V + conv state, because the forward is launch-bound at this size (ADR-023); the fork remains as `prefix_mode="fork"`. In the default mode concurrent requests share those forwards (`lev.batcher`; under the fork they run one after another), and `lm_head` projects only each row's last token (ADR-030).
+- **Schema-first** (opt-in) — questions/options before the state, so the schema is a state-independent prefix cached read-only **across requests**. *As built: training uses both layouts and `EngineConfig.layout` can render schema-first, but the server always uses state-first and no prefix cache persists across requests; the one cross-request cache is Mode B's candidate encodings, kept per candidate set.*
 
 Random layout per example at training time buys the choice at inference. decider's measured cost of schema-first:
 
@@ -237,7 +237,7 @@ Three splits, not two. Temperature is fitted on a split disjoint from **both** t
 3. Post-hoc temperature fit on the calibration split.
 4. Report accuracy, NLL, Brier and **ECE** per source, with and without the temperature.
 
-Evidence this is worth the effort: untuned Qwen3.5 backbones sit at **ECE 0.4252**; reflex, the same family plus one fitted scalar, reaches **0.0849**. Jev is **0.0764**. **A single scalar is most of the gap.**
+Evidence this is worth the effort: the untuned Qwen3-8B (`qwen3-8b-full`) sits at **ECE 0.4252**; reflex, Qwen3.5-4B plus one fitted scalar, reaches **0.0849**. Jev is **0.0764**. **A single scalar is most of the gap.**
 
 RL with a proper-score belief reward (decider v10) comes after a supervised baseline exists, never before.
 
@@ -265,7 +265,7 @@ H100 effective       ~400 TFLOP/s bf16 (assumed at design time; ~88 measured)
 
 Cross-check on step count: batch 32 gives 6,250 steps/epoch, 18,750 total.
 
-Two corrections this arithmetic has already needed, both from [ADR-016](DECISIONS.md#adr-016--sequence-length-is-measured-and-the-budget-was-wrong-by-10x) and [ADR-017](DECISIONS.md#adr-017--batches-are-length-bucketed-and-the-budget-was-wrong-again): the 128-token mean is measured, not assumed — an earlier guess of 1,200 put this at 16 hours — and the model computes on the padded batch rectangle, not on real tokens, which cost a further 4.4× until batches were length-bucketed. The first measured run sustained ~4,200 tok/s against a ~4-hour wall clock, and the released run took 7.8 h, so 1.7 h was a floor by a factor of four; `lev plan` now uses the measured throughput.
+Two corrections this arithmetic has already needed, both from [ADR-016](DECISIONS.md#adr-016--sequence-length-is-measured-and-the-budget-was-wrong-by-10x) and [ADR-017](DECISIONS.md#adr-017--batches-are-length-bucketed-and-the-budget-was-wrong-again): the 128-token mean is measured, not assumed — an earlier guess of 1,200 put this at 16 hours — and the model computes on the padded batch rectangle, not on real tokens, which cost a further 4.4× until batches were length-bucketed. The first measured run averaged ~4,400 real tok/s: 18,750 steps × 32 × 128 tokens in ~4h50 (ADR-018), and the released run took 7.8 h, so 1.7 h was a floor by a factor of four; `lev plan` uses the throughput measured on the released run (8.75e13 FLOP/s).
 
 **A full run is hours, not days.** That is the real consequence of choosing LoRA on a 4B: you can afford many full runs, which means ablations — 2B vs 4B, Mode B on vs off, temperature per-type vs global — are affordable rather than aspirational. Budget the H100 for **ablations, not for one heroic run**.
 
@@ -283,7 +283,7 @@ Steps 1–2 need no training and run on a laptop, before the H100 is touched.
 
 Stated plainly, because the distinction matters:
 
-- **Verified by me:** the Qwen3.5 config facts (hybrid layer split, context, multimodal tokens), the memory arithmetic, every S1Bench number in §2, and the architecture of each implementation surveyed.
+- **Verified here:** the Qwen3.5 config facts (hybrid layer split, context, multimodal tokens), the memory arithmetic, every S1Bench number in §2, and the architecture of each implementation surveyed.
 - **Taken from others' published numbers:** the 0.7189 target (reflex), 0.7033 (decider-2b), the schema-first cost table, ECE 0.0849 vs 0.4252.
 - **Measured since:** the 128-token mean and the padding factor (§5.8); that both readouts serve and train; that `levbench` on S1Bench's pinned items reproduces Jev's published per-subset numbers within 0.8 pp on all 13 subsets (FINDINGS §17).
 - **Measured after training:** three 4B checkpoints trained, calibrated and scored on S1Bench against Jev through identical task files; results and what each run changed are in [FINDINGS §12–17](FINDINGS.md), including the lev-vs-Jev calibration comparison on all 13 subsets.
@@ -295,7 +295,7 @@ Stated plainly, because the distinction matters:
 
 - Every design above serves `/v1/systemone`, so `levbench eval --base-url …` measures our model against Jev on identical questions with no code change.
 - `levbench eval` reports ECE, Brier, log loss and selective accuracy — the exact axis §3.1 identifies as the one that matters and that most clones failed.
-- `levbench sweep` verifies our state cache actually amortises, rather than assuming it.
+- `levbench sweep` verifies that reading the state amortises across the questions in one call, rather than assuming it.
 - `levbench confidence` settles which statistic our confidence should be, and whether it matches Jev's.
 
-**The target to beat is not Jev's accuracy — it is the open clones' calibration.** They sit ~1 point behind Jev on accuracy (§FINDINGS 9) and 1.6–2.2× worse on ECE. Closing the ECE gap with a fitted temperature, on a backbone we can run, is the achievable win.
+**The target to beat is not Jev's accuracy — it is the open clones' calibration.** They sit ~1 point behind Jev on accuracy (FINDINGS §9) and 1.6–2.2× worse on ECE. Closing the ECE gap with a fitted temperature, on a backbone we can run, is the achievable win.
