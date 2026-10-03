@@ -80,9 +80,7 @@ def subset_names() -> list[str]:
 
 def get_subset(name: str) -> EvalSubset:
     """Resolve a subset by name or alias. Raises unless it is S1Bench evaluation data."""
-    canonical = name if name in EVAL_SUBSETS else assert_eval_only(name)
-    assert_eval_only(canonical)
-    return EVAL_SUBSETS[canonical]
+    return EVAL_SUBSETS[assert_eval_only(name)]
 
 
 def definition(name: str) -> dict:

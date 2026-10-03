@@ -72,8 +72,9 @@ class MixtureSpec:
         assert_clean(self.sources.keys())
         if not self.sources:
             raise ValueError("mixture has no sources")
-        if abs(sum(self.sources.values()) - 1.0) > 1e-6:
-            raise ValueError(f"source weights must sum to 1, got {sum(self.sources.values())}")
+        total = sum(self.sources.values())
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError(f"source weights must sum to 1, got {total}")
 
 
 Loader = Callable[[], Iterable[Example]]
@@ -150,8 +151,8 @@ def _vary(
     option and remaps its index. Score levels are never reordered.
     """
     instructions = question.instructions
-    negate = isinstance(question, Noul) and augment.negations and allow_negation
-    if negate and rng.random() < spec.negate_fraction:
+    can_negate = isinstance(question, Noul) and augment.negations and allow_negation
+    if can_negate and rng.random() < spec.negate_fraction:
         instructions = rng.choice(augment.negations)
         target = (len(NOUL_RATING_TOKENS) - 1) - target
         return Noul(instructions=instructions, criteria=question.criteria), target
@@ -194,7 +195,7 @@ def _donor_state(
     source: str,
     adjacent: dict[str, frozenset[str]],
     rng: random.Random,
-):
+) -> str | dict | list:
     """A state borrowed from a source that cannot answer `source`'s question.
 
     Another source is not enough: imdb's question is answerable from a

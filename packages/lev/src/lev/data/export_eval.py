@@ -17,7 +17,7 @@ import json
 from pathlib import Path
 
 from ..labels import noul_probability
-from ..types import Noul, Score, question_payload
+from ..types import Noul, Question, Score, question_payload
 from .build import _group_by_source, load_split
 from .splits import Split
 
@@ -26,7 +26,7 @@ from .splits import Split
 MIN_USEFUL_ITEMS = 100
 
 
-def truth_for(question, target: int):
+def truth_for(question: Question, target: int) -> bool | int | str:
     if isinstance(question, Noul):
         # The target is a rating index; collapse it as the readout does.
         return noul_probability({target: 1.0}) >= 0.5

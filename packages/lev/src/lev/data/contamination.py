@@ -140,8 +140,7 @@ def assert_eval_only(dataset_name: str) -> str:
 
 def assert_clean(dataset_names: Iterable[str]) -> None:
     """Raise if any dataset resolves to a blocked evaluation subset."""
-    names = list(dataset_names)
-    if hits := check_mixture(names):
+    if hits := check_mixture(dataset_names):
         listed = "\n".join(f"  {src!r} -> blocked subset {dst!r}" for src, dst in hits.items())
         raise ContaminationError(
             f"{len(hits)} dataset(s) in the mixture collide with S1Bench evaluation "

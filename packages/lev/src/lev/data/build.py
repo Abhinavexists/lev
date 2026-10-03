@@ -135,14 +135,21 @@ def build_dataset(
     splits = split_examples(all_examples)
     report = check_coverage(splits)
     by_source = {split: _group_by_source(rows) for split, rows in splits.items()}
+    adjacent = adjacency_map()
+    augment = augmentation_map()
 
     counts: dict[str, int] = {}
-    for split in Split:
+    for split_index, split in enumerate(Split):
         available = {name: weight for name, weight in weights.items() if by_source[split].get(name)}
         if not available:
             raise ValueError(f"split {split.value} has no examples from any source")
         total_weight = sum(available.values())
         is_train = split is Split.TRAIN
+        held_out_overrides = (
+            {}
+            if is_train
+            else {"paraphrase_fraction": 0.0, "negate_fraction": 0.0, "description_dropout": 0.0}
+        )
 
         mixture = MixtureSpec(
             sources={name: weight / total_weight for name, weight in available.items()},
@@ -153,21 +160,13 @@ def build_dataset(
             # Unanswerable test rows would measure abstention, not accuracy.
             abstain_fraction=abstain_fraction if is_train else 0.0,
             # A different stream per split, so layouts do not repeat in lockstep.
-            seed=seed + list(Split).index(split),
-            adjacent=adjacency_map(),
+            seed=seed + split_index,
+            adjacent=adjacent,
             # Test keeps each source's canonical question (one per exported eval
             # file). Calibration varies option sets but not wording, so each
             # option-count band has rows to fit on (ADR-026).
-            augment=augmentation_map() if split is not Split.TEST else {},
-            **(
-                {}
-                if is_train
-                else {
-                    "paraphrase_fraction": 0.0,
-                    "negate_fraction": 0.0,
-                    "description_dropout": 0.0,
-                }
-            ),
+            augment=augment if split is not Split.TEST else {},
+            **held_out_overrides,
         )
         # `name=name` binds the loop variable now, not the last source.
         loaders = {
@@ -191,12 +190,8 @@ def build_dataset(
         "abstain_fraction": abstain_fraction,
         "augmentation": {
             "train_only": True,
-            "sources_with_negations": sorted(
-                n for n, a in augmentation_map().items() if a.negations
-            ),
-            "sources_with_paraphrases": sorted(
-                n for n, a in augmentation_map().items() if a.paraphrases
-            ),
+            "sources_with_negations": sorted(n for n, a in augment.items() if a.negations),
+            "sources_with_paraphrases": sorted(n for n, a in augment.items() if a.paraphrases),
         },
         "seed": seed,
         "split_salt": SPLIT_SALT,
