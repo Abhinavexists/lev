@@ -8,18 +8,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-# Sustained throughput measured on the released 4b-instruct run: 18,750 steps in
-# 7.8 h of training (~1.5 s/step, from checkpoint times), i.e. 2.46e18 FLOPs over
-# 28,100 s. Padded batches, per-step overhead and the chat template's extra tokens
-# are all inside it; peak bf16 is ~990 TFLOP/s. The plain-prompt 4B runs took
-# 4h50 and 5h53, so this reads high for them.
+# Measured on the released 4b-instruct run (2.46e18 FLOPs in 7.8 h, padding and overhead
+# included); reads high for the plain-prompt 4B runs (4h50, 5h53). docs/TRAINING.md.
 H100_EFFECTIVE_FLOPS = 8.75e13
 
 H100_VRAM_GB = 80.0
 
-# Forward+backward is ~6*N FLOPs/token; checkpointing recomputes activations for
-# roughly a third more. True under LoRA too: the backward pass still traverses
-# the frozen weights to reach the adapters.
+# ~6*N FLOPs/token forward+backward, plus ~a third for checkpointing's recompute. Holds
+# under LoRA: backward still traverses the frozen weights to reach the adapters.
 FLOPS_PER_PARAM_PER_TOKEN = 8.0
 
 
@@ -52,18 +48,15 @@ class TrainConfig:
     # Serving must match; the release manifest records this format.
     prompt_style: Literal["plain", "chat"] = "plain"
 
-    # Data.
     n_examples: int = 200_000
     # Re-measure with `lev plan --data <dir>` after changing the mixture (ADR-016).
     avg_tokens_per_example: int = 128
     # A truncation cap, not the training length: batches pad to their longest row.
     max_seq_len: int = 2_048
     schema_first_fraction: float = 0.5
-    # Unanswerable examples with a uniform target, teaching the model to spread
-    # mass instead of guessing (decider's trick, §5.6).
+    # Unanswerable rows with a uniform target: spread mass instead of guessing (§5.6).
     abstain_fraction: float = 0.1
 
-    # Optimisation.
     epochs: int = 3
     per_device_batch: int = 32
     # Length-sorting window in batches; limits padding while preserving randomness.
@@ -77,7 +70,6 @@ class TrainConfig:
     # Every ordered readout: Score and Noul, both modes (see readout/mode_b.py).
     ordinal_weight: float = 0.25
 
-    # Bookkeeping.
     seed: int = 17
     checkpoint_every: int = 2_000
     log_every: int = 25

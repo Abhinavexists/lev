@@ -6,13 +6,11 @@ import time
 
 
 class ProgressLog:
-    """Periodic one-line progress, flushed: on Modal stdout is the only view of a
-    run, and Python block-buffers it when it is not a tty.
+    """Periodic one-line progress, flushed: on Modal stdout is the only view, and it is
+    block-buffered when not a tty.
 
-    Losses are per mode (Mode B starts near `ln(K)`, a different scale), and
-    loss, rate, throughput and ETA are measured over the window since the last
-    report. Throughput counts real tokens from the attention mask, not
-    `config.avg_tokens_per_example`, so it can contradict a wrong plan (ADR-016).
+    Losses are per mode (Mode B starts near `ln(K)`). Throughput counts real tokens from the
+    attention mask, so it can contradict a wrong plan (ADR-016).
     """
 
     def __init__(self, total_steps: int, log_every: int):
@@ -33,10 +31,8 @@ class ProgressLog:
 
         now = time.monotonic()
         elapsed = max(now - self.start, 1e-9)
-        # Over the window, not since start: startup (weight loading, a Triton JIT
-        # compile of minutes) made a cumulative rate read 0.33 it/s against 2.50
-        # steady-state, with the ETA wrong by the same factor (ADR-017). A coarse
-        # clock can report zero on a fast window; never divide by it.
+        # Over the window, not since start: startup skews a cumulative rate ~8x (ADR-017).
+        # A coarse clock can report zero on a fast window; never divide by it.
         span = max(now - self.mark, 1e-9)
         rate = (done - self.mark_step) / span
         remaining = (self.total - done) / rate if rate else 0.0

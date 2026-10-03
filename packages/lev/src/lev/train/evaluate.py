@@ -1,7 +1,5 @@
-"""Evaluate checkpoints through the training forward path, without fitting.
-
-Report metrics per source before and after applying fitted temperatures.
-"""
+"""Evaluate checkpoints through the training forward path, per source, before and after
+fitted temperatures."""
 
 from __future__ import annotations
 
@@ -146,7 +144,6 @@ def evaluate_split(
     )
     device = device_of(model)
 
-    # (source, question type, mode, option count) -> (raw logits, gold index) rows.
     collected: dict[tuple[str, str, str, int], list[tuple[list[float], int]]] = {}
     with torch.no_grad():
         for group in batcher(rows):

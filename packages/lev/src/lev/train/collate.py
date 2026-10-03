@@ -1,7 +1,6 @@
 """Batch and collate examples by readout mode.
 
 Rows are right-padded: `last_positions` points to each final real token.
-Mode B encodes a shared pool of distinct candidate strings per batch.
 """
 
 from __future__ import annotations
@@ -28,8 +27,8 @@ class RouteCache:
         self._routes: dict[tuple[str, str, int], Route] = {}
 
     def route_for(self, example: Example) -> Route:
-        # Keyed on the option count: a source has many questions (subsampled
-        # option sets, per-row QA choices), and the route depends only on the count.
+        # Keyed on the option count: a source has many questions (subsampled option sets,
+        # per-row QA choices), and the route depends only on the count.
         key = (example.source, example.name, candidate_count(example.question))
         if key not in self._routes:
             self._routes[key] = route(
@@ -56,8 +55,7 @@ class Batch:
     ordinal: object  # (B,) True for the ordered types: Score and Noul
     # Mode A only: the label token id per candidate slot.
     candidate_token_ids: object | None = None  # (B, Kmax)
-    # Mode B only: a shared pool of encoded candidate strings, and per-row
-    # indices into it.
+    # Mode B only: a shared pool of encoded candidate strings, indexed per row.
     candidate_input_ids: object | None = None  # (C, Tc)
     candidate_attention_mask: object | None = None  # (C, Tc)
     candidate_last_positions: object | None = None  # (C,)

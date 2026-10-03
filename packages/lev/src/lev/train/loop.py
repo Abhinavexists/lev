@@ -1,7 +1,4 @@
-"""Fine-tune the backbone and candidate head, with checkpointing and resume.
-
-The objective combines cross-entropy, Brier and an ordinal term.
-"""
+"""Fine-tune the backbone and candidate head, with checkpointing and resume."""
 
 from __future__ import annotations
 
@@ -105,9 +102,8 @@ def decision_loss(logits, targets, config: TrainConfig, ordinal=False, soft_targ
     if soft_targets is not None and (~hard).any():
         target_dist[~hard] = soft_targets[~hard].to(probs.dtype)
 
-    # One cross-entropy over both kinds of row; with a one-hot target it equals
-    # F.cross_entropy. `torch.where`, not a product: a padded slot has logit -inf
-    # and target 0, and `0 * -inf` is NaN, which poisons the batch mean.
+    # `torch.where`, not a product: a padded slot has logit -inf and target 0, and
+    # `0 * -inf` is NaN, which poisons the batch mean.
     weighted = torch.where(target_dist > 0, target_dist * log_probs, torch.zeros_like(log_probs))
     ce = -weighted.sum(dim=-1).mean()
     brier = ((probs - target_dist) ** 2).sum(dim=-1).mean()
@@ -126,10 +122,8 @@ def decision_loss(logits, targets, config: TrainConfig, ordinal=False, soft_targ
 def candidate_logits(model, batch, head=None):
     """One forward pass -> `(B, K)` logits over the batch's candidate set.
 
-    Mode A keeps the label-token ids from the vocabulary logits at the answer
-    boundary. Mode B scores candidate text through the matching head; the
-    collator pools candidate strings, so a 77-option question costs one extra
-    short forward, not 77.
+    Mode A gathers label-token logits at the answer boundary. Mode B scores pooled
+    candidate strings through the head: one extra short forward, not one per option.
     """
     import torch
 
@@ -248,12 +242,9 @@ def run_training(
 ) -> dict:
     """Train, checkpointing periodically so a long run survives a preemption.
 
-    With no `resume_from`, the newest `step-N` under `config.output_dir` is
-    resumed; `fresh=True` starts over. A checkpoint carries the optimiser
-    moments, schedule position, step, epoch, and the RNG state behind the
-    epoch's data order, so a resumed run continues through the batches it had
-    not seen, at the learning rate it had reached; rerunning a finished run
-    trains nothing. Checkpoints from before ADR-021 restore weights only.
+    With no `resume_from`, the newest `step-N` under `config.output_dir` is resumed;
+    `fresh=True` starts over. Resume restores optimiser, schedule and data order, so a
+    finished run trains nothing; pre-ADR-021 checkpoints restore weights only.
     """
     import torch
     from torch.optim import AdamW
@@ -282,7 +273,6 @@ def run_training(
         state = load_training_state(resume_from)
     device = device_of(model)
 
-    # One cache shared by batcher and collator, so each question routes once.
     routes = RouteCache(tokenizer, config.max_label_options, Style(config.prompt_style))
     collator = DecisionCollator(tokenizer, max_seq_len=config.max_seq_len, routes=routes)
     batcher = ModeBatcher(

@@ -24,13 +24,10 @@ def latest_checkpoint(output: str | Path) -> Path | None:
 
 
 def fetch_checkpoint(spec: str | Path, cache_dir: str | None = None) -> Path:
-    """A local directory as-is; a Hub id (`hf://org/name` or `org/name`) downloaded.
+    """A local path as-is, else a Hub id (`hf://org/name` or `org/name`) downloaded.
 
-    Anything on disk is local. A missing path is tried as a Hub id only if,
-    after stripping `hf://`, it has exactly one `/` and does not start with `/`
-    or `.`; anything else fails locally. A typo like `checkpoints/lev-instuct`
-    therefore reaches the Hub, and a repo the Hub does not have raises
-    `FileNotFoundError` naming both readings.
+    A missing path shaped `a/b` (not starting `/` or `.`) is tried on the Hub, so a typo like
+    `checkpoints/lev-instuct` raises `FileNotFoundError` naming both readings.
     """
     local = Path(spec)
     if local.exists():
@@ -50,12 +47,8 @@ def fetch_checkpoint(spec: str | Path, cache_dir: str | None = None) -> Path:
 
 
 def resolve_checkpoint(path: str | Path, cache_dir: str | None = None) -> Path:
-    """Accept a `step-N` directory, the parent holding several, a flat release
-    directory, or a Hub id for one.
-
-    `save_checkpoint` writes `<output_dir>/step-<n>`, while callers name
-    `<output_dir>`, so the newest step is resolved here.
-    """
+    """Accept a `step-N` directory, a parent holding several (newest step wins), a flat
+    release directory, or a Hub id for one."""
     source = fetch_checkpoint(path, cache_dir)
     if (source / ADAPTER_WEIGHTS).is_file():
         return source
@@ -79,9 +72,8 @@ def load_training_state(path: str | Path) -> dict | None:
     file = resolve_checkpoint(path) / TRAINING_STATE
     if not file.is_file():
         return None
-    # The payload is tensors, dicts, tuples and ints (optimiser and scheduler
-    # state dicts, `random.getstate()`), so it needs no arbitrary unpickling:
-    # a Hub id passed as `path` is downloaded and loaded the same way.
+    # Tensors, dicts, tuples and ints only, so `weights_only` loads it without arbitrary
+    # unpickling: safe for a state downloaded from a Hub id.
     return torch.load(file, map_location="cpu", weights_only=True)
 
 
@@ -127,7 +119,7 @@ def save_checkpoint(
 ) -> Path:
     """Write adapter, head and tokenizer, then optional training state.
 
-    Files are written individually; an interrupted save may be incomplete.
+    Not atomic: an interrupted save may be incomplete (ADR-021).
     """
     import torch
 
