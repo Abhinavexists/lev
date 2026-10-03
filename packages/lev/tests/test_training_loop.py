@@ -197,6 +197,24 @@ class TestResume:
         assert saved == [3, 6]
         assert summary["history"][0]["step"] == 0
 
+    def test_rerunning_a_finished_run_trains_nothing(self, tmp_path, monkeypatch):
+        """7 steps at checkpoint_every=3 ends between saves; the final checkpoint
+        must carry training state, or a rerun resumes it as weights-only and
+        trains again from step 0."""
+        run_resumable(tmp_path, monkeypatch, max_steps=7)
+        saved, seen, summary = run_resumable(tmp_path, monkeypatch, max_steps=7)
+        assert seen == [], "a finished run must not train again"
+        assert saved == []
+        assert summary["steps"] == 7
+
+    def test_a_final_checkpoint_between_saves_resumes_where_it_stopped(self, tmp_path, monkeypatch):
+        _, full, _ = run_resumable(tmp_path / "ref", monkeypatch, max_steps=10)
+        run_resumable(tmp_path, monkeypatch, max_steps=7)
+        saved, seen, summary = run_resumable(tmp_path, monkeypatch, max_steps=10)
+        assert seen == full[7:10]
+        assert saved == [9, 10]
+        assert [h["step"] for h in summary["history"]] == list(range(10))
+
     def test_resume_across_an_epoch_boundary(self, tmp_path, monkeypatch):
         """64 rows at batch 2 is 32 steps per epoch; stopping at 33 is one step
         into epoch 1, and the resumed run must skip exactly that one."""

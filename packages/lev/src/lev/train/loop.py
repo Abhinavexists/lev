@@ -252,9 +252,8 @@ def run_training(
     resumed; `fresh=True` starts over. A checkpoint carries the optimiser
     moments, schedule position, step, epoch, and the RNG state behind the
     epoch's data order, so a resumed run continues through the batches it had
-    not seen, at the learning rate it had reached. A final checkpoint that falls
-    between `checkpoint_every` saves, and any from before ADR-021, restore
-    weights only.
+    not seen, at the learning rate it had reached; rerunning a finished run
+    trains nothing. Checkpoints from before ADR-021 restore weights only.
     """
     import torch
     from torch.optim import AdamW
@@ -341,6 +340,18 @@ def run_training(
     progress = ProgressLog(total_steps, config.log_every)
     model.train()
 
+    def training_state() -> dict:
+        # Read at save time: the loop below rebinds `epoch`, `step_in_epoch` and
+        # `rng_before_epoch`, and every save happens after at least one step.
+        return {
+            "step": step,
+            "epoch": epoch,
+            "step_in_epoch": step_in_epoch,
+            "optimiser": optimiser.state_dict(),
+            "scheduler": scheduler.state_dict(),
+            "rng_before_epoch": rng_before_epoch,
+        }
+
     for epoch in range(start_epoch, config.epochs):
         if step >= total_steps:
             break
@@ -401,23 +412,19 @@ def run_training(
                     output,
                     step,
                     on_checkpoint,
-                    state={
-                        "step": step,
-                        "epoch": epoch,
-                        "step_in_epoch": step_in_epoch,
-                        "optimiser": optimiser.state_dict(),
-                        "scheduler": scheduler.state_dict(),
-                        "rng_before_epoch": rng_before_epoch,
-                    },
+                    state=training_state(),
                 )
                 last_saved = step
                 # So a run that dies late still leaves its loss curve.
                 _write_history(output, history, step)
             if step >= total_steps:
                 break
+        # Exit before the next iteration rebinds `epoch`: the final save reads it.
+        if step >= total_steps:
+            break
 
     if step != last_saved:
-        save_checkpoint(model, head, tokenizer, output, step, on_checkpoint)
+        save_checkpoint(model, head, tokenizer, output, step, on_checkpoint, state=training_state())
     summary = _write_history(output, history, step)
     print(
         f"done: {step:,} steps in {hms(time.monotonic() - progress.start)} -> {output}",
