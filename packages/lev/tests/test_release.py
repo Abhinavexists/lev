@@ -96,6 +96,22 @@ class TestResolvingAReleaseBack:
         with pytest.raises(FileNotFoundError, match="neither a local path nor a Hub id"):
             fetch_checkpoint(spec)
 
+    def test_a_mistyped_local_path_that_looks_like_a_hub_id_fails_clearly(self, monkeypatch):
+        """`checkpoints/lev-instuct` has one `/`, so it is tried on the Hub; a
+        missing repo must read as a missing path, not a raw Hub 404."""
+        import httpx
+        import huggingface_hub
+        from huggingface_hub.errors import RepositoryNotFoundError
+
+        def not_on_the_hub(repo, **kwargs):
+            request = httpx.Request("GET", f"https://huggingface.co/api/models/{repo}")
+            response = httpx.Response(404, request=request)
+            raise RepositoryNotFoundError(f"404: {repo}", response=response)
+
+        monkeypatch.setattr(huggingface_hub, "snapshot_download", not_on_the_hub)
+        with pytest.raises(FileNotFoundError, match="no local directory .*lev-instuct"):
+            fetch_checkpoint("checkpoints/lev-instuct")
+
 
 def test_model_card_describes_routing_as_it_is_served_and_trained(tmp_path):
     """The card ships with the weights, so it must match how routing is served

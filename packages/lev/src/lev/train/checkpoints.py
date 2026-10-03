@@ -29,7 +29,8 @@ def fetch_checkpoint(spec: str | Path, cache_dir: str | None = None) -> Path:
     Anything on disk is local. A missing path is tried as a Hub id only if,
     after stripping `hf://`, it has exactly one `/` and does not start with `/`
     or `.`; anything else fails locally. A typo like `checkpoints/lev-instuct`
-    therefore reaches the Hub.
+    therefore reaches the Hub, and a repo the Hub does not have raises
+    `FileNotFoundError` naming both readings.
     """
     local = Path(spec)
     if local.exists():
@@ -38,8 +39,14 @@ def fetch_checkpoint(spec: str | Path, cache_dir: str | None = None) -> Path:
     if repo.count("/") != 1 or repo.startswith(("/", ".")):
         raise FileNotFoundError(f"{spec!r} is neither a local path nor a Hub id like org/name")
     from huggingface_hub import snapshot_download
+    from huggingface_hub.errors import RepositoryNotFoundError
 
-    return Path(snapshot_download(repo, repo_type="model", cache_dir=cache_dir))
+    try:
+        return Path(snapshot_download(repo, repo_type="model", cache_dir=cache_dir))
+    except RepositoryNotFoundError as error:
+        raise FileNotFoundError(
+            f"no local directory {spec!r}, and no Hub repo {repo!r} (or no access to it)"
+        ) from error
 
 
 def resolve_checkpoint(path: str | Path, cache_dir: str | None = None) -> Path:
