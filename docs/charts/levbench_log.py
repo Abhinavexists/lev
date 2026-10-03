@@ -1,8 +1,4 @@
-"""Parse `levbench eval` output into per-subset numbers.
-
-The charts are built from these, never from retyped values: a levbench log is
-the measurement, and this reads it as written.
-"""
+"""Parse `levbench eval` output into per-subset numbers; charts never use retyped values."""
 
 from __future__ import annotations
 

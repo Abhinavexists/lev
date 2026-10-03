@@ -4,18 +4,12 @@
     uv run python docs/charts/build.py
 
 Inputs, all checked in:
-  logs/jev-s1bench-*.txt            Jev on the 13 S1Bench task files, through levbench
-  logs/lev-s1bench-*.txt            lev on the same files, same laptop
-  logs/pre-nimble/                  both runs on the earlier six-subset definitions,
-                                    the scale the iterations in history.json were on
-  history.json                      lev iterations and speed measurements, each
-                                    with the FINDINGS section it was recorded in
+  logs/jev-s1bench-*.txt, logs/lev-s1bench-*.txt  both on the 13 S1Bench task files, same laptop
+  logs/pre-nimble/                  earlier six-subset definitions, the scale of history.json
+  history.json                      lev iterations and speed measurements, with FINDINGS sections
   ../../data/s1bench-snapshot.json  the public S1Bench board: every other model
 
-lev and Jev keep fixed colours (slot 1 blue, slot 2 orange; validated for
-colour-vision deficiency in both modes); every other model is context, drawn
-in the de-emphasis gray. One scale per chart, and every value is also in the
-table beneath it.
+lev blue and Jev orange (CVD-checked in both modes); every other model is context gray.
 """
 
 from __future__ import annotations
@@ -116,7 +110,6 @@ def leaderboard(rows, vmin=0.2, vmax=0.8) -> str:
 
 
 def grouped_bars(cats, series, vmax, fmt, ticks, label_w=118) -> str:
-    """One group per category, one bar per series."""
     bar_h, gap, group_gap, top = 12, 2, 16, 4
     group_h = len(series) * bar_h + (len(series) - 1) * gap
     h = top + len(cats) * (group_h + group_gap) - group_gap + 24

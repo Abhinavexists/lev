@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Package the trained 4b-instruct checkpoint on Modal, check that it loads and
-# answers, pull it, swap in the Hub model card (hf/README.md and its charts in
-# hf/assets) and upload it to a private Hugging Face repo.
+# Package and check the 4b-instruct release on Modal, pull it, add the hf/ model card
+# and upload it to a private Hugging Face repo.
 #
 #   scripts/publish_hf.sh                          # interfaze-ai/lev
 #   REPO=interfaze-ai/other scripts/publish_hf.sh  # another repo
@@ -26,7 +25,7 @@ fi
 hf auth whoami >/dev/null || { echo "not logged in to the Hub: run 'hf auth login'" >&2; exit 1; }
 
 modal run modal/app.py::export_checkpoint --preset "$PRESET" --name "$NAME"
-# Load the release as a user will (lev.load and the server) before anything is pulled or published.
+# Load the release as a user will before anything is pulled or published.
 modal run modal/app.py::check_release --name "$NAME"
 # The target must be an existing directory: given a missing path, `volume get`
 # writes every file of the release onto that one path.

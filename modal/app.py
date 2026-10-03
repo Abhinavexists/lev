@@ -1,8 +1,7 @@
-"""Build data, train, calibrate, evaluate and serve lev on Modal.
+"""Build data, train, calibrate, evaluate and serve lev on Modal. See docs/SETUP.md.
 
-Models, datasets and checkpoints live on separate persistent volumes.
-Use `modal deploy` for a stable server URL: other ephemeral runs can take
-over the shared `-dev` label used by `modal serve`. See docs/SETUP.md.
+Use `modal deploy` for a stable URL: other ephemeral runs can take over `modal serve`'s
+`-dev` label.
 """
 
 from __future__ import annotations
@@ -26,17 +25,14 @@ except ModuleNotFoundError:
 
 APP_NAME = "lev"
 
-# Resolved from this file, not from the working directory: `modal run` may be
-# invoked from anywhere, and a relative path would silently mount nothing.
+# From this file, not the cwd: `modal run` may start anywhere, and a relative path mounts nothing.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Pinned for reproducibility. `transformers` must be 5.x: the prefix-cache fork
 # calls `reorder_cache` on a hybrid cache, which 4.x cannot do.
 image = (
-    # A CUDA devel base for `nvcc`, which `causal-conv1d` needs to build. Without
-    # that kernel 24 of the 32 layers run their depthwise conv on a reference
-    # PyTorch path; with it served compute fell from 81 to 69 ms. The CUDA major
-    # must match torch's build (2.14.0+cu130).
+    # Devel base for the `nvcc` that `causal-conv1d` builds with (served compute 81 -> 69 ms,
+    # ADR-023). The CUDA major must match torch's build (2.14.0+cu130).
     modal.Image.from_registry("nvidia/cuda:13.0.3-devel-ubuntu24.04", add_python="3.12")
     .pip_install(
         "torch==2.14.0",
@@ -49,9 +45,7 @@ image = (
         "fastapi==0.141.1",
         "huggingface-hub==1.32.0",
     )
-    # Speed, not correctness: the linear-attention kernels (Triton) and the conv
-    # kernel (CUDA). If the conv build breaks on a pin change, delete it; runs get
-    # slower, not wrong.
+    # Speed, not correctness: if the conv build breaks on a pin change, delete it.
     .pip_install("flash-linear-attention", "ninja", "packaging")
     # The devel image has nvcc but no host C++ compiler, which torch's extension
     # builder requires ("clang++ 0.0.0"). Arch 9.0 only: this image runs on H100s.
@@ -90,12 +84,10 @@ SERVE_PRESET = "4b"
 
 
 def _hf_secrets() -> list:
-    """The local `HF_TOKEN` as a Secret, only if one is set.
+    """The Secret named by `LEV_HF_SECRET`, else the local `HF_TOKEN`, else none.
 
-    The backbones are public, and `Secret.from_name("huggingface")` fails at
-    function creation when no such Secret exists. For a shared deployment,
-    create one (`modal secret create huggingface HF_TOKEN=hf_...`) and set
-    LEV_HF_SECRET=huggingface.
+    Never an unconditional `Secret.from_name`: it fails at function creation when the
+    Secret is missing, and the backbones are public.
     """
     named = os.environ.get("LEV_HF_SECRET")
     if named:
@@ -104,20 +96,13 @@ def _hf_secrets() -> list:
     return [modal.Secret.from_dict({"HF_TOKEN": token})] if token else []
 
 
-# Deploy-time knobs, read where `modal deploy` runs. Decorator arguments are
-# fixed at import, so these cannot travel as Secrets the way the preset does.
-#   LEV_SERVE_CONCURRENCY  requests one container handles at once (default 32);
-#                          concurrent requests share batched forwards (lev.batcher).
-#                          Also the server's `max_pending`, so Modal's input cap
-#                          and the 503 limit agree; forwarded into the container.
-#   LEV_SERVE_WARM         containers kept running (default 0). One removes the
-#                          20-55 s cold start, at the cost of an idle GPU.
-#   LEV_SERVE_REGION       a Modal region near the client; the measured 280 ms
-#                          TCP round trip is a continent, not a server.
-#   LEV_SERVE_SCALEDOWN    idle seconds before a container stops (default 300).
-#   LEV_SERVE_MAX          container ceiling (default unset: Modal's own limit).
-#                          Pin it for a benchmark sweep, where a parallel client
-#                          would otherwise open a GPU per burst of requests.
+# Deploy knobs (docs/SETUP.md), read where `modal deploy` runs: decorator arguments are
+# fixed at import, so these cannot travel as Secrets.
+#   LEV_SERVE_CONCURRENCY  per-container inputs, also the server's max_pending (32; ADR-030)
+#   LEV_SERVE_WARM         containers kept running (0); one removes the 20-55 s cold start
+#   LEV_SERVE_REGION       Modal region near the client (unset); the measured 280 ms RTT is distance
+#   LEV_SERVE_SCALEDOWN    idle seconds before a container stops (300)
+#   LEV_SERVE_MAX          container ceiling (unset: Modal's limit); pin it for benchmark sweeps
 SERVE_CONCURRENCY = int(os.environ.get("LEV_SERVE_CONCURRENCY", "32"))
 SERVE_WARM = int(os.environ.get("LEV_SERVE_WARM", "0"))
 SERVE_REGION = os.environ.get("LEV_SERVE_REGION")
@@ -126,7 +111,6 @@ SERVE_MAX = int(os.environ["LEV_SERVE_MAX"]) if os.environ.get("LEV_SERVE_MAX") 
 
 
 def _prompt_style(value: str | None) -> Literal["plain", "chat"] | None:
-    """Validate the prompt-style environment override before serving."""
     if not value:
         return None
     if value not in ("plain", "chat"):
@@ -135,13 +119,7 @@ def _prompt_style(value: str | None) -> Literal["plain", "chat"] | None:
 
 
 def _serve_overrides() -> list:
-    """Which checkpoint the server loads, chosen from the local environment.
-
-    `make deploy PRESET=4b-instruct` serves that preset's newest
-    checkpoint; `LEV_SERVE_MODEL=Qwen/Qwen3.5-4B` serves that model frozen (no
-    adapter, binary Noul) as the zero-shot baseline. Local env does not reach
-    the container, so whichever are set travel as a Secret.
-    """
+    """The set `LEV_SERVE_*` overrides as a Secret: local env does not reach the container."""
     overrides: dict[str, str | None] = {
         key: value
         for key in (
@@ -165,9 +143,7 @@ SECRETS = _hf_secrets() + _serve_overrides()
 def download(model_id: str = "Qwen/Qwen3.5-4B-Base") -> str:
     """Pre-fetch a checkpoint into the models Volume. Idempotent.
 
-    `cache_dir`, not `local_dir`: training's `from_pretrained(model_id,
-    cache_dir=MODELS_DIR)` looks for the HF cache layout (`models--Qwen--...`),
-    which a flat `local_dir` download does not have.
+    `cache_dir`, not `local_dir`: `from_pretrained(..., cache_dir=)` expects the HF cache layout.
     """
     from huggingface_hub import snapshot_download
 
@@ -228,10 +204,9 @@ def train(
 
 @app.function(volumes={DATA_DIR: datasets_vol}, secrets=SECRETS, timeout=4 * 60 * 60)
 def build_data(limit_per_source: int = 20_000, n_examples: int = 200_000) -> dict:
-    """Download every source and write the three splits to the data volume.
+    """Download every source and write the three splits to the data volume. CPU only.
 
-    No GPU: it is downloads and CPU. Run it once, before `train`; without the
-    data `train` fails in seconds, not minutes, before loading the model.
+    Run it once, before `train`.
     """
     from lev.data.build import build_dataset
 
@@ -248,14 +223,12 @@ def build_data(limit_per_source: int = 20_000, n_examples: int = 200_000) -> dic
 
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=2 * 60 * 60)
 def smoke(steps: int = 40) -> dict:
-    """Exercise the whole path on the 0.8B preset. Run this first, always.
+    """Exercise every part of `train` but its duration, on the 0.8B preset. Run this first.
 
-    Builds a small mixture if the volume is empty, so a fresh workspace needs
-    one command. Covers every part of `train` except its duration.
+    Builds a small mixture if the data volume is empty.
     """
     if not (Path(DATA_DIR) / "train.jsonl").is_file():
-        # On the GPU, which `build_data` avoids, but only for the small smoke
-        # mixture (a couple of minutes). Run `build_data` before `train`.
+        # Builds on the GPU, acceptable only for this small mixture (a couple of minutes).
         print("data volume is empty; building a small mixture first")
         build_data.local(limit_per_source=2_000, n_examples=4_000)
 
@@ -491,17 +464,9 @@ def check_release(name: str = "4b") -> dict:
 
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=30 * 60)
 def diagnose_candidates(model_id: str = "Qwen/Qwen3.5-4B-Base") -> dict:
-    """Is a candidate string's representation independent of its batch neighbours?
+    """Compare candidate representations alone, batched, reversed and left-padded.
 
-    Mode B embeds each option by running the whole option set through the
-    backbone as one right-padded batch. The head is permutation-invariant, yet
-    reordering options changed the served distribution almost entirely (L1 1.23
-    on massive-en-US). A vector that differs between "alone" and "in a batch"
-    would mean the padded forward leaks across rows.
-
-    Result (FINDINGS §12): representations are bit-identical across batch
-    orders (`max_abs 0.0`). massive-en-US's 60 options route to Mode A, and the
-    order sensitivity is Mode A letter-position bias.
+    Tests whether Mode B's padded batch leaks across rows. Result: bit-identical (FINDINGS §12).
     """
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -597,11 +562,9 @@ def diagnose_candidates(model_id: str = "Qwen/Qwen3.5-4B-Base") -> dict:
 
 
 def _probabilities(answer: Answer) -> dict[Any, float]:
-    """An answer's probability map, whatever its shape.
+    """An answer's probability map; a Noul without one stands in its single probability.
 
-    Choice keys are option strings and Score keys are level ints, so a map is
-    only ever compared against the same answer's own keys. Only a Noul may
-    report no map, and then its single probability stands in.
+    Choice keys are strings and Score keys ints, so compare a map only with the same answer's.
     """
     from lev.types import NoulAnswer  # noqa: PLC0415
 
@@ -612,12 +575,9 @@ def _probabilities(answer: Answer) -> dict[Any, float]:
 
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=30 * 60)
 def profile_engine(preset: str = "4b", rounds: int = 20) -> dict:
-    """Where a `/v1/systemone` call spends its time inside the container.
+    """Time each engine stage of a `/v1/systemone` call in the container, CUDA-synchronised.
 
-    Loads the checkpoint as `serve` does (`lev.load`) and times each engine
-    stage with CUDA synchronised, for both prefix modes and the compiled path.
-    Medians over `rounds` after warmup, for the shapes the benchmark and demo
-    send. Network is excluded; subtract from a client-side latency to get it.
+    Both prefix modes and the compiled path; medians over `rounds` after warmup. Excludes network.
     """
     import statistics
     import time
