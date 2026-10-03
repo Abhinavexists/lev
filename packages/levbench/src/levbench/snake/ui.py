@@ -8,6 +8,7 @@ lines, and the planner's ground truth sits beside the model's two estimates.
 
 from __future__ import annotations
 
+import os
 import select
 import sys
 from urllib.parse import urlparse
@@ -244,8 +245,6 @@ class Keyboard:
         return self
 
     def read(self) -> str:
-        import os
-
         if self.saved and select.select([sys.stdin], [], [], 0)[0]:
             return os.read(self.fd, 128).decode(errors="ignore")
         return ""

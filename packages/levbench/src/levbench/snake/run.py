@@ -21,6 +21,7 @@ from pathlib import Path
 from .. import pricing
 from .game import SnakeGame
 from .policy import Decision, ModelPolicy
+from .ui import compose
 
 RECORD_FORMAT = "levbench-snake-v1"
 
@@ -178,6 +179,10 @@ def play(
     shown_game, shown_decision = game.snapshot(), {}
     started = time.perf_counter()
 
+    def next_round() -> SnakeGame:
+        stats["round"] += 1
+        return SnakeGame(width, height, seed + stats["round"] - 1, initial_length)
+
     try:
         while True:
             now = time.perf_counter()
@@ -193,14 +198,11 @@ def play(
             if "-" in pressed or "\x1b[b" in pressed:
                 fps = max(1.0, (fps or 12.0) - 2)
             if "r" in pressed:
-                stats["round"] += 1
-                game = SnakeGame(width, height, seed + stats["round"] - 1, initial_length)
+                game = next_round()
                 shown_game, shown_decision = game.snapshot(), {}
             if stats["paused"]:
                 stats["elapsed"] = now - started
                 if display:
-                    from .ui import compose
-
                     display.show(compose(shown_game, shown_decision, stats))
                 time.sleep(0.03)
                 continue
@@ -228,7 +230,6 @@ def play(
                 else 0.0
             )
             stats["steps"] = len(decisions)
-            stats["best"] = max(stats["best"], game.score)
             n = len(decisions)
             stats["route_acc"] = (
                 sum(((1 - d.dead_end_risk) >= 0.5) == d.route_truth for d in decisions) / n
@@ -239,8 +240,6 @@ def play(
 
             shown_game, shown_decision = game.snapshot(), decision.to_dict()
             if display:
-                from .ui import compose
-
                 display.show(compose(shown_game, shown_decision, stats))
             if on_step:
                 on_step(shown_game, shown_decision, dict(stats))
@@ -271,12 +270,9 @@ def play(
                 if not guarded:
                     break
                 if display:
-                    from .ui import compose
-
                     display.show(compose(game.snapshot(), {}, stats))
                     time.sleep(1.0)
-                stats["round"] += 1
-                game = SnakeGame(width, height, seed + stats["round"] - 1, initial_length)
+                game = next_round()
     except KeyboardInterrupt:
         pass
     finally:
@@ -284,13 +280,13 @@ def play(
         summary = _summarise(
             decisions,
             game,
-            backend,
-            served,
-            prompt,
-            guarded,
-            seed,
-            best_length,
-            seconds,
+            backend=backend,
+            model=served,
+            prompt=prompt,
+            guarded=guarded,
+            seed=seed,
+            best_length=best_length,
+            seconds=seconds,
             rounds=stats["round"],
             deaths=deaths,
             best_score=max(stats["best"], game.score),
@@ -301,21 +297,22 @@ def play(
 
 
 def _summarise(
-    decisions,
-    game,
-    backend,
-    model,
-    prompt,
-    guarded,
-    seed,
-    best_length,
-    seconds,
+    decisions: list[Decision],
+    game: SnakeGame,
     *,
-    rounds,
-    deaths,
-    best_score,
-):
+    backend: str,
+    model: str,
+    prompt: str,
+    guarded: bool,
+    seed: int,
+    best_length: int,
+    seconds: float,
+    rounds: int,
+    deaths: int,
+    best_score: int,
+) -> RunSummary:
     n = len(decisions)
+    interventions = sum(d.intervened for d in decisions)
     inference = [d.inference_ms for d in decisions]
     route_p = [1.0 - d.dead_end_risk for d in decisions]
     food_p = [d.food_reachable for d in decisions]
@@ -350,8 +347,8 @@ def _summarise(
         inference_ms_p95=_pct(inference, 0.95),
         mean_input_tokens=statistics.mean(d.input_tokens for d in decisions) if n else 0.0,
         cost_usd=sum(pricing.cost_usd(model, d.input_tokens, d.output_tokens) for d in decisions),
-        interventions=sum(d.intervened for d in decisions),
-        intervention_rate=sum(d.intervened for d in decisions) / n if n else 0.0,
+        interventions=interventions,
+        intervention_rate=interventions / n if n else 0.0,
         raw_safe_rate=sum(d.proposed in d.safe_directions for d in decisions) / n if n else 0.0,
         route_accuracy=acc(route_p, route_t),
         route_brier=brier(route_p, route_t),
@@ -382,8 +379,6 @@ def load_record(path: str | Path) -> tuple[dict, list[dict]]:
 
 def replay(path: str | Path, display, *, speed: float = 1.0, keys=None) -> int:
     """Play a recording back on `display` at `speed` times original pace. Returns frames shown."""
-    from .ui import compose
-
     _, frames = load_record(path)
     started = time.perf_counter()
     shown = 0

@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import asdict, dataclass
+from types import SimpleNamespace
 from typing import Any
 
 from typesafe_sdk import Choice, Noul
@@ -135,8 +136,6 @@ class PlannerClient:
     served = "planner"
 
     def system_one(self, state, questions):
-        from types import SimpleNamespace
-
         criteria = questions["move"].criteria
         best = next((o for o in criteria if "Best" in criteria[o]), None)
         safe = [o for o in criteria if criteria[o].startswith("Safe")]

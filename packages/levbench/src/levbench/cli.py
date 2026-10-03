@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -32,16 +33,12 @@ def _require_key(backend: str, base_url: str | None = None) -> None:
         return  # A local /v1/systemone server needs no credential.
     if backend == "jev" and base_url:
         return  # An explicitly overridden endpoint is assumed local too.
-    needed = "TYPESAFE_API_KEY" if backend == "jev" else "ANTHROPIC_API_KEY"
+    if backend == "jev":
+        needed, hint = "TYPESAFE_API_KEY", "Get a key at https://console.typesafe.ai/settings/keys"
+    else:
+        needed, hint = "ANTHROPIC_API_KEY", "Export your Anthropic API key."
     if not os.environ.get(needed):
-        sys.exit(
-            f"{needed} is not set.\n"
-            + (
-                "Get a key at https://console.typesafe.ai/settings/keys"
-                if backend == "jev"
-                else "Export your Anthropic API key."
-            )
-        )
+        sys.exit(f"{needed} is not set.\n{hint}")
 
 
 def _task_files(path: str | None) -> list[Path | None]:
@@ -126,8 +123,6 @@ def cmd_compare(args: argparse.Namespace) -> None:
 
 def cmd_snake(args: argparse.Namespace) -> None:
     """A decision model plays Snake over `/v1/systemone`; see `levbench.snake`."""
-    from contextlib import nullcontext
-
     from .snake import PlannerClient, play
     from .snake.ui import Keyboard, LiveDisplay, network_label, status_line
 

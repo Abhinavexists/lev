@@ -208,7 +208,7 @@ def run_eval(
                 )
             )
 
-    served = {c.served_by for c in report.calls}
+    served = report.served_by
     if backend == "lev" and len(served) == 1:
         # The label was a placeholder; the server knows what it loaded.
         report.model = served.pop()
@@ -229,8 +229,7 @@ def _format_summary(report: EvalReport) -> list[str]:
     lines.append(f"=== {report.backend} / {report.model} ===")
     if report.wall_seconds:
         lines.append(
-            f"{'wall time':<18} {report.wall_seconds:.1f}s  "
-            f"({len(report.calls) / report.wall_seconds:.2f} items/s)"
+            f"{'wall time':<18} {report.wall_seconds:.1f}s  ({n / report.wall_seconds:.2f} items/s)"
         )
     lines.append(f"calls              {n}")
     if n:
