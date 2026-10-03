@@ -306,8 +306,20 @@ def completed_targets(board: dict) -> list[dict]:
     return [
         t
         for t in board["targets"]
-        if sum(t["subsets"].get(s, {}).get("acc") is not None for s in SUBSETS) == 6
+        if sum(t["subsets"].get(s, {}).get("acc") is not None for s in SUBSETS) == len(SUBSETS)
     ]
+
+
+def leaderboard_row(name: str, value: float, var: str, size: str, ece: float, bold: bool) -> dict:
+    return {
+        "name": name,
+        "value": value,
+        "var": var,
+        "size": size,
+        "ece": ece,
+        "meta": f"{size}  ·  ECE {ece:.3f}",
+        "bold": bold,
+    }
 
 
 def leaderboard_rows(done: list[dict], data: Inputs) -> list[dict]:
@@ -316,33 +328,21 @@ def leaderboard_rows(done: list[dict], data: Inputs) -> list[dict]:
     for t in done:
         is_jev = t["target"] == "jev"
         rows.append(
-            {
-                "name": ("Jev (board)" if is_jev else t["target"])
+            leaderboard_row(
+                name=("Jev (board)" if is_jev else t["target"])
                 + (" †" if t.get("contamination") else ""),
-                "value": t["macro_acc"],
-                "var": JEV if is_jev else CTX,
-                "meta": ("TypeSafe API" if is_jev else size_label(t.get("params_m")))
-                + f"  ·  ECE {t['ece']:.3f}",
-                "bold": is_jev,
-            }
+                value=t["macro_acc"],
+                var=JEV if is_jev else CTX,
+                size="TypeSafe API" if is_jev else size_label(t.get("params_m")),
+                ece=t["ece"],
+                bold=is_jev,
+            )
         )
+    rows.append(leaderboard_row("lev (measured here)", data.lev_acc, LEV, "4B", data.lev_ece, True))
     rows.append(
-        {
-            "name": "lev (measured here)",
-            "value": data.lev_acc,
-            "var": LEV,
-            "meta": f"4B  ·  ECE {data.lev_ece:.3f}",
-            "bold": True,
-        }
-    )
-    rows.append(
-        {
-            "name": "Jev (measured here)",
-            "value": data.jev_acc,
-            "var": JEV,
-            "meta": f"TypeSafe API  ·  ECE {data.jev_ece:.3f}",
-            "bold": True,
-        }
+        leaderboard_row(
+            "Jev (measured here)", data.jev_acc, JEV, "TypeSafe API", data.jev_ece, True
+        )
     )
     rows.sort(key=lambda r: -r["value"])
     return rows
@@ -464,15 +464,7 @@ def leaderboard_section(rows: list[dict], jev_board: dict, data: Inputs) -> str:
         + leaderboard(rows),
         table(
             ["model", "macro accuracy", "size", "ECE"],
-            [
-                [
-                    r["name"],
-                    pct(r["value"]),
-                    r["meta"].split("  ·  ")[0],
-                    r["meta"].split("ECE ")[1],
-                ]
-                for r in rows
-            ],
+            [[r["name"], pct(r["value"]), r["size"], f"{r['ece']:.3f}"] for r in rows],
         ),
         f"Board models were scored by S1Bench's own harness, lev by ours, on the same pinned items. On the same model our harness scores Jev "
         f"{(jev_board['macro_acc'] - data.jev_acc) * 100:.1f} points lower than the board, all of it on aegis2. "
