@@ -138,7 +138,7 @@ class TrainConfig:
             [
                 f"model            {self.model_id}  ({self.params_b}B, {self.dtype})",
                 f"adaptation       {adaptation}",
-                f"prompt           {prompt}\n"
+                f"prompt           {prompt}",
                 f"data             {self.n_examples:,} examples x "
                 f"{self.avg_tokens_per_example} tok x {self.epochs} epochs"
                 f"  = {self.total_tokens / 1e9:.2f}B tokens",

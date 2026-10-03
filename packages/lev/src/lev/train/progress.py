@@ -20,19 +20,17 @@ class ProgressLog:
         self.every = max(1, log_every)
         self.start = time.monotonic()
         self.window: dict[str, list[float]] = {}
-        self.tokens = 0
         self.window_tokens = 0
         self.mark = self.start
         self.mark_step = 0
 
     def record(self, step: int, loss: float, mode: str, lr: float, tokens: int = 0) -> None:
         self.window.setdefault(mode, []).append(loss)
-        self.tokens += tokens
         self.window_tokens += tokens
-        if (step + 1) % self.every and step + 1 != self.total:
+        done = step + 1
+        if done % self.every and done != self.total:
             return
 
-        done = step + 1
         now = time.monotonic()
         # A coarse clock can report zero on a fast window; never divide by it.
         elapsed = max(now - self.start, 1e-9)

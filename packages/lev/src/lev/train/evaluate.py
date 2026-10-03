@@ -132,8 +132,9 @@ def evaluate_split(
         seen: dict[str, int] = {}
         kept = []
         for row in rows:
-            if seen.get(row.source, 0) < limit_per_source:
-                seen[row.source] = seen.get(row.source, 0) + 1
+            count = seen.get(row.source, 0)
+            if count < limit_per_source:
+                seen[row.source] = count + 1
                 kept.append(row)
         rows = kept
 
@@ -168,24 +169,23 @@ def evaluate_split(
     for (source, qtype, mode), rows_t in sorted(per_source.items()):
         samples = [(lg, y) for lg, y, _ in rows_t]
         temperatures = {t for _, _, t in rows_t}
-        mixed_temperatures = len(temperatures) > 1
-        shown_t = next(iter(temperatures)) if not mixed_temperatures else float("nan")
-        for report, calibrated in ((plain, False), (tuned, True)):
-            if calibrated and mixed_temperatures:
-                accuracy, ece, mean_brier, mean_ll = score_mixed(rows_t)
-            else:
-                accuracy, ece, mean_brier, mean_ll = score(samples, shown_t if calibrated else 1.0)
+        shown_t = next(iter(temperatures)) if len(temperatures) == 1 else float("nan")
+        for report, metrics, temperature in (
+            (plain, score(samples, 1.0), 1.0),
+            (tuned, score_mixed(rows_t), shown_t),
+        ):
+            accuracy, ece, mean_brier, mean_ll = metrics
             report.per_source.append(
                 SourceScore(
-                    source,
-                    qtype,
-                    mode,
-                    len(samples),
-                    accuracy,
-                    ece,
-                    mean_brier,
-                    mean_ll,
-                    shown_t if calibrated else 1.0,
+                    source=source,
+                    question_type=qtype,
+                    mode=mode,
+                    n=len(samples),
+                    accuracy=accuracy,
+                    ece=ece,
+                    mean_brier=mean_brier,
+                    mean_log_loss=mean_ll,
+                    temperature=temperature,
                 )
             )
     return plain, tuned

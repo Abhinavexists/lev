@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+ADAPTER_WEIGHTS = "adapter_model.safetensors"
 TRAINING_STATE = "training_state.pt"
 MODE_B_HEAD = "mode_b_head.pt"
 CALIBRATION = "calibration.json"
@@ -16,7 +17,7 @@ def latest_checkpoint(output: str | Path) -> Path | None:
     """
     source = Path(output)
     steps = sorted(
-        (d for d in source.glob("step-*") if (d / "adapter_model.safetensors").is_file()),
+        (d for d in source.glob("step-*") if (d / ADAPTER_WEIGHTS).is_file()),
         key=lambda d: int(d.name.split("-")[1]),
     )
     return steps[-1] if steps else None
@@ -32,7 +33,7 @@ def fetch_checkpoint(spec: str | Path, cache_dir: str | None = None) -> Path:
     if local.exists():
         return local
     repo = str(spec).removeprefix("hf://")
-    if repo.count("/") != 1 or repo.startswith("/") or repo.startswith("."):
+    if repo.count("/") != 1 or repo.startswith(("/", ".")):
         raise FileNotFoundError(f"{spec!r} is neither a local path nor a Hub id like org/name")
     from huggingface_hub import snapshot_download
 
@@ -47,7 +48,7 @@ def resolve_checkpoint(path: str | Path, cache_dir: str | None = None) -> Path:
     `<output_dir>`, so the newest step is resolved here.
     """
     source = fetch_checkpoint(path, cache_dir)
-    if (source / "adapter_model.safetensors").is_file():
+    if (source / ADAPTER_WEIGHTS).is_file():
         return source
     latest = latest_checkpoint(source)
     if latest is None:
@@ -85,7 +86,7 @@ def load_checkpoint(model, head, path: str | Path) -> None:
     from safetensors.torch import load_file
 
     source = resolve_checkpoint(path)
-    set_peft_model_state_dict(model, load_file(str(source / "adapter_model.safetensors")))
+    set_peft_model_state_dict(model, load_file(str(source / ADAPTER_WEIGHTS)))
 
     head_file = source / MODE_B_HEAD
     if head is not None:

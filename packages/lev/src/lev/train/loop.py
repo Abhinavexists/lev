@@ -25,6 +25,8 @@ from .collate import DecisionCollator, ModeBatcher, RouteCache
 from .config import TrainConfig
 from .progress import ProgressLog, hms
 
+HISTORY = "history.json"
+
 
 def build_model(config: TrainConfig, model_cache: str | None = None):
     """Load the backbone, attach LoRA, and keep new heads at full precision."""
@@ -297,7 +299,7 @@ def run_training(
     optimiser = AdamW(params, lr=config.learning_rate, weight_decay=config.weight_decay)
 
     train = data["train"]
-    steps_per_epoch = max(1, len(train) // (config.per_device_batch * config.grad_accum))
+    steps_per_epoch = max(1, len(train) // config.examples_per_step)
     total_steps = max_steps or steps_per_epoch * config.epochs
     # Sized in optimiser steps: sized in micro-steps, the cosine would finish
     # `grad_accum` times early and the tail would train at a learning rate of 0.
@@ -412,8 +414,6 @@ def run_training(
                 _write_history(output, history, step)
             if step >= total_steps:
                 break
-        if step >= total_steps:
-            break
 
     if step != last_saved:
         save_checkpoint(model, head, tokenizer, output, step, on_checkpoint)
@@ -431,7 +431,7 @@ def set_aside_previous_run(output: Path) -> Path | None:
     Return the directory, or None if there was nothing to move.
     """
     stale = list(output.glob("step-*")) + [
-        output / name for name in ("history.json", CALIBRATION) if (output / name).exists()
+        output / name for name in (HISTORY, CALIBRATION) if (output / name).exists()
     ]
     if not stale:
         return None
@@ -443,7 +443,7 @@ def set_aside_previous_run(output: Path) -> Path | None:
 
 
 def _read_history(output: Path) -> list[dict]:
-    file = output / "history.json"
+    file = output / HISTORY
     if not file.is_file():
         return []
     return json.loads(file.read_text()).get("history", [])
@@ -457,5 +457,5 @@ def _write_history(output: Path, history: list[dict], step: int) -> dict:
         "output_dir": str(output),
         "history": history,
     }
-    (output / "history.json").write_text(json.dumps(summary, indent=2) + "\n")
+    (output / HISTORY).write_text(json.dumps(summary, indent=2) + "\n")
     return summary

@@ -84,10 +84,10 @@ def collect_logits(
     from ..data.sources import family_of
     from ..data.splits import Split
     from ..prompt import Style
-    from ..train.checkpoints import load_checkpoint
-    from ..train.collate import DecisionCollator, ModeBatcher, RouteCache
-    from ..train.config import PRESETS
-    from ..train.loop import build_head, build_model, candidate_logits, device_of, to_device
+    from .checkpoints import load_checkpoint
+    from .collate import DecisionCollator, ModeBatcher, RouteCache
+    from .config import PRESETS
+    from .loop import build_head, build_model, candidate_logits, device_of, to_device
 
     config = config or PRESETS["4b"]
     model, tokenizer = build_model(config, None)
