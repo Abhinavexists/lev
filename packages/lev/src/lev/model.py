@@ -79,6 +79,28 @@ class Variant:
     suffix_ids: list[int]
 
 
+@dataclass(frozen=True)
+class Prepared:
+    """One request validated, routed and tokenised, ready to share a forward."""
+
+    questions: dict[str, Question]
+    routes: dict[str, Route]
+    prefix_ids: list[int]
+    variants: list[Variant]
+
+    @property
+    def rows(self) -> int:
+        return len(self.variants)
+
+    @property
+    def width(self) -> int:
+        return len(self.prefix_ids) + max(len(v.suffix_ids) for v in self.variants)
+
+    @property
+    def want_hidden(self) -> bool:
+        return any(r.mode is Mode.CANDIDATE_PATH for r in self.routes.values())
+
+
 def average_orders(prob_rows: list[list[float]], orders: list[list[int] | None]) -> list[float]:
     """Map each rendered-order distribution back to canonical order and average.
 
@@ -130,14 +152,19 @@ class DecisionEngine:
         self._candidate_cache: dict[tuple[str, ...], Any] = {}
         # Read once: a compiled module proxies attributes, but not reliably.
         self._device = getattr(model, "device", None)
-        # One forward at a time: CUDA-graph replay is not thread-safe. Concurrent
-        # requests still overlap parsing, tokenising and the network.
+        # One forward at a time: CUDA-graph replay is not thread-safe. The server
+        # batches concurrent requests into one forward instead (`lev.batcher`).
         self._lock = threading.Lock()
-        self._eager_model = model
+        # The decoder runs alone and `lm_head` projects only the scored
+        # positions: full (rows, width, vocab) logits are GBs at a 248k vocabulary.
+        base = model.get_base_model() if hasattr(model, "get_base_model") else model
+        self._decoder = base.get_decoder() if model is not None else None
+        self._lm_head = base.get_output_embeddings() if model is not None else None
+        self._eager_decoder = self._decoder
         if self.config.compile:
             import torch
 
-            self.model = torch.compile(model, mode="reduce-overhead", dynamic=True)
+            self._decoder = torch.compile(self._decoder, mode="reduce-overhead", dynamic=True)
 
     def warmup(
         self,
@@ -163,25 +190,23 @@ class DecisionEngine:
                 ids = torch.full((rows, width), pad, dtype=torch.long, device=self._device)
                 mask = torch.ones_like(ids)
                 with torch.no_grad(), self._lock:
-                    self.model(input_ids=ids, attention_mask=mask, use_cache=False)
-                    if self.mode_b_head is not None:
-                        self.model(
-                            input_ids=ids,
-                            attention_mask=mask,
-                            use_cache=False,
-                            output_hidden_states=True,
-                        )
+                    self._decoder(input_ids=ids, attention_mask=mask, use_cache=False)
         except Exception as error:  # noqa: BLE001 -- any compile failure means eager
             print(
                 f"WARNING: compiled forward failed ({type(error).__name__}: {error}); serving eager"
             )
-            self.model = self._eager_model
+            self._decoder = self._eager_decoder
             self.config.compile = False
         return time.perf_counter() - started
 
     def system_one(self, state, questions: Mapping[str, Question | dict]) -> SystemOneResponse:
         """Answer every question about `state` in one forward pass. Questions may
         be `Noul`/`Choice`/`Score` objects or the same shapes as plain dicts."""
+        return self.answer([self.prepare(state, questions)])[0]
+
+    def prepare(self, state, questions: Mapping[str, Question | dict]) -> Prepared:
+        """Validate, route and tokenise one request. Raises `ValueError` or
+        `TypeError` for a malformed one, before any GPU work."""
         questions = _QUESTIONS.validate_python(questions)
         routes = serving_routes(questions, self.tokenizer, self.config)
 
@@ -198,9 +223,25 @@ class DecisionEngine:
             )
 
         prefix, variants = self._render(state, questions, routes)
-        want_hidden = any(r.mode is Mode.CANDIDATE_PATH for r in routes.values())
+        prefix_ids = self.tokenizer.encode(prefix, add_special_tokens=True)
+        return Prepared(questions, routes, prefix_ids, variants)
+
+    def answer(self, requests: list[Prepared]) -> list[SystemOneResponse]:
+        """Answer prepared requests, in single prefix mode all in one forward.
+        Rows are independent, so batching requests changes no row's inputs."""
+        logits, hidden = self._forward(requests)
+        responses, start = [], 0
+        for request in requests:
+            end = start + request.rows
+            rows_hidden = None if hidden is None else hidden[start:end]
+            responses.append(self._respond(request, logits[start:end], rows_hidden))
+            start = end
+        return responses
+
+    def _respond(self, request: Prepared, logits, hidden) -> SystemOneResponse:
+        questions, routes = request.questions, request.routes
+        prefix_ids, variants = request.prefix_ids, request.variants
         suffixes = [v.suffix_ids for v in variants]
-        prefix_ids, logits, last_positions, hidden = self._forward(prefix, suffixes, want_hidden)
 
         # Calibrate each rendered variant, then average per question in the
         # question's own candidate order.
@@ -208,7 +249,9 @@ class DecisionEngine:
         orders_by_question: dict[str, list[list[int] | None]] = defaultdict(list)
         for row, variant in enumerate(variants):
             question, route = questions[variant.name], routes[variant.name]
-            scores = self._scores(logits, last_positions, row, route, question, hidden)
+            scores = self._scores(
+                logits[row], None if hidden is None else hidden[row], route, question
+            )
             probs = self.calibration.apply(
                 scores, _bucket_type(question, route), route.mode.value, n_options=len(scores)
             )
@@ -290,14 +333,25 @@ class DecisionEngine:
             for name, order, r in rendered
         ]
 
-    def _forward(self, prefix: str, suffixes: list[list[int]], want_hidden: bool = False):
-        """Logits (and hidden states) at each suffix's last token, one of two ways."""
-        prefix_ids = self.tokenizer.encode(prefix, add_special_tokens=True)
-        if self.config.prefix_mode == "single":
-            return self._forward_single(prefix_ids, suffixes, want_hidden)
-        return self._forward_forked(prefix_ids, suffixes, want_hidden)
+    def _forward(self, requests: list[Prepared]):
+        """Logits `(N, V)` and, for Mode B, hidden states `(N, H)` at every
+        variant's last token, rows in request order."""
+        import torch
 
-    def _forward_single(self, prefix_ids: list[int], suffixes: list[list[int]], want_hidden: bool):
+        want_hidden = any(r.want_hidden for r in requests)
+        if self.config.prefix_mode == "single":
+            rows = [r.prefix_ids + v.suffix_ids for r in requests for v in r.variants]
+            return self._forward_single(rows, want_hidden)
+        # A fork shares one prefix, so requests run one after another.
+        outs = [
+            self._forward_forked(r.prefix_ids, [v.suffix_ids for v in r.variants], want_hidden)
+            for r in requests
+        ]
+        logits = torch.cat([logits for logits, _ in outs])
+        hidden = torch.cat([hidden for _, hidden in outs]) if want_hidden else None
+        return logits, hidden
+
+    def _forward_single(self, rows: list[list[int]], want_hidden: bool):
         """One right-padded batch of prefix+suffix rows; no cache, no fork.
 
         Under `compile`, the batch is padded to a shape bucket -- rows to a
@@ -308,8 +362,8 @@ class DecisionEngine:
         import torch
 
         device = self._device
-        rows = [prefix_ids + s for s in suffixes]
         n_real = len(rows)
+        last_positions = [len(r) - 1 for r in rows]
         width = max(len(r) for r in rows)
         if self.config.compile:
             width = bucket(width, self.config.pad_to)
@@ -320,16 +374,10 @@ class DecisionEngine:
             [[1] * len(r) + [0] * (width - len(r)) for r in rows], device=device
         )
         with torch.no_grad(), self._lock:
-            out = self.model(
-                input_ids=batch,
-                attention_mask=attention,
-                use_cache=False,
-                output_hidden_states=want_hidden,
-            )
-        last_positions = torch.tensor([len(r) - 1 for r in rows[:n_real]], device=device)
-        logits = out.logits[:n_real]
-        hidden = out.hidden_states[-1][:n_real] if want_hidden else None
-        return prefix_ids, logits, last_positions, hidden
+            states = self._decoder(
+                input_ids=batch, attention_mask=attention, use_cache=False
+            ).last_hidden_state[:n_real]
+            return self._project(states, last_positions, want_hidden)
 
     def _forward_forked(self, prefix_ids: list[int], suffixes: list[list[int]], want_hidden: bool):
         """Prefill the prefix once, then run all suffixes against forked caches."""
@@ -338,10 +386,9 @@ class DecisionEngine:
         device = self._device
 
         with torch.no_grad(), self._lock:
-            prefilled = self.model(
+            cache = self._decoder(
                 input_ids=torch.tensor([prefix_ids], device=device), use_cache=True
-            )
-            cache = prefilled.past_key_values
+            ).past_key_values
 
             width = max(len(s) for s in suffixes)
             pad = self.tokenizer.pad_token_id or 0
@@ -355,44 +402,38 @@ class DecisionEngine:
                 dim=1,
             )
 
-            out = self.model(
+            states = self._decoder(
                 input_ids=batch,
                 attention_mask=full_attention,
                 past_key_values=_fork(cache, len(suffixes), device),
                 use_cache=False,
-                # Only for Mode B: full-batch hidden states are large.
-                output_hidden_states=want_hidden,
-            )
+            ).last_hidden_state
+            return self._project(states, [len(s) - 1 for s in suffixes], want_hidden)
 
-        last_positions = torch.tensor([len(s) - 1 for s in suffixes], device=device)
-        hidden = out.hidden_states[-1] if want_hidden else None
-        return prefix_ids, out.logits, last_positions, hidden
+    def _project(self, states, last_positions: list[int], want_hidden: bool):
+        """Gather each row's last real token and project only those to the vocabulary."""
+        import torch
 
-    def _scores(
-        self,
-        logits,
-        last_positions,
-        row: int,
-        route: Route,
-        question: Question,
-        hidden,
-    ) -> list[float]:
+        rows = torch.arange(states.size(0), device=states.device)
+        last = states[rows, torch.tensor(last_positions, device=states.device)]  # (N, H)
+        return self._lm_head(last), (last if want_hidden else None)
+
+    def _scores(self, logits, hidden, route: Route, question: Question) -> list[float]:
+        """Scores for one variant row: `logits` is `(V,)`, `hidden` `(H,)` or None."""
         if route.mode is Mode.LABEL_TOKEN:
-            return self._label_token_scores(logits, last_positions, row, route)
-        return self._candidate_path_scores(hidden, last_positions, row, question)
+            return self._label_token_scores(logits, route)
+        return self._candidate_path_scores(hidden, question)
 
-    def _label_token_scores(self, logits, last_positions, row: int, route: Route) -> list[float]:
+    def _label_token_scores(self, logits, route: Route) -> list[float]:
         from .readout.mode_a import LabelTokenReadout
 
         readout = LabelTokenReadout(
             self.tokenizer, prefix=label_prefix(Style(self.config.prompt_style))
         )
         candidate_ids = readout.candidate_ids(route.codes)
-        return logits[row, int(last_positions[row]), candidate_ids].float().tolist()
+        return logits[candidate_ids].float().tolist()
 
-    def _candidate_path_scores(
-        self, hidden, last_positions, row: int, question: Question
-    ) -> list[float]:
+    def _candidate_path_scores(self, hidden, question: Question) -> list[float]:
         if self.mode_b_head is None:
             raise RuntimeError("Mode B question reached the readout with no head loaded")
         if hidden is None:
@@ -400,7 +441,7 @@ class DecisionEngine:
 
         import torch
 
-        question_repr = hidden[row, int(last_positions[row])].unsqueeze(0)  # (1, H)
+        question_repr = hidden.unsqueeze(0)  # (1, H)
         candidate_repr = self._candidate_reprs(candidate_texts(question)).unsqueeze(0)  # (1, K, H)
         head_dtype = next(self.mode_b_head.parameters()).dtype
         with torch.no_grad():
@@ -435,9 +476,9 @@ class DecisionEngine:
         ids = encoded["input_ids"].to(device)
         mask = encoded["attention_mask"].to(device)
         with torch.no_grad(), self._lock:
-            states = self.model(
-                input_ids=ids, attention_mask=mask, output_hidden_states=True, use_cache=False
-            ).hidden_states[-1]
+            states = self._decoder(
+                input_ids=ids, attention_mask=mask, use_cache=False
+            ).last_hidden_state
         last_positions = mask.sum(dim=1).long() - 1
         reprs = states[torch.arange(states.size(0), device=device), last_positions]
         self._candidate_cache[key] = reprs
