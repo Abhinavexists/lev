@@ -108,6 +108,8 @@ def _hf_secrets() -> list:
 # fixed at import, so these cannot travel as Secrets the way the preset does.
 #   LEV_SERVE_CONCURRENCY  requests one container handles at once (default 32);
 #                          concurrent requests share batched forwards (lev.batcher).
+#                          Also the server's `max_pending`, so Modal's input cap
+#                          and the 503 limit agree; forwarded into the container.
 #   LEV_SERVE_WARM         containers kept running (default 0). One removes the
 #                          20-55 s cold start, at the cost of an idle GPU.
 #   LEV_SERVE_REGION       a Modal region near the client; the measured 280 ms
@@ -149,6 +151,7 @@ def _serve_overrides() -> list:
             "LEV_SERVE_MAX_LABEL_OPTIONS",
             "LEV_SERVE_PROMPT",
             "LEV_SERVE_SKIP_CODES",
+            "LEV_SERVE_CONCURRENCY",
         )
         if (value := os.environ.get(key))
     }
@@ -387,6 +390,7 @@ def serve():
         max_label_options=max_label_options,
         prompt_style=prompt_style,
         skip_multi_token_codes=skip_codes,
+        max_pending=SERVE_CONCURRENCY,
     )
 
 
