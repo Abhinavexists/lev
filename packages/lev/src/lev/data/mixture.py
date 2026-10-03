@@ -32,13 +32,9 @@ class Example:
 
 @dataclass(frozen=True)
 class Augment:
-    """How one source's questions may be varied in a mixture.
+    """Per-source variation: train varies wording and options, calibration options only (ADR-026).
 
-    Train varies wording and options; calibration varies options only (ADR-026).
-
-    `negations` ask the opposite question, flipping the Noul target, so "yes"
-    does not mean "good" in every row. `min_options` is the floor when a Choice
-    is subsampled.
+    `negations` flip the Noul target so "yes" is not always "good"; `min_options` floors subsets.
     """
 
     paraphrases: tuple[str, ...] = ()
@@ -51,8 +47,6 @@ class Augment:
 
 @dataclass
 class MixtureSpec:
-    """Which sources to draw from, and in what proportion."""
-
     sources: dict[str, float] = field(default_factory=dict)
     n_examples: int = 200_000
     schema_first_fraction: float = 0.5
@@ -85,10 +79,8 @@ Loader = Callable[[], Iterable[Example]]
 def build_mixture(spec: MixtureSpec, loaders: dict[str, Loader]) -> Iterator[Example]:
     """Yield `spec.n_examples`, respecting weights, layout split and abstain rate.
 
-    `loaders` maps a source name to a callable returning its Examples. Raises
-    `ContaminationError` for a blocked source, `KeyError` for a source with no
-    loader, and `ValueError` for no sources, weights not summing to 1, or a
-    source that yields nothing.
+    Raises `ContaminationError` for a blocked source, `KeyError` for one with no loader, and
+    `ValueError` for no sources, weights not summing to 1, or a source that yields nothing.
     """
     spec.validate()
     missing = set(spec.sources) - set(loaders)
@@ -150,11 +142,8 @@ def _vary(
     rng: random.Random,
     allow_negation: bool,
 ) -> tuple[Question, int]:
-    """Vary wording and Choice options while preserving the gold answer.
-
-    Noul negation mirrors the rating target. Choice subsampling keeps the gold
-    option and remaps its index. Score levels are never reordered.
-    """
+    # Preserves the gold answer: negation mirrors a Noul rating, subsampling keeps and
+    # re-indexes the gold option, and Score levels are never reordered.
     instructions = question.instructions
     can_negate = isinstance(question, Noul) and augment.negations and allow_negation
     if can_negate and rng.random() < spec.negate_fraction:
@@ -201,13 +190,8 @@ def _donor_state(
     adjacent: dict[str, frozenset[str]],
     rng: random.Random,
 ) -> str | dict | list:
-    """A state borrowed from a source that cannot answer `source`'s question.
-
-    Another source is not enough: imdb's question is answerable from a
-    rotten_tomatoes state, so `adjacent` (`sources.ADJACENT`) excludes such
-    pairs. Falls back to any other source, then any source, so a narrow mixture
-    still yields an example.
-    """
+    # Another source is not enough: a rotten_tomatoes state answers imdb's question, so
+    # `adjacent` sources are excluded too; the fallbacks let a narrow mixture still yield.
     excluded = {source} | set(adjacent.get(source, ()))
     eligible = (
         [name for name in pools if name not in excluded]

@@ -1,10 +1,8 @@
 """Export the 13 S1Bench subsets as levbench task files, for evaluation only.
 
-This module must not import training data builders or produce an `Example`;
-`test_s1bench.py` checks that separation. Every subset passes `assert_eval_only`.
-Ids, questions and labels come from Nimble's pinned manifests in
-`s1bench_subsets/`. Conversion details and the multinli metadata exception are
-recorded in docs/FINDINGS.md §17.
+Must not import training data builders or produce an `Example` (checked by `test_s1bench.py`).
+Ids, questions and labels come from Nimble's pinned manifests in `s1bench_subsets/`;
+conversion details and the multinli metadata exception are in docs/FINDINGS.md §17.
 """
 
 from __future__ import annotations
@@ -31,10 +29,7 @@ QUESTION_NAME = "decision"  # S1Bench asks every record one question under this 
 
 @dataclass(frozen=True)
 class EvalItem:
-    """One record: its S1Bench id, the state to send, and the answer to compare against.
-
-    `truth` is an option string for Choice, a level index for Score, a bool for Noul.
-    """
+    """One S1Bench record; `truth` is a Choice option string, Score level index or Noul bool."""
 
     id: str
     state: dict | str
@@ -43,11 +38,10 @@ class EvalItem:
 
 @dataclass(frozen=True)
 class EvalSubset:
-    """One S1Bench subset: its upstream dataset, and what Jev scored on it.
+    """One S1Bench subset and Jev's score on it.
 
-    `jev_published` is Jev 1.13's figure on this subset; `jev_measured` is the
-    board's own `s1-fast` run in `data/s1bench-snapshot.json`, which covered only
-    six subsets.
+    `jev_published` is Jev 1.13's figure; `jev_measured` is the board's `s1-fast` run in
+    `data/s1bench-snapshot.json`, which covered only six subsets.
     """
 
     name: str
@@ -99,9 +93,6 @@ def question_for(spec: dict) -> Question:
     return Choice(instructions=spec["instructions"], criteria=criteria)
 
 
-# Readers: every upstream row as an EvalItem, before selection by id.
-
-
 def _download(repo: str, filename: str, revision: str | None = None) -> str:
     from huggingface_hub import hf_hub_download
 
@@ -111,17 +102,12 @@ def _download(repo: str, filename: str, revision: str | None = None) -> str:
 def _parquet(repo: str, filename: str, revision: str | None = None) -> Dataset:
     from datasets import load_dataset  # heavy, and only needed to export
 
-    # `split=` narrows load_dataset's return union to one Dataset; the annotation
-    # says so, since callers index rows by column name and read `.features`.
+    # `split=` narrows load_dataset's return union to the one Dataset the annotation names.
     return load_dataset("parquet", data_files=_download(repo, filename, revision), split="train")
 
 
 def _rows(dataset: Dataset) -> Iterator[dict]:
-    """The dataset's rows as dicts.
-
-    `Dataset.__iter__` carries no annotation upstream, so a type checker infers
-    `list` for the element and rejects every column lookup. It yields dicts.
-    """
+    # Upstream leaves `Dataset.__iter__` unannotated, so checkers reject column lookups.
     return cast("Iterator[dict]", iter(dataset))
 
 

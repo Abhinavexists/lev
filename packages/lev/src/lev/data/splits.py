@@ -1,8 +1,6 @@
-"""Deterministic, disjoint train, calibration and test splits.
+"""Deterministic, disjoint train, calibration and test splits (ADR-014).
 
-Assignment hashes the source, row position and text. The same input order
-reproduces the split across processes; reordering a corpus changes it.
-Coverage checks reject labels missing from training or the sampled corpus.
+The key includes row position: the same input order reproduces a split, reordering changes it.
 """
 
 from __future__ import annotations
@@ -36,19 +34,11 @@ DEFAULT_FRACTIONS: dict[Split, float] = {
 
 
 def row_key(source: str, index: int, text: str) -> str:
-    """A stable identity for a row.
-
-    Combines the source, the row's position within it and the first 512
-    characters of its text.
-    """
     return f"{source}|{index}|{text[:512]}"
 
 
 def hash_position(key: str, salt: str = SPLIT_SALT) -> float:
-    """Map a key to a uniform float in [0, 1). Stable across processes.
-
-    Not `hash()`, which Python salts per process.
-    """
+    """Map a key to a uniform float in [0, 1), stable across processes, unlike salted `hash()`."""
     digest = hashlib.blake2b(f"{salt}|{key}".encode(), digest_size=8).digest()
     return int.from_bytes(digest, "big") / float(1 << 64)
 
@@ -99,13 +89,10 @@ def split_examples(
 
 
 def check_coverage(splits: dict[Split, list[Example]], strict: bool = True) -> SplitReport:
-    """Run two label-coverage checks; with `strict`, raise `ValueError` on either.
+    """Run two label-coverage checks (ADR-014); with `strict`, raise `ValueError` on either.
 
-    1. Every label observed anywhere also appears in train; one seen only in
-       calibration or test measures nothing.
-    2. Every label the question offers is observed at all. This catches a
-       truncated or label-sorted corpus, which check 1 cannot: a sample holding
-       3 of banking77's 77 intents passes check 1.
+    Every observed label must appear in train, and every label the question offers must be
+    observed at all, which catches a truncated or label-sorted corpus the first check passes.
     """
     seen: dict[str, set[int]] = defaultdict(set)
     in_train: dict[str, set[int]] = defaultdict(set)

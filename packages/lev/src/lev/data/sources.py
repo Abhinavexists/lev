@@ -1,8 +1,6 @@
 """Training dataset registry and readers for Choice, Score and Noul examples.
 
-Label order comes from ClassLabel metadata unless explicitly pinned. Every
-source id is checked against the evaluation block list at import. Tests use
-fake loaders; they do not verify that upstream datasets remain available.
+Tests use fake loaders, so they do not verify that upstream datasets remain available.
 """
 
 from __future__ import annotations
@@ -38,11 +36,7 @@ Reader = Callable[[dict, random.Random], Row | list[Row] | None]
 
 @dataclass(frozen=True)
 class SourceSpec:
-    """A dataset and its question, label mapping and optional row reader.
-
-    Training can sample paraphrases or negate Noul questions. A custom reader
-    handles per-row choices, sentence pairs and nested annotations.
-    """
+    """A dataset and its question, label mapping and optional row reader."""
 
     name: str
     hf_id: str
@@ -53,7 +47,7 @@ class SourceSpec:
     hf_config: str | None = None
     split: str = "train"
     revision: str | None = None
-    # Only for sources whose ClassLabel names are absent or unusable.
+    # Pins label order; otherwise ClassLabel names supply it.
     label_names: tuple[str, ...] | None = None
     descriptions: dict[str, str] = field(default_factory=dict)
     paraphrases: tuple[str, ...] = ()
@@ -62,7 +56,6 @@ class SourceSpec:
 
     @property
     def is_mode_b(self) -> bool:
-        """True for a large taxonomy (more than 26 options)."""
         if self.name in _LARGE_OPTION_SETS:
             return True
         return bool(self.label_names) and len(self.label_names) > LABEL_OPTION_CAP
@@ -77,10 +70,9 @@ def _read_race(row: dict, rng: random.Random) -> Row | None:
 
 
 def _read_keyed_choices(question_field: str, context_field: str | None = None) -> Reader:
-    """Read `choices={"label": [...], "text": [...]}` plus `answerKey`.
+    """Read the `choices={"label", "text"}` + `answerKey` shape of commonsense_qa, openbookqa, ARC.
 
-    The shape commonsense_qa, openbookqa and ARC share. ARC keys some rows 1-4
-    rather than A-D, so the key is matched against the labels, never against A-Z.
+    ARC keys some rows 1-4 rather than A-D, so the key is matched against the labels, not A-Z.
     """
 
     def reader(row: dict, rng: random.Random) -> Row | None:
@@ -130,11 +122,9 @@ def _read_nli(row: dict, rng: random.Random) -> Row | None:
 
 
 def swap_two_words(text: str, rng: random.Random) -> str | None:
-    """Exchange two distinct content words.
+    """Exchange two distinct content words: full lexical overlap, changed meaning.
 
-    The result keeps every token of the original -- maximal lexical overlap --
-    but changes its meaning. None when the sentence has fewer than two
-    candidates, or 8 draws find no pair of distinct words.
+    None when there are fewer than two candidates or 8 draws find no distinct pair.
     """
     words = text.split()
     slots = [i for i, w in enumerate(words) if len(w) > 3 and w.isalpha()]
@@ -177,12 +167,8 @@ FEVER_DESCRIPTIONS = {
 
 
 def _read_nli_fever(row: dict, rng: random.Random) -> Row | None:
-    """FEVER as claim/evidence/verdict.
-
-    The dataset's `premise` is the claim and its `hypothesis` the evidence
-    sentence. The string label is used, not the integer, whose order differs
-    from FEVER's own.
-    """
+    # `premise` is the claim and `hypothesis` the evidence; the integer label's
+    # order differs from FEVER's own, so the string label is used.
     label = row.get("fever_gold_label")
     if label not in FEVER_LABELS:
         return None
@@ -249,7 +235,6 @@ HELPFULNESS_LEVELS = (
 
 
 def _read_ultrafeedback(row: dict, rng: random.Random) -> list[Row] | None:
-    """One instruction, up to four rated completions -- each becomes a Score row."""
     out: list[Row] = []
     for completion in row.get("completions") or []:
         rating = ((completion.get("annotations") or {}).get("helpfulness") or {}).get("Rating")
@@ -445,7 +430,6 @@ REGISTRY: dict[str, SourceSpec] = {
             "Which command does this utterance correspond to?",
         ),
     ),
-    # Score: genuinely ordered levels.
     "yelp_review_full": SourceSpec(
         name="yelp_review_full",
         hf_id="Yelp/yelp_review_full",
@@ -618,10 +602,8 @@ MODE_B_SOURCES: frozenset[str] = frozenset(
     name for name, spec in REGISTRY.items() if spec.is_mode_b
 )
 
-# Sources close enough that one's state can answer another's question, and so
-# cannot donate a state for abstain augmentation (ADR-012). The sentiment
-# corpora are mutually adjacent -- SST-5 and Rotten Tomatoes are both
-# movie-review sentiment -- and clinc_oos contains banking intents.
+# Sources whose states can answer each other's questions, so none donates an abstain
+# state to another (ADR-012); e.g. clinc_oos contains banking intents.
 ADJACENT: tuple[frozenset[str], ...] = (
     frozenset({"imdb", "rotten_tomatoes", "sst5", "yelp_review_full", "emotion"}),
     frozenset({"banking77", "clinc_oos", "snips"}),
@@ -649,7 +631,7 @@ def family_of(source: str) -> str:
     """The task family a source belongs to: its `ADJACENT` group, else itself.
 
     Holding out mrpc while qqp stays in is not a new task, so calibration
-    transfer is measured over families, not sources.
+    transfer is measured over families, not sources (ADR-028).
     """
     for group in ADJACENT:
         if source in group:
@@ -691,7 +673,6 @@ def _label_names(spec: SourceSpec, dataset) -> list[str]:
 
 
 def build_question(spec: SourceSpec, names: list[str]) -> Question:
-    """Turn a label list into the typed question the model will be asked."""
     if spec.primitive == "noul":
         if len(names) != 2:
             raise ValueError(f"{spec.name}: a Noul needs exactly 2 labels, got {len(names)}")

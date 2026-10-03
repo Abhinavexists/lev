@@ -8,7 +8,6 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-# The 13 S1Bench evaluation subsets.
 BLOCKED_SUBSETS: frozenset[str] = frozenset(
     {
         "vitaminc-dev",
@@ -38,9 +37,8 @@ _ALIASES: dict[str, str] = {
     "mteb/amazon_massive_scenario": "massive-en-US",
     "setfit/amazon_massive_intent_en-us": "massive-en-US",
     "setfit/amazon_massive_scenario_en-us": "massive-en-US",
-    # Not the same rows, but the same 64-intent schema MASSIVE inherited via
-    # SLURP (`alarm_query`, `iot_hue_lightchange`, ...). Training on it turns
-    # massive-en-US from an unseen-taxonomy test into a seen one.
+    # Different rows, same 64-intent schema MASSIVE inherited via SLURP: it would
+    # make massive-en-US a seen taxonomy (ADR-020).
     "hwu64": "massive-en-US",
     "deeppavlov/hwu64": "massive-en-US",
     "super_glue/boolq": "boolq",
@@ -76,11 +74,7 @@ class ContaminationError(RuntimeError):
 
 
 def normalise(name: str) -> str:
-    """Canonicalise a dataset name for lookup.
-
-    Lowercases, collapses whitespace and underscores to a hyphen, and strips a
-    `:train`, `:validation`, `:dev` or `:test` suffix.
-    """
+    """Canonicalise a dataset name for lookup."""
     cleaned = name.strip().lower()
     cleaned = re.sub(r"[\s_]+", "-", cleaned)
     return re.sub(r":(train|validation|dev|test)$", "", cleaned)
@@ -88,10 +82,8 @@ def normalise(name: str) -> str:
 
 _BLOCKED_BY_NORMALISED: dict[str, str] = {normalise(s): s for s in BLOCKED_SUBSETS}
 _ALIASES_BY_NORMALISED: dict[str, str] = {normalise(a): t for a, t in _ALIASES.items()}
-# Bare aliases (`massive`, `aegis`, `squad-v2`) as segment sets, so an unlisted
-# re-host (`someorg/amazon_massive_intent_fr`, `someorg/squad_v2_dedup`) is caught
-# like a blocked subset name inside a longer id. Org-qualified aliases stay
-# exact-match only.
+# Bare aliases match as segment sets, so an unlisted re-host (`someorg/squad_v2_dedup`)
+# is caught (ADR-020); org-qualified aliases stay exact-match only.
 _ALIAS_SEGMENTS: tuple[tuple[frozenset[str], str], ...] = tuple(
     (frozenset(alias.split("-")), target)
     for alias, target in _ALIASES_BY_NORMALISED.items()
@@ -107,7 +99,6 @@ def resolve(name: str) -> str | None:
         return _BLOCKED_BY_NORMALISED[normalised]
     if normalised in _ALIASES_BY_NORMALISED:
         return _ALIASES_BY_NORMALISED[normalised]
-    # Unlisted org prefix: `someorg/boolq` -> `boolq`.
     if "/" in normalised:
         return resolve(normalised.split("/", 1)[1])
     # A blocked name appearing as one hyphen-separated segment, e.g. `mix-boolq-v2`.

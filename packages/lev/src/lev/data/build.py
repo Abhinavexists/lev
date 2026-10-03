@@ -1,7 +1,6 @@
-"""Write train, calibration and test JSONL files for offline training.
+"""Write train, calibration and test JSONL files and a manifest for offline training.
 
-The manifest records source ids, row counts, weights and split salt. Source
-rows are split before sampling or augmentation to prevent cross-split leakage.
+Source rows are split before sampling or augmentation, so no row leaks across splits (ADR-014).
 """
 
 from __future__ import annotations
@@ -38,11 +37,7 @@ def to_json(example: Example) -> dict:
 
 
 def _question_from(payload: dict, cache: dict[str, Question]) -> Question:
-    """Cache validated questions without changing option order.
-
-    Targets index that order, so sorting the cache key silently corrupts
-    labels on shuffled Choice rows (ADR-024).
-    """
+    # Targets index option order, so a sorted cache key corrupts shuffled Choice labels (ADR-024).
     key = json.dumps(payload, sort_keys=False)
     if key not in cache:
         cache[key] = _QUESTION.validate_python(payload)
@@ -82,10 +77,9 @@ def read_jsonl(path: Path) -> list[Example]:
 
 
 def verify_round_trip(path: Path, sample: int = 1000) -> int:
-    """Re-read a written split and check each sampled row comes back as written.
+    """Check sampled rows of a written split read back exactly; return the number checked.
 
-    Order-sensitive, since `target` indexes the option order: this catches the
-    ADR-024 reader bug at build time. Returns the number of rows checked.
+    Order-sensitive, since `target` indexes option order (ADR-024). Raises `ValueError` on drift.
     """
     rows = read_jsonl(path)
     step = max(1, len(rows) // sample)
@@ -116,10 +110,7 @@ def build_dataset(
     cache_dir: str | None = None,
     loader: Callable | None = None,
 ) -> dict:
-    """Write each split's JSONL and the manifest to `out_dir`; return the manifest.
-
-    Source rows are split before any mixture is drawn or augmented.
-    """
+    """Write each split's JSONL and the manifest to `out_dir`; return the manifest."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     weights = sources or default_weights()
@@ -165,9 +156,8 @@ def build_dataset(
             # A different stream per split, so layouts do not repeat in lockstep.
             seed=seed + split_index,
             adjacent=adjacent,
-            # Test keeps each source's canonical question (one per exported eval
-            # file). Calibration varies option sets but not wording, so each
-            # option-count band has rows to fit on (ADR-026).
+            # Test keeps canonical questions (one per eval file); calibration varies
+            # option sets, not wording, so each option-count band has rows (ADR-026).
             augment=augment if split is not Split.TEST else {},
             **held_out_overrides,
         )

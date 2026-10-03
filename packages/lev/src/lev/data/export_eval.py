@@ -1,14 +1,6 @@
-"""Write the held-out test split out as levbench task files.
+"""Write the held-out test split as levbench task files, one per source.
 
-levbench does not import `lev` (ADR-010), so the handoff is a file written here.
-
-    uv run lev data eval --data data/mixture --out data/eval
-
-One file per source, because each source has its own question; a combined file
-would ask every question of every item.
-
-Truth values are written in the shape levbench compares against per primitive:
-a Choice yields its option string, a Score its level index, a Noul a bool.
+levbench does not import `lev` (ADR-010). A combined file would ask every question of every item.
 """
 
 from __future__ import annotations
@@ -27,6 +19,7 @@ MIN_USEFUL_ITEMS = 100
 
 
 def truth_for(question: Question, target: int) -> bool | int | str:
+    """The label levbench compares: a Choice option string, a Score level index, a Noul bool."""
     if isinstance(question, Noul):
         # The target is a rating index; collapse it as the readout does.
         return noul_probability({target: 1.0}) >= 0.5
