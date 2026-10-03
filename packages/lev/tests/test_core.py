@@ -1,8 +1,16 @@
-"""Tests for everything that runs without a GPU: schema, labels, router, prompts."""
+"""GPU-free tests: schema, labels, router, prompts, order averaging and `lev route`."""
 
 from __future__ import annotations
 
+import json
+import sys
+import threading
+import time
+import types
+from string import ascii_uppercase
+
 import pytest
+from conftest import FakeTokenizer
 from lev.labels import (
     LABEL_OPTION_CAP,
     NOUL_RATING_TOKENS,
@@ -24,6 +32,14 @@ from lev.prompt import (
 )
 from lev.router import BINARY_NOUL, Mode, route, route_all
 from lev.types import Choice, Noul, Score
+
+
+def two_letter_tokenizer(missing: str | None = None) -> FakeTokenizer:
+    """Every space-prefixed letter and letter pair is one token, except `missing`."""
+    pairs = {f" {a}{b}" for a in ascii_uppercase for b in ascii_uppercase}
+    if missing is not None:
+        pairs.discard(f" {missing}")
+    return FakeTokenizer({f" {c}" for c in ascii_uppercase} | pairs)
 
 
 class TestLabelCodes:
@@ -165,12 +181,7 @@ class TestOptionCap:
     def test_generous_tokenizer_still_routes_above_the_cap_to_mode_b(self):
         """An explicit `max_label_options` forces Mode B even when the tokenizer
         can express every code (Qwen3.5 encodes codes up to `BP` as one token)."""
-        from string import ascii_uppercase
-
-        from conftest import FakeTokenizer
-
-        pairs = {f" {a}{b}" for a in ascii_uppercase for b in ascii_uppercase}
-        generous = FakeTokenizer({f" {c}" for c in ascii_uppercase} | pairs)
+        generous = two_letter_tokenizer()
         sixty = Choice(criteria={f"o{i}": None for i in range(60)})
         assert single_token_codes(generous, 60) is not None, "fixture must be generous"
         assert (
@@ -281,7 +292,7 @@ class TestShapeBuckets:
     def test_width_rounds_up_to_the_multiple(self):
         from lev.model import bucket
 
-        assert bucket(1, 32) == 32 and bucket(32, 32) == 32 and bucket(33, 32) == 64
+        assert [bucket(n, 32) for n in (1, 32, 33)] == [32, 32, 64]
 
     def test_rows_round_up_to_a_power_of_two(self):
         from lev.model import pow2
@@ -307,11 +318,13 @@ class TestChatStyle:
         assert a.prefix == b.prefix and a.suffix != b.suffix
         assert a.suffix.startswith("# Evidence\ns1") and a.suffix.endswith(CHAT_TAIL)
 
-    def test_score_levels_are_numbered_and_noul_binary_is_a_lettered_pair(self):
+    def test_score_levels_are_numbered(self):
         s = render_question(
             "s", Score(criteria=["low", "mid", "high"]), ["A", "B", "C"], style=Style.CHAT
         )
         assert "A. (level 0 of 2) low" in s and "C. (level 2 of 2) high" in s
+
+    def test_binary_noul_is_a_lettered_yes_no_pair(self):
         n = render_question(
             "n",
             Noul(instructions="Safe?", criteria={"true": "harmless"}),
@@ -319,6 +332,8 @@ class TestChatStyle:
             style=Style.CHAT,
         )
         assert "A. yes: harmless" in n and "B. no: the statement is false" in n
+
+    def test_rating_noul_asks_for_a_digit_on_the_scale(self):
         rating = render_question(
             "n", Noul(instructions="Safe?"), [str(i) for i in range(9)], style=Style.CHAT
         )
@@ -347,28 +362,20 @@ class TestChatStyle:
 
 
 class TestSkipMultiTokenCodes:
-    def tokenizer_without(self, broken: str):
-        from string import ascii_uppercase
-
-        from conftest import FakeTokenizer
-
-        pairs = {f" {a}{b}" for a in ascii_uppercase for b in ascii_uppercase} - {f" {broken}"}
-        return FakeTokenizer({f" {c}" for c in ascii_uppercase} | pairs)
-
     def test_default_scheme_stops_at_the_first_split_code(self):
-        tok = self.tokenizer_without("BQ")  # the 69th code, as in Qwen3.5
+        tok = two_letter_tokenizer(missing="BQ")  # the 69th code, as in Qwen3.5
         assert single_token_codes(tok, 68) is not None
         assert single_token_codes(tok, 69) is None
 
     def test_skipping_passes_over_split_codes_and_keeps_the_order(self):
-        tok = self.tokenizer_without("BQ")
+        tok = two_letter_tokenizer(missing="BQ")
         codes = single_token_codes(tok, 77, skip_multi_token=True)
         assert len(codes) == 77 and "BQ" not in codes and len(set(codes)) == 77
         assert codes[:68] == single_token_codes(tok, 68), "codes below the split are unchanged"
         assert codes[68] == "BR"
 
     def test_route_uses_mode_a_past_the_split_only_when_asked(self):
-        tok = self.tokenizer_without("BQ")
+        tok = two_letter_tokenizer(missing="BQ")
         q = Choice(criteria={f"o{i}": None for i in range(77)})
         assert route(q, tok).mode is Mode.CANDIDATE_PATH
         assert route(q, tok, skip_multi_token=True).mode is Mode.LABEL_TOKEN
@@ -378,57 +385,40 @@ class TestSkipMultiTokenCodes:
 
 
 class TestRoutePreviewMatchesServing:
-    def test_lev_route_previews_the_mode_the_server_uses(self, tmp_path, monkeypatch, capsys):
-        """A 60-option Choice is Mode A when served, since the tokenizer can
-        express 60 codes, so the preview must say Mode A too."""
-        import json
-        import sys
-        import types
-        from string import ascii_uppercase
-
-        from conftest import FakeTokenizer
+    def preview(self, tokenizer, request, tmp_path, monkeypatch, capsys) -> str:
+        """Run `lev route` on `request`, with `tokenizer` standing in for the Hub's."""
         from lev.cli import main
 
-        pairs = {f" {a}{b}" for a in ascii_uppercase for b in ascii_uppercase}
-        tokenizer = FakeTokenizer({f" {c}" for c in ascii_uppercase} | pairs)
         stub = types.ModuleType("transformers")
         stub.AutoTokenizer = types.SimpleNamespace(from_pretrained=lambda *_a, **_k: tokenizer)
         monkeypatch.setitem(sys.modules, "transformers", stub)
+        path = tmp_path / "request.json"
+        path.write_text(json.dumps(request))
 
+        main(["route", str(path)])
+        return capsys.readouterr().out
+
+    def test_lev_route_previews_the_mode_the_server_uses(self, tmp_path, monkeypatch, capsys):
+        """A 60-option Choice is Mode A when served, since the tokenizer can
+        express 60 codes, so the preview must say Mode A too."""
         request = {
             "state": "turn the lights off",
             "questions": {
                 "intent": {"type": "choice", "criteria": {f"o{i}": None for i in range(60)}}
             },
         }
-        path = tmp_path / "request.json"
-        path.write_text(json.dumps(request))
-
-        main(["route", str(path)])
-        assert "mode A" in capsys.readouterr().out
+        out = self.preview(two_letter_tokenizer(), request, tmp_path, monkeypatch, capsys)
+        assert "mode A" in out
 
     def test_lev_route_prints_a_mode_b_route_without_codes(self, tmp_path, monkeypatch, capsys):
         """A Mode B route has no label codes to print."""
-        import json
-        import sys
-        import types
-
-        from conftest import FakeTokenizer
-        from lev.cli import main
-
         tokenizer = FakeTokenizer({" A", " B"})  # only two codes are single tokens
-        stub = types.ModuleType("transformers")
-        stub.AutoTokenizer = types.SimpleNamespace(from_pretrained=lambda *_a, **_k: tokenizer)
-        monkeypatch.setitem(sys.modules, "transformers", stub)
         request = {
             "state": "s",
             "questions": {"q": {"type": "choice", "criteria": {"a": None, "b": None, "c": None}}},
         }
-        path = tmp_path / "request.json"
-        path.write_text(json.dumps(request))
-
-        main(["route", str(path)])
-        assert "mode B" in capsys.readouterr().out
+        out = self.preview(tokenizer, request, tmp_path, monkeypatch, capsys)
+        assert "mode B" in out
 
 
 class TestSystemOneAcceptsPlainDicts:
@@ -452,3 +442,46 @@ class TestSystemOneAcceptsPlainDicts:
         engine = self.engine(rich_tokenizer)
         with pytest.raises(ValueError, match="at least 2 options"):
             engine.system_one("state", {"pick": {"type": "choice", "criteria": {"a": None}}})
+
+
+class TestTokenizerIsUsedOneCallAtATime:
+    """A fast tokenizer keeps padding and truncation as state on one shared Rust
+    object, so request threads running `prepare` while the GPU worker encodes
+    must not overlap: overlapping calls raise "Already borrowed" or encode with
+    another call's truncation."""
+
+    class OverlapDetector:
+        def __init__(self, inner):
+            self.inner = inner
+            self.active = 0
+            self.overlaps = 0
+            self.guard = threading.Lock()
+
+        def encode(self, text, add_special_tokens=True):
+            with self.guard:
+                self.active += 1
+                self.overlaps += self.active > 1
+            time.sleep(0.0005)
+            try:
+                return self.inner.encode(text, add_special_tokens=add_special_tokens)
+            finally:
+                with self.guard:
+                    self.active -= 1
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+    def test_concurrent_prepares_never_overlap_in_the_tokenizer(self, rich_tokenizer):
+        from concurrent.futures import ThreadPoolExecutor
+
+        from lev.model import DecisionEngine, EngineConfig
+
+        tokenizer = self.OverlapDetector(rich_tokenizer)
+        engine = DecisionEngine(model=None, tokenizer=tokenizer, config=EngineConfig())
+        questions = {
+            "pick": {"type": "choice", "criteria": {"a": None, "b": None, "c": None}},
+            "ok": {"type": "noul", "instructions": "Is it fine?"},
+        }
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(lambda i: engine.prepare(f"state {i}", questions), range(32)))
+        assert tokenizer.overlaps == 0

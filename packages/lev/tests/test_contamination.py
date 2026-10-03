@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 from lev.data import BLOCKED_SUBSETS, ContaminationError, assert_clean, check_mixture
 from lev.data.contamination import resolve
@@ -88,10 +91,7 @@ class TestResolution:
 
     def test_the_block_list_covers_every_published_subset(self):
         """Tripwire against the snapshot: if a subset appears there, block it."""
-        import json
-        from pathlib import Path as _P
-
-        snapshot = _P(__file__).resolve().parents[3] / "data" / "s1bench-snapshot.json"
+        snapshot = Path(__file__).resolve().parents[3] / "data" / "s1bench-snapshot.json"
         published = set(json.loads(snapshot.read_text())["published_jev"])
         assert published <= BLOCKED_SUBSETS, sorted(published - BLOCKED_SUBSETS)
 

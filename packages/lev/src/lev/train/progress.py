@@ -20,25 +20,23 @@ class ProgressLog:
         self.every = max(1, log_every)
         self.start = time.monotonic()
         self.window: dict[str, list[float]] = {}
-        self.tokens = 0
         self.window_tokens = 0
         self.mark = self.start
         self.mark_step = 0
 
     def record(self, step: int, loss: float, mode: str, lr: float, tokens: int = 0) -> None:
         self.window.setdefault(mode, []).append(loss)
-        self.tokens += tokens
         self.window_tokens += tokens
-        if (step + 1) % self.every and step + 1 != self.total:
+        done = step + 1
+        if done % self.every and done != self.total:
             return
 
-        done = step + 1
         now = time.monotonic()
-        # A coarse clock can report zero on a fast window; never divide by it.
         elapsed = max(now - self.start, 1e-9)
         # Over the window, not since start: startup (weight loading, a Triton JIT
         # compile of minutes) made a cumulative rate read 0.33 it/s against 2.50
-        # steady-state, with the ETA wrong by the same factor (ADR-017).
+        # steady-state, with the ETA wrong by the same factor (ADR-017). A coarse
+        # clock can report zero on a fast window; never divide by it.
         span = max(now - self.mark, 1e-9)
         rate = (done - self.mark_step) / span
         remaining = (self.total - done) / rate if rate else 0.0

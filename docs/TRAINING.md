@@ -16,7 +16,7 @@ Steps 1 and 2 need **no training at all** and deliver most of the value. Do them
 5  RL with a belief reward                                         only after 1-4
 ```
 
-The evidence for that ordering: on S1Bench, an _untuned_ 27B with a label-token readout scores 0.7582 — one point behind Jev. The gap that matters is calibration (0.1214 vs 0.0764), and step 2 closes most of it for the cost of fitting one scalar.
+The evidence for that ordering: on S1Bench, an _untuned_ 27B with a label-token readout scores 0.7582 — 1.7 points behind Jev's board run (1.0 behind its published macro). The gap that matters is calibration (0.1214 vs 0.0764), and step 2 closes most of it for the cost of fitting one scalar.
 
 ---
 
@@ -36,7 +36,7 @@ uv run levbench eval  --backend lev
 uv run levbench sweep --backend lev
 ```
 
-`sweep` is the one to watch: it verifies the state cache actually amortises across questions rather than assuming it. Cost per question should fall roughly linearly with the number of questions in a request.
+`sweep` is the one to watch: it compares the cost and latency of one N-question call with N single-question calls on the same state, so it measures rather than assumes that reading the state amortises. If it does, batched cost stays roughly flat as N grows while split cost grows linearly.
 
 ---
 
@@ -50,14 +50,14 @@ modal run modal/app.py::calibrate --preset 4b-instruct --split calibration
 
 One temperature is fitted **per `(question_type, readout_mode)` bucket**, and per option-count band for Choice. A global scalar under-serves at least one bucket: the three types produce differently shaped distributions, and Mode A and Mode B produce them by different mechanisms. Each bucket is fitted two ways (every row weighted equally, or every task family weighted equally) and keeps whichever transfers better to a held-out family ([ADR-028](DECISIONS.md#adr-028--skip-split-label-codes-when-serving-calibrate-for-families-the-model-has-not-seen)).
 
-A bucket with fewer than 50 samples is left unfitted at `T=1.0` (the identity) rather than fitted on noise, and never borrows another bucket's scalar.
+A bucket with fewer than 50 samples is left unfitted at `T=1.0` (the identity) rather than fitted on noise, and never borrows another bucket's scalar. The one fallback is for profiles fitted before option bands: a Choice band missing from one uses that type and mode's unbanded temperature.
 
 ---
 
 ## Step 3 — the data mixture
 
 ```bash
-make data                  # ~10 min, downloads and writes three splits
+make data                  # downloads every source, writes three splits
 make eval-set              # export the held-out split for levbench
 ```
 
@@ -213,7 +213,7 @@ Throughput counts real tokens from the attention mask, not `avg_tokens_per_examp
 
 ### Resuming
 
-A run picks up where it stopped. `make train` resumes from the newest `step-N` in the preset's checkpoint directory; `FRESH=1` starts over, `RESUME=path` names a checkpoint explicitly. Each checkpoint carries the optimiser moments, the schedule position, the step and epoch, and the RNG state that reproduces the epoch's data order, so a resumed run continues at step N through the batches it had not yet seen, on the learning rate it had reached, and `history.json` extends rather than restarts. A preemption costs at most `checkpoint_every` steps -- 2,000, about half an hour on the 4B preset.
+A run picks up where it stopped. `make train` resumes from the newest `step-N` in the preset's checkpoint directory; `FRESH=1` starts over, `RESUME=path` names a checkpoint explicitly. Each checkpoint carries the optimiser moments, the schedule position, the step and epoch, and the RNG state that reproduces the epoch's data order, so a resumed run continues at step N through the batches it had not yet seen, on the learning rate it had reached, and `history.json` extends rather than restarts. A preemption costs at most `checkpoint_every` steps -- 2,000: about 30 min on `4b`, 50 min on `4b-instruct`.
 
 `FRESH=1` also moves the previous run's `step-*`, `history.json` and `calibration.json` into a `superseded-<utc>` directory beside them: left in place, a preemption's auto-resume would take the stale highest step, and `serve` would pick up the old temperatures for the new weights.
 
@@ -244,7 +244,7 @@ uv run levbench eval --backend lev --tasks data/eval
 
 Or in-process: `lev.load("checkpoints/lev-instruct", model_id="Qwen/Qwen3.5-4B", prompt_style="chat")`.
 
-`--checkpoint` takes the output directory and resolves the newest `step-N` inside it, a flat release directory, or a Hub id. It loads the base model, applies the LoRA adapter on top, picks up `mode_b_head.pt` if it is there, and uses the `calibration.json` beside the weights unless `--calibration` overrides it. `GET /health` reports which checkpoint was resolved, whether a Mode B head loaded, whether the profile is calibrated, the Noul readout and the option cap — check it before reading any number off an eval.
+`--checkpoint` takes the output directory and resolves the newest `step-N` inside it, a flat release directory, or a Hub id. It loads the base model, applies the LoRA adapter on top, picks up `mode_b_head.pt` if it is there, and uses the `calibration.json` beside the weights unless `--calibration` overrides it. `GET /health` reports which checkpoint was resolved, whether a Mode B head loaded, whether the profile is calibrated, the Noul readout, the option cap, and requests in flight against `max_pending` — check it before reading any number off an eval.
 
 A checkpoint directory is an _adapter_, not a model, so `--model` and `--prompt-style` name the base and format it was trained with — except for a packaged release, whose `lev_release.json` records both.
 

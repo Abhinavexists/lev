@@ -37,7 +37,7 @@ lev is an open System One decision model and the harness that measures it. Give 
 | pubmedqa | biomedical yes/no/maybe | 0.732 | **0.764** | 0.532 |
 | **macro** | | 0.689 | **0.761** | |
 
-lev and Jev ran through the same harness on all 3,880 items S1Bench scores, pinned by [Nimble](https://github.com/bespokelabsai/nimble)'s manifests. Our Jev run lands within 0.8 points of TypeSafe's published figure on every subset, so the harness is not the gap.
+lev and Jev ran through the same harness on all 3,880 items S1Bench scores, pinned by [Nimble](https://github.com/bespokelabsai/nimble)'s manifests. The Jev run lands within 0.8 points of TypeSafe's published figure on every subset, so the harness is not the gap.
 
 - **Noise:** at these sizes a per-subset difference needs roughly 5–9 points to be real. lev's leads on multinli and helpsteer2 are inside that.
 - **Where Jev is clearly ahead:** the minimal-edit pairs (paws −12.4, vitaminc −13.3) and summeval-consistency (−54.1), where lev rates most fully faithful summaries one level low. Fine-tuning introduced that: the untuned backbone scores 0.826.
@@ -197,7 +197,7 @@ Each option gets a short code, and the answer is read from the next-token logits
 
 ```bash
 levbench eval  --backend jev                       # the hosted API
-levbench eval  --backend lev  --tasks data/eval    # us, on localhost:8000
+levbench eval  --backend lev  --tasks data/eval    # localhost:8000 by default
 levbench compare                                   # vs an LLM baseline
 levbench sweep                                     # batching economics
 levbench confidence                                # which statistic is `confidence`?
@@ -286,14 +286,14 @@ This design is assembled from measured trade-offs in other people's implementati
 | From | What |
 | --- | --- |
 | [reflex](https://github.com/kshetrajna12/reflex) | post-hoc temperature calibration, the cheapest large win |
-| [decider](https://github.com/Mapika/decider) | dual prompt layouts, hybrid-attention schema cache, abstain augmentation |
+| [decider](https://github.com/Mapika/decider) | dual prompt layouts (trained; the cross-request schema cache they allow is designed, not built), abstain augmentation |
 | [simple-jev](https://github.com/featherless-ai/simple-jev) | nine-rating-token Noul |
 | [NanoJev](https://github.com/TianyuCodings/NanoJev) | set attention over candidate paths, proper-scoring objectives |
 | [litjev](https://github.com/zhengxuyu/litjev) | the reference prefill + logit-readout write-up |
 | [jeff](https://github.com/logan-markewich/jeff), [Nimble](https://github.com/bespokelabsai/nimble), [typed-decisions](https://github.com/kotoba-lang/typed-decisions) | encoder and LoRA baselines, and the latency numbers that ruled out diffusion; Nimble also pins the S1Bench items |
 | [JEVfire](https://github.com/kikoncuo/jevfire) | the shape of this README |
 
-Benchmark data is a snapshot of a third-party S1Bench dashboard (`data/s1bench-snapshot.json`) that I did not produce; its caveats are in [FINDINGS.md §9](docs/FINDINGS.md). The 13 subset definitions (item ids, label counts, instructions and criteria) come from Nimble's public-benchmark manifests at commit `62076b4`, vendored in `packages/lev/src/lev/data/s1bench_subsets/`.
+Benchmark data is a snapshot of a third-party S1Bench dashboard (`data/s1bench-snapshot.json`), not produced by this project; its caveats are in [FINDINGS.md §9](docs/FINDINGS.md). The 13 subset definitions (item ids, label counts, instructions and criteria) come from Nimble's public-benchmark manifests at commit `62076b4`, vendored in `packages/lev/src/lev/data/s1bench_subsets/`.
 
 Not affiliated with or endorsed by TypeSafe AI.
 

@@ -31,8 +31,10 @@ QUESTION_NAME = "decision"  # S1Bench asks every record one question under this 
 
 @dataclass(frozen=True)
 class EvalItem:
-    """One record: its S1Bench id, the state to send, and the answer to compare
-    against (an option string for Choice, a level index for Score, a bool for Noul)."""
+    """One record: its S1Bench id, the state to send, and the answer to compare against.
+
+    `truth` is an option string for Choice, a level index for Score, a bool for Noul.
+    """
 
     id: str
     state: dict | str
@@ -80,9 +82,7 @@ def subset_names() -> list[str]:
 
 def get_subset(name: str) -> EvalSubset:
     """Resolve a subset by name or alias. Raises unless it is S1Bench evaluation data."""
-    canonical = name if name in EVAL_SUBSETS else assert_eval_only(name)
-    assert_eval_only(canonical)
-    return EVAL_SUBSETS[canonical]
+    return EVAL_SUBSETS[assert_eval_only(name)]
 
 
 def definition(name: str) -> dict:

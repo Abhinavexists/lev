@@ -25,9 +25,11 @@ from .collate import DecisionCollator, ModeBatcher, RouteCache
 from .config import TrainConfig
 from .progress import ProgressLog, hms
 
+HISTORY = "history.json"
+
 
 def build_model(config: TrainConfig, model_cache: str | None = None):
-    """Load the backbone, attach LoRA, and keep new heads at full precision."""
+    """Load the tokenizer and backbone, wrapped in LoRA when `config.use_lora`."""
     import torch
     from peft import LoraConfig, get_peft_model
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -167,8 +169,8 @@ def candidate_logits(model, batch, head=None):
 
         flat = batch.candidate_index.reshape(-1)
         reprs = candidate_repr[flat].view(*batch.candidate_index.shape, -1)  # (B, K, H)
-        # Cast hidden states up to the fp32 head. Casting down raises on GPU and
-        # is invisible on CPU, where both are fp32.
+        # Cast hidden states up to the fp32 head. Casting to the bf16 activations'
+        # dtype instead raises on GPU, and is invisible on CPU, where both are fp32.
         target_dtype = next(head.parameters()).dtype
         logits = head(question_repr.to(target_dtype), reprs.to(target_dtype), batch.candidate_mask)
 
@@ -222,8 +224,8 @@ def prepare_data(config: TrainConfig, data_dir: str):
     if not train:
         raise ValueError(f"{root / 'train.jsonl'} is empty")
 
-    # The guard again, at the last moment: the only place a hand-edited mixture
-    # is caught.
+    # Repeats the contamination guard on the manifest's Hub ids: the only check
+    # that sees a manifest edited after the build. Skipped without a manifest.
     manifest_path = root / MANIFEST
     if manifest_path.is_file():
         from ..data.contamination import assert_clean
@@ -250,8 +252,8 @@ def run_training(
     resumed; `fresh=True` starts over. A checkpoint carries the optimiser
     moments, schedule position, step, epoch, and the RNG state behind the
     epoch's data order, so a resumed run continues through the batches it had
-    not seen, at the learning rate it had reached. Checkpoints from before
-    ADR-021 restore weights only.
+    not seen, at the learning rate it had reached; rerunning a finished run
+    trains nothing. Checkpoints from before ADR-021 restore weights only.
     """
     import torch
     from torch.optim import AdamW
@@ -297,7 +299,7 @@ def run_training(
     optimiser = AdamW(params, lr=config.learning_rate, weight_decay=config.weight_decay)
 
     train = data["train"]
-    steps_per_epoch = max(1, len(train) // (config.per_device_batch * config.grad_accum))
+    steps_per_epoch = max(1, len(train) // config.examples_per_step)
     total_steps = max_steps or steps_per_epoch * config.epochs
     # Sized in optimiser steps: sized in micro-steps, the cosine would finish
     # `grad_accum` times early and the tail would train at a learning rate of 0.
@@ -337,6 +339,18 @@ def run_training(
         print("checkpoint carries weights only; optimiser and schedule start fresh", flush=True)
     progress = ProgressLog(total_steps, config.log_every)
     model.train()
+
+    def training_state() -> dict:
+        # Read at save time: the loop below rebinds `epoch`, `step_in_epoch` and
+        # `rng_before_epoch`, and every save happens after at least one step.
+        return {
+            "step": step,
+            "epoch": epoch,
+            "step_in_epoch": step_in_epoch,
+            "optimiser": optimiser.state_dict(),
+            "scheduler": scheduler.state_dict(),
+            "rng_before_epoch": rng_before_epoch,
+        }
 
     for epoch in range(start_epoch, config.epochs):
         if step >= total_steps:
@@ -398,25 +412,19 @@ def run_training(
                     output,
                     step,
                     on_checkpoint,
-                    state={
-                        "step": step,
-                        "epoch": epoch,
-                        "step_in_epoch": step_in_epoch,
-                        "optimiser": optimiser.state_dict(),
-                        "scheduler": scheduler.state_dict(),
-                        "rng_before_epoch": rng_before_epoch,
-                    },
+                    state=training_state(),
                 )
                 last_saved = step
                 # So a run that dies late still leaves its loss curve.
                 _write_history(output, history, step)
             if step >= total_steps:
                 break
+        # Exit before the next iteration rebinds `epoch`: the final save reads it.
         if step >= total_steps:
             break
 
     if step != last_saved:
-        save_checkpoint(model, head, tokenizer, output, step, on_checkpoint)
+        save_checkpoint(model, head, tokenizer, output, step, on_checkpoint, state=training_state())
     summary = _write_history(output, history, step)
     print(
         f"done: {step:,} steps in {hms(time.monotonic() - progress.start)} -> {output}",
@@ -431,7 +439,7 @@ def set_aside_previous_run(output: Path) -> Path | None:
     Return the directory, or None if there was nothing to move.
     """
     stale = list(output.glob("step-*")) + [
-        output / name for name in ("history.json", CALIBRATION) if (output / name).exists()
+        output / name for name in (HISTORY, CALIBRATION) if (output / name).exists()
     ]
     if not stale:
         return None
@@ -443,7 +451,7 @@ def set_aside_previous_run(output: Path) -> Path | None:
 
 
 def _read_history(output: Path) -> list[dict]:
-    file = output / "history.json"
+    file = output / HISTORY
     if not file.is_file():
         return []
     return json.loads(file.read_text()).get("history", [])
@@ -457,5 +465,5 @@ def _write_history(output: Path, history: list[dict], step: int) -> dict:
         "output_dir": str(output),
         "history": history,
     }
-    (output / "history.json").write_text(json.dumps(summary, indent=2) + "\n")
+    (output / HISTORY).write_text(json.dumps(summary, indent=2) + "\n")
     return summary

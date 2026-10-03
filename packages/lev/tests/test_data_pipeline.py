@@ -6,12 +6,15 @@ that the real dataset ids resolve; a dead id surfaces on the next `lev data buil
 
 from __future__ import annotations
 
+import random
+
 import pytest
 from conftest import a_choice, an_example
-from lev.data.mixture import Example, MixtureSpec, build_mixture
+from lev.data.mixture import Augment, Example, MixtureSpec, build_mixture
 from lev.data.sources import (
     MODE_B_SOURCES,
     REGISTRY,
+    adjacency_map,
     build_question,
     default_weights,
     humanise,
@@ -25,6 +28,7 @@ from lev.data.splits import (
 )
 from lev.labels import NOUL_RATING_TOKENS
 from lev.prompt import Layout
+from lev.prompt import build as build_prompt
 from lev.router import candidate_count
 from lev.types import Choice, Noul, Score
 
@@ -47,8 +51,6 @@ class FakeDataset:
         return iter(self.rows)
 
     def shuffle(self, seed):
-        import random
-
         shuffled = list(self.rows)
         random.Random(seed).shuffle(shuffled)
         return FakeDataset(shuffled, self.features)
@@ -71,6 +73,15 @@ def label_sorted_loader(n_labels: int, per_label: int, text_field="text", label_
     return loader
 
 
+def fixed_loader(rows, features=None):
+    """A `load_dataset` stand-in that returns `rows` whatever it is asked for."""
+
+    def loader(*args, **kwargs):
+        return FakeDataset(rows, features or {})
+
+    return loader
+
+
 class TestRegistry:
     def test_every_primitive_is_represented(self):
         kinds = {spec.primitive for spec in REGISTRY.values()}
@@ -86,8 +97,8 @@ class TestRegistry:
     def test_mode_b_gets_a_material_share_of_the_mixture(self):
         weights = default_weights()
         share = sum(weights[n] for n in MODE_B_SOURCES)
-        # Size-proportional weighting would starve Mode B; this keeps the
-        # over-weighting.
+        # Size-proportional weighting would starve Mode B; this pins the
+        # deliberate over-weighting.
         assert share >= 0.2, f"Mode B is only {share:.1%} of the mixture"
 
     def test_weights_are_a_distribution_over_known_sources(self):
@@ -138,28 +149,22 @@ class TestSampling:
         assert {e.target for e in rows} == {0, len(NOUL_RATING_TOKENS) - 1}
 
     def test_out_of_range_label_raises(self):
-        def loader(*a, **k):
-            return FakeDataset([{"text": "x", "label": 9}], {"label": FakeFeature(["a", "b"])})
-
+        loader = fixed_loader([{"text": "x", "label": 9}], {"label": FakeFeature(["a", "b"])})
         with pytest.raises(ValueError, match="out of range"):
             list(load_source(REGISTRY["ag_news"], load_dataset=loader))
 
     def test_blank_rows_are_skipped(self):
-        def loader(*a, **k):
-            rows = [{"text": "  ", "label": 0}, {"text": "real", "label": 1}]
-            return FakeDataset(rows, {"label": FakeFeature(["a", "b", "c", "d"])})
-
+        rows = [{"text": "  ", "label": 0}, {"text": "real", "label": 1}]
+        loader = fixed_loader(rows, {"label": FakeFeature(["a", "b", "c", "d"])})
         assert len(list(load_source(REGISTRY["ag_news"], load_dataset=loader))) == 1
 
     def test_unnamed_label_feature_raises_rather_than_guessing(self):
-        def loader(*a, **k):
-            return FakeDataset([{"text": "x", "label": 0}], {"label": object()})
-
+        loader = fixed_loader([{"text": "x", "label": 0}], {"label": object()})
         with pytest.raises(TypeError, match="pinned rather than guessed"):
             list(load_source(REGISTRY["ag_news"], load_dataset=loader))
 
 
-def make(source, target, index, n_options=4):
+def traceable_example(source, target, index, n_options=4):
     """One row whose state names its own source, so donor tests can trace it."""
     return an_example(
         a_choice(n_options), target=target, source=source, state=f"{source} text {index}"
@@ -169,7 +174,7 @@ def make(source, target, index, n_options=4):
 class TestSplits:
     @pytest.fixture
     def examples(self):
-        return [make("s", i % 4, i) for i in range(4000)]
+        return [traceable_example("s", i % 4, i) for i in range(4000)]
 
     def test_three_splits_roughly_match_the_requested_fractions(self, examples):
         splits = split_examples(examples)
@@ -211,9 +216,9 @@ class TestSplits:
 
     def test_label_only_outside_train_raises(self):
         splits = {
-            Split.TRAIN: [make("s", 0, 1)],
+            Split.TRAIN: [traceable_example("s", 0, 1)],
             Split.CALIBRATION: [],
-            Split.TEST: [make("s", 3, 2)],
+            Split.TEST: [traceable_example("s", 3, 2)],
         }
         with pytest.raises(ValueError, match="never in it"):
             check_coverage(splits)
@@ -221,7 +226,7 @@ class TestSplits:
     def test_option_never_observed_at_all_raises(self):
         """A sample holding 2 of 4 options passes the in-train check but not this."""
         splits = {
-            Split.TRAIN: [make("s", 0, 1), make("s", 1, 2)],
+            Split.TRAIN: [traceable_example("s", 0, 1), traceable_example("s", 1, 2)],
             Split.CALIBRATION: [],
             Split.TEST: [],
         }
@@ -230,8 +235,6 @@ class TestSplits:
 
     def test_noul_is_exempt_from_the_offered_option_check(self):
         """Nine rating levels, two classes in the data. Not an error."""
-        from lev.types import Noul
-
         rows = [
             Example("t", "n", Noul(instructions="q"), t, Layout.STATE_FIRST, "imdb")
             for t in (0, 8, 0, 8)
@@ -244,7 +247,9 @@ class TestAbstain:
     @pytest.fixture
     def mixture(self):
         sources = ["a", "b"]
-        loaders = {s: (lambda s=s: [make(s, i % 4, i) for i in range(50)]) for s in sources}
+        loaders = {
+            s: (lambda s=s: [traceable_example(s, i % 4, i) for i in range(50)]) for s in sources
+        }
         spec = MixtureSpec(
             sources=dict.fromkeys(sources, 0.5), n_examples=2000, abstain_fraction=0.2
         )
@@ -282,8 +287,6 @@ class TestAbstainDonors:
     answerable from a rotten_tomatoes review."""
 
     def test_adjacency_is_symmetric_and_excludes_self(self):
-        from lev.data.sources import adjacency_map
-
         mapping = adjacency_map()
         for source, related in mapping.items():
             assert source not in related
@@ -291,8 +294,6 @@ class TestAbstainDonors:
                 assert source in mapping[other], f"{source}/{other} adjacency is one-way"
 
     def test_the_sentiment_corpora_are_all_mutually_adjacent(self):
-        from lev.data.sources import adjacency_map
-
         mapping = adjacency_map()
         assert "rotten_tomatoes" in mapping["imdb"]
         assert "yelp_review_full" in mapping["sst5"]
@@ -305,7 +306,9 @@ class TestAbstainDonors:
             "rotten_tomatoes": frozenset({"imdb"}),
             "ag_news": frozenset(),
         }
-        loaders = {s: (lambda s=s: [make(s, i % 4, i) for i in range(30)]) for s in sources}
+        loaders = {
+            s: (lambda s=s: [traceable_example(s, i % 4, i) for i in range(30)]) for s in sources
+        }
         spec = MixtureSpec(
             sources=dict.fromkeys(sources, 1 / 3),
             n_examples=3000,
@@ -324,7 +327,9 @@ class TestAbstainDonors:
     def test_a_source_adjacent_to_everything_still_yields_an_example(self):
         """Degrading to "any other source" beats emitting nothing."""
         sources = ["a", "b"]
-        loaders = {s: (lambda s=s: [make(s, 0, i) for i in range(10)]) for s in sources}
+        loaders = {
+            s: (lambda s=s: [traceable_example(s, 0, i) for i in range(10)]) for s in sources
+        }
         spec = MixtureSpec(
             sources=dict.fromkeys(sources, 0.5),
             n_examples=200,
@@ -338,9 +343,6 @@ class TestAbstainDonors:
 class TestModeBPrompt:
     def test_mode_b_does_not_emit_an_empty_option_header(self):
         """`Options:` with nothing under it costs a header and informs nothing."""
-        from lev.prompt import build as build_prompt
-        from lev.types import Choice, Score
-
         choice = build_prompt(
             "s", "q", Choice(instructions="pick", criteria={"a": None, "b": None}), None
         ).full
@@ -351,9 +353,6 @@ class TestModeBPrompt:
         assert "Levels:" not in score
 
     def test_mode_a_still_lists_every_option_with_its_code(self):
-        from lev.prompt import build as build_prompt
-        from lev.types import Choice
-
         text = build_prompt(
             "s",
             "q",
@@ -367,8 +366,6 @@ class TestReaders:
     """Per-row readers are pure functions; drive them with the real column shapes."""
 
     def test_race_maps_the_answer_letter_to_an_index(self):
-        import random
-
         from lev.data.sources import _read_race
 
         row = {"article": "A.", "question": "Q?", "options": ["w", "x", "y", "z"], "answer": "C"}
@@ -377,8 +374,6 @@ class TestReaders:
         assert state == {"passage": "A.", "question": "Q?"}
 
     def test_keyed_choices_match_arc_numeric_keys(self):
-        import random
-
         from lev.data.sources import _read_keyed_choices
 
         row = {
@@ -390,8 +385,6 @@ class TestReaders:
         assert options[target] == "c"
 
     def test_keyed_choices_attach_context_when_present(self):
-        import random
-
         from lev.data.sources import _read_keyed_choices
 
         row = {
@@ -404,8 +397,6 @@ class TestReaders:
         assert state == {"question": "Q?", "context": "F."}
 
     def test_sciq_shuffles_but_keeps_the_gold_index_right(self):
-        import random
-
         from lev.data.sources import _read_sciq
 
         row = {
@@ -424,8 +415,6 @@ class TestReaders:
         assert len(seen_first) > 1, "the gold answer must not always sit first"
 
     def test_sciq_skips_duplicate_options(self):
-        import random
-
         from lev.data.sources import _read_sciq
 
         row = {
@@ -439,8 +428,6 @@ class TestReaders:
         assert _read_sciq(row, random.Random(0)) is None
 
     def test_nli_skips_rows_without_gold(self):
-        import random
-
         from lev.data.sources import _read_nli
 
         assert _read_nli({"premise": "p", "hypothesis": "h", "label": -1}, random.Random(0)) is None
@@ -450,8 +437,6 @@ class TestReaders:
         assert options is None and target == 2
 
     def test_toxigen_uses_the_dataset_threshold(self):
-        import random
-
         from lev.data.sources import _read_toxigen
 
         assert _read_toxigen({"text": "t", "toxicity_human": 2.9}, random.Random(0))[2] == 0
@@ -459,16 +444,12 @@ class TestReaders:
         assert _read_toxigen({"text": "t", "toxicity_human": None}, random.Random(0)) is None
 
     def test_beavertails_yes_means_safe(self):
-        import random
-
         from lev.data.sources import _read_beavertails
 
         row = {"prompt": "p", "response": "r", "is_safe": True}
         assert _read_beavertails(row, random.Random(0))[2] == 1
 
     def test_ultrafeedback_flattens_completions_and_drops_bad_ratings(self):
-        import random
-
         from lev.data.sources import _read_ultrafeedback
 
         row = {
@@ -484,8 +465,6 @@ class TestReaders:
         assert [(r[0]["response"], r[2]) for r in rows] == [("a", 4), ("c", 0)]
 
     def test_snips_unknown_category_is_skipped(self):
-        import random
-
         from lev.data.sources import SNIPS_INTENTS, _read_snips
 
         assert _read_snips({"text": "t", "category": "Nope"}, random.Random(0)) is None
@@ -509,11 +488,7 @@ class TestReaderSources:
             }
             for i in range(8)
         ]
-
-        def loader(hf_id, config=None, split=None, cache_dir=None, **kw):
-            return FakeDataset(rows, {})
-
-        examples = list(load_source(REGISTRY["race"], load_dataset=loader))
+        examples = list(load_source(REGISTRY["race"], load_dataset=fixed_loader(rows)))
         assert len(examples) == 8
         assert all(
             isinstance(e.question, Choice) and len(e.question.criteria) == 4 for e in examples
@@ -522,11 +497,7 @@ class TestReaderSources:
 
     def test_noul_reader_targets_land_on_the_rating_ends(self):
         rows = [{"text1": "a", "text2": "b", "label": 1}, {"text1": "c", "text2": "d", "label": 0}]
-
-        def loader(hf_id, config=None, split=None, cache_dir=None, **kw):
-            return FakeDataset(rows, {})
-
-        examples = list(load_source(REGISTRY["mrpc"], load_dataset=loader))
+        examples = list(load_source(REGISTRY["mrpc"], load_dataset=fixed_loader(rows)))
         assert [e.target for e in examples] == [len(NOUL_RATING_TOKENS) - 1, 0]
         assert examples[0].state == {"sentence1": "a", "sentence2": "b"}
 
@@ -556,8 +527,6 @@ class TestAugmentation:
         return [an_example(q, target=i % n_options, source="c", state=f"s{i}") for i in range(n)]
 
     def run(self, pool, augment, **knobs):
-        from lev.data.mixture import Augment
-
         spec = MixtureSpec(
             sources={"c": 1.0},
             n_examples=600,
@@ -613,8 +582,6 @@ class TestAugmentation:
         q = Noul(instructions="is it good?")
         pool = [an_example(q, target=8, source="c", state=f"s{i}") for i in range(40)]
         pool += [an_example(a_choice(3), target=0, source="d", state=f"d{i}") for i in range(40)]
-        from lev.data.mixture import Augment
-
         spec = MixtureSpec(
             sources={"c": 0.5, "d": 0.5},
             n_examples=400,
@@ -651,8 +618,6 @@ class TestAugmentation:
 
 class TestPairAndEvidenceReaders:
     def test_nli_fever_uses_the_string_label_not_the_integer(self):
-        import random
-
         from lev.data.sources import FEVER_LABELS, _read_nli_fever
 
         row = {
@@ -667,16 +632,12 @@ class TestPairAndEvidenceReaders:
         assert _read_nli_fever({**row, "fever_gold_label": "weird"}, random.Random(0)) is None
 
     def test_parade_binary_label_is_the_paraphrase_flag(self):
-        import random
-
         from lev.data.sources import _read_parade
 
         row = {"Definition1": "a", "Definition2": "b", "Binary labels": 1, "Four-class labels": 3}
         assert _read_parade(row, random.Random(0))[2] == 1
 
     def test_strategyqa_state_carries_the_facts(self):
-        import random
-
         from lev.data.sources import _read_strategyqa
 
         row = {"question": "q?", "facts": "f.", "answer": False}
@@ -684,8 +645,6 @@ class TestPairAndEvidenceReaders:
         assert state == {"question": "q?", "facts": "f."} and target == 0
 
     def test_swapping_two_words_keeps_every_token_and_changes_the_order(self):
-        import random
-
         from lev.data.sources import swap_two_words
 
         text = "the quick brown foxes jumped over lazy river dogs"
@@ -695,8 +654,6 @@ class TestPairAndEvidenceReaders:
         assert swap_two_words("no swap", random.Random(0)) is None
 
     def test_adversarial_pairs_add_a_negative_for_positives_only(self):
-        import random
-
         from lev.data.sources import _read_pair
 
         reader = _read_pair("text1", "text2", adversarial=1.0)
@@ -713,8 +670,6 @@ class TestPairAndEvidenceReaders:
         assert [r[2] for r in reader(negative, random.Random(0))] == [0]
 
     def test_yes_no_wrapper_emits_one_true_and_one_false_per_row(self):
-        import random
-
         from lev.data.sources import _read_race, yes_no_from_choices
 
         row = {"article": "A.", "question": "Q?", "options": ["w", "x", "y", "z"], "answer": "C"}
@@ -726,8 +681,6 @@ class TestPairAndEvidenceReaders:
 
 class TestKeepFull:
     def test_large_taxonomy_rows_split_between_full_and_cut_sets(self):
-        from lev.data.mixture import Augment
-
         q = Choice(instructions="c", criteria={f"o{i}": None for i in range(40)})
         pool = [an_example(q, target=i % 40, source="big", state=f"s{i}") for i in range(40)]
         spec = MixtureSpec(
@@ -739,11 +692,9 @@ class TestKeepFull:
         sizes = [len(e.question.criteria) for e in build_mixture(spec, {"big": lambda: pool})]
         full = sum(s == 40 for s in sizes)
         assert 120 < full < 280, f"about half should keep the full set, got {full}/400"
-        assert (
-            min(sizes) >= 15
-            and any(15 <= s <= 26 for s in sizes)
-            and any(27 <= s < 40 for s in sizes)
-        )
+        assert min(sizes) >= 15, "a cut set fell below min_options"
+        assert any(15 <= s <= 26 for s in sizes), "no cut set at or below the 26-option cap"
+        assert any(27 <= s < 40 for s in sizes), "no cut set between the cap and the full 40"
 
 
 class TestBuildDataset:
@@ -761,18 +712,23 @@ class TestBuildDataset:
             return FakeDataset(rows, {"label": FakeFeature(["neg", "pos"])})
         raise AssertionError(f"unexpected source {hf_id}")
 
-    def test_every_split_draws_from_every_source(self, tmp_path):
-        """The loaders are built in a loop; a late-bound closure would make every
-        split draw from the last source while coverage and round-trip checks pass."""
-        from lev.data.build import SPLIT_FILES, build_dataset, read_jsonl
+    def build(self, out):
+        from lev.data.build import build_dataset
 
-        manifest = build_dataset(
-            tmp_path,
+        return build_dataset(
+            out,
             limit_per_source=None,
             n_examples=300,
             sources={"ag_news": 0.5, "imdb": 0.5},
             loader=self.loader,
         )
+
+    def test_every_split_draws_from_every_source(self, tmp_path):
+        """The loaders are built in a loop; a late-bound closure would make every
+        split draw from the last source while coverage and round-trip checks pass."""
+        from lev.data.build import SPLIT_FILES, read_jsonl
+
+        manifest = self.build(tmp_path)
         prefix = {"ag_news": "news story", "imdb": "film review"}
         for split, filename in SPLIT_FILES.items():
             rows = read_jsonl(tmp_path / filename)
@@ -790,16 +746,9 @@ class TestBuildDataset:
     def test_held_out_splits_keep_the_canonical_question(self, tmp_path):
         """The test split keeps each source's canonical wording, since an exported
         eval needs one question per source."""
-        from lev.data.build import SPLIT_FILES, build_dataset, read_jsonl
-        from lev.data.splits import Split
+        from lev.data.build import SPLIT_FILES, read_jsonl
 
-        build_dataset(
-            tmp_path,
-            limit_per_source=None,
-            n_examples=300,
-            sources={"ag_news": 0.5, "imdb": 0.5},
-            loader=self.loader,
-        )
+        self.build(tmp_path)
         test_rows = read_jsonl(tmp_path / SPLIT_FILES[Split.TEST])
         for source in ("ag_news", "imdb"):
             wordings = {e.question.instructions for e in test_rows if e.source == source}

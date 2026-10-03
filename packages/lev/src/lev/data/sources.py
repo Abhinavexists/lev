@@ -77,9 +77,11 @@ def _read_race(row: dict, rng: random.Random) -> Row | None:
 
 
 def _read_keyed_choices(question_field: str, context_field: str | None = None) -> Reader:
-    """`choices={"label": [...], "text": [...]}` plus `answerKey` -- the shape
-    commonsense_qa, openbookqa and ARC share. ARC keys some rows 1-4 rather
-    than A-D, so the key is matched against the labels, never against A-Z."""
+    """Read `choices={"label": [...], "text": [...]}` plus `answerKey`.
+
+    The shape commonsense_qa, openbookqa and ARC share. ARC keys some rows 1-4
+    rather than A-D, so the key is matched against the labels, never against A-Z.
+    """
 
     def reader(row: dict, rng: random.Random) -> Row | None:
         labels = [str(x) for x in row["choices"]["label"]]
@@ -128,9 +130,12 @@ def _read_nli(row: dict, rng: random.Random) -> Row | None:
 
 
 def swap_two_words(text: str, rng: random.Random) -> str | None:
-    """Exchange two distinct content words. The result keeps every token of the
-    original -- maximal lexical overlap -- and no longer means the same thing.
-    None when the sentence has too few candidates to swap."""
+    """Exchange two distinct content words.
+
+    The result keeps every token of the original -- maximal lexical overlap --
+    but changes its meaning. None when the sentence has fewer than two
+    candidates, or 8 draws find no pair of distinct words.
+    """
     words = text.split()
     slots = [i for i, w in enumerate(words) if len(w) > 3 and w.isalpha()]
     if len(slots) < 2:
@@ -172,9 +177,12 @@ FEVER_DESCRIPTIONS = {
 
 
 def _read_nli_fever(row: dict, rng: random.Random) -> Row | None:
-    """FEVER as claim/evidence/verdict. The dataset's `premise` is the claim
-    and its `hypothesis` the evidence sentence; the string label is used, not
-    the integer, whose order differs from FEVER's own."""
+    """FEVER as claim/evidence/verdict.
+
+    The dataset's `premise` is the claim and its `hypothesis` the evidence
+    sentence. The string label is used, not the integer, whose order differs
+    from FEVER's own.
+    """
     label = row.get("fever_gold_label")
     if label not in FEVER_LABELS:
         return None
@@ -787,10 +795,10 @@ LARGE_SET_MIN_OPTIONS = 15
 
 
 def augmentation_map() -> dict[str, Augment]:
-    """Per-source training augmentation, read off the registry.
+    """Per-source augmentation for the train and calibration mixtures, read off the registry.
 
     Large taxonomies keep their full option set half the time (the Mode B head's
-    data) and are otherwise cut to `LARGE_SET_MIN_OPTIONS` or more, so Mode A
+    data) and otherwise may be cut to `LARGE_SET_MIN_OPTIONS` or more, so Mode A
     also learns large lettered sets. Everything else may be cut to two (ADR-026).
     """
     return {

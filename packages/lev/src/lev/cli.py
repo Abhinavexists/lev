@@ -56,7 +56,7 @@ def cmd_plan(args: argparse.Namespace) -> None:
         if measured["max"] > config.max_seq_len:
             print(
                 f"  note: {measured['max']} > max_seq_len {config.max_seq_len}; "
-                f"the longest prompts will be truncated"
+                "the longest prompts will be truncated"
             )
         config.avg_tokens_per_example = measured["mean"]
     config.validate()
@@ -212,13 +212,15 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
     uvicorn.run(
         create_app(
-            args.checkpoint,
-            args.model_cache,
-            args.calibration,
-            args.model,
-            args.noul_readout,
+            checkpoint_dir=args.checkpoint,
+            model_cache=args.model_cache,
+            calibration=args.calibration,
+            model_id=args.model,
+            noul_readout=args.noul_readout,
             compile=args.compile,
             prompt_style=args.prompt_style,
+            max_pending=args.max_pending,
+            max_batch_tokens=args.max_batch_tokens,
         ),
         host=args.host,
         port=args.port,
@@ -286,6 +288,18 @@ def main(argv: list[str] | None = None) -> None:
         choices=["plain", "chat"],
         default=None,
         help="default: the release manifest's, else plain",
+    )
+    serve_parser.add_argument(
+        "--max-pending",
+        type=int,
+        default=64,
+        help="requests in flight before new ones get 503 (default 64)",
+    )
+    serve_parser.add_argument(
+        "--max-batch-tokens",
+        type=int,
+        default=16384,
+        help="padded tokens per batched forward across requests (default 16384)",
     )
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8000)

@@ -24,7 +24,8 @@ _SCORES = re.compile(r"accuracy ([0-9.]+)\s+log-loss ([0-9.]+)\s+brier ([0-9.]+)
 
 
 def parse(text: str) -> dict:
-    """`{subset: {n, accuracy, log_loss, brier, ece, p50_s, ...}}` plus `served_by`."""
+    """`{"subsets": {subset: {n, accuracy, log_loss, brier, ece, p50_s, ...}}}`, plus
+    `served_by` when the log names the serving model."""
     out: dict = {"subsets": {}}
     marks = list(_HEADER.finditer(text))
     for i, mark in enumerate(marks):

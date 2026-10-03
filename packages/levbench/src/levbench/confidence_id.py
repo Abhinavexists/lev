@@ -5,8 +5,8 @@ probability distribution the answer already gives you". Choice and Score answers
 return both, so each candidate statistic is computed over `probabilities` and
 compared with the reported `confidence`. Against Jev this identified
 chance-corrected max probability (`norm_max_prob`), rounded to 2 dp
-(FINDINGS.md §2). LitJev states it uses normalized Gini, which makes a LitJev
-server a known-answer test.
+(docs/FINDINGS.md §3). LitJev states it uses normalized Gini, which makes a
+LitJev server a known-answer test.
 
 Answers without both probabilities and confidence (including Jev's Noul) are skipped.
 """
@@ -93,9 +93,9 @@ def detect_precision(values: list[float], max_decimals: int = 6) -> float:
 def rounding_sensitivity(fn: Callable[[Distribution], float], p: Distribution, eps: float) -> float:
     """How far `fn` can move when each probability is off by up to `eps`.
 
-    `max_prob` passes rounding error straight through; `gini` and
-    `norm_max_prob` divide by (K-1) and amplify it by K/(K-1). So each formula
-    gets its own tolerance.
+    `max_prob` passes rounding error straight through; `norm_max_prob` divides
+    by (K-1) and amplifies it by K/(K-1), and `gini`, whose sum of squares
+    doubles the slope, by about 2K/(K-1). So each formula gets its own tolerance.
     """
     base = fn(p)
     raised = fn([min(1.0, x + eps) for x in p])
@@ -129,7 +129,7 @@ def collect(answers: list[Any]) -> list[tuple[Distribution, float]]:
         reported = getattr(answer, "confidence", None)
         probabilities = getattr(answer, "probabilities", None)
         if reported is None or not probabilities:
-            continue  # Noul, or an answer type with no distribution.
+            continue  # e.g. Jev's Noul, which carries no distribution.
         samples.append(([float(v) for v in probabilities.values()], float(reported)))
     return samples
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -76,9 +77,7 @@ MIN_FAMILIES_FOR_TRANSFER = 3
 
 def family_weights(families: Sequence[str]) -> list[float]:
     """Each family's rows share a total weight of 1."""
-    counts: dict[str, int] = {}
-    for f in families:
-        counts[f] = counts.get(f, 0) + 1
+    counts = Counter(families)
     return [1.0 / counts[f] for f in families]
 
 
@@ -114,8 +113,7 @@ def fit_for_transfer(
     meaningful leave-one-out, and keep the row fit. Returns the profile and a
     per-bucket report of both temperatures, both transfer ECEs and the choice.
     """
-    if split_name.lower() in {"test", "eval", "holdout"}:
-        raise ValueError(f"refusing to fit calibration on split {split_name!r}")
+    _refuse_held_out(split_name)
     profile = CalibrationProfile(fitted_on=f"{split_name} (transfer-selected)")
     report: dict[str, dict] = {}
     for bucket, rows in buckets.items():
@@ -233,12 +231,7 @@ def fit(
     min_samples: int = 50,
 ) -> CalibrationProfile:
     """Fit one temperature per bucket; reject test, eval and holdout splits."""
-    if split_name.lower() in {"test", "eval", "holdout"}:
-        raise ValueError(
-            f"refusing to fit calibration on split {split_name!r}. "
-            "Use a dedicated calibration split, disjoint from train and test."
-        )
-
+    _refuse_held_out(split_name)
     profile = CalibrationProfile(fitted_on=split_name)
     for bucket, samples in buckets.items():
         if len(samples) < min_samples:
@@ -247,3 +240,11 @@ def fit(
         profile.temperatures[bucket] = fit_temperature(samples)
         profile.n_samples[bucket] = len(samples)
     return profile
+
+
+def _refuse_held_out(split_name: str) -> None:
+    if split_name.lower() in {"test", "eval", "holdout"}:
+        raise ValueError(
+            f"refusing to fit calibration on split {split_name!r}. "
+            "Use a dedicated calibration split, disjoint from train and test."
+        )

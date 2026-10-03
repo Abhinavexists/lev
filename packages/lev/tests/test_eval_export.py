@@ -6,7 +6,7 @@ import json
 
 import pytest
 from conftest import an_example
-from lev.data.build import SPLIT_FILES, from_json, to_json, write_jsonl
+from lev.data.build import SPLIT_FILES, from_json, read_jsonl, to_json, write_jsonl
 from lev.data.export_eval import MIN_USEFUL_ITEMS, export, truth_for
 from lev.data.splits import Split
 from lev.types import Choice, Noul, Score
@@ -23,6 +23,13 @@ def example(question, target, index, source="src", abstain=False):
     )
 
 
+def write_test_split(directory, rows):
+    """Write `rows` as the test split of a built dataset at `directory`."""
+    directory.mkdir(parents=True, exist_ok=True)
+    write_jsonl(directory / SPLIT_FILES[Split.TEST], rows)
+    return directory
+
+
 CHOICE = Choice(instructions="which", criteria={"billing": None, "technical": None})
 SCORE = Score(instructions="how much", criteria=["low", "mid", "high"])
 NOUL = Noul(instructions="is it urgent?")
@@ -33,8 +40,6 @@ class TestRoundTrip:
         """The reader caches questions by payload. Sorting that key merged every
         shuffled row into the first-seen order and silently moved its target
         onto a wrong option -- the bug behind clinc_oos 0.055 (ADR-024)."""
-        from lev.data.build import read_jsonl
-
         forward = Choice(instructions="q", criteria={"a": None, "b": None, "c": None})
         backward = Choice(instructions="q", criteria={"c": None, "b": None, "a": None})
         rows = [an_example(forward, target=0, state="x"), an_example(backward, target=0, state="y")]
@@ -73,8 +78,6 @@ class TestRoundTrip:
             verify_round_trip(path)
 
     def test_identical_questions_still_share_one_object(self, tmp_path):
-        from lev.data.build import read_jsonl
-
         rows = [an_example(CHOICE, target=i % 2, state=f"s{i}") for i in range(5)]
         path = tmp_path / "train.jsonl"
         write_jsonl(path, rows)
@@ -113,15 +116,10 @@ class TestTruthShapes:
 
 
 class TestExport:
-    def write_split(self, tmp_path, rows):
-        tmp_path.mkdir(parents=True, exist_ok=True)
-        write_jsonl(tmp_path / SPLIT_FILES[Split.TEST], rows)
-        return tmp_path
-
     def test_one_file_per_source_plus_an_index(self, tmp_path):
         rows = [example(CHOICE, i % 2, i, source="a") for i in range(80)]
         rows += [example(SCORE, i % 3, i, source="b") for i in range(80)]
-        data = self.write_split(tmp_path / "mix", rows)
+        data = write_test_split(tmp_path / "mix", rows)
         out = tmp_path / "eval"
         index = export(data, out)
 
@@ -136,7 +134,7 @@ class TestExport:
 
         rows = [example(CHOICE, i % 2, i, source="a") for i in range(MIN_USEFUL_ITEMS + 10)]
         out = tmp_path / "eval"
-        export(self.write_split(tmp_path / "mix", rows), out)
+        export(write_test_split(tmp_path / "mix", rows), out)
 
         items, questions = load_task_file(out / "a.json")
         assert len(items) == MIN_USEFUL_ITEMS + 10
@@ -149,14 +147,14 @@ class TestExport:
         rows = [example(CHOICE, i % 2, i, source="a") for i in range(MIN_USEFUL_ITEMS + 10)]
         rows += [example(CHOICE, 0, 999, source="a", abstain=True) for _ in range(20)]
         out = tmp_path / "eval"
-        index = export(self.write_split(tmp_path / "mix", rows), out)
+        index = export(write_test_split(tmp_path / "mix", rows), out)
         assert index["total_items"] == MIN_USEFUL_ITEMS + 10
 
     def test_an_eval_too_small_to_measure_anything_raises(self, tmp_path):
         """At n=24 the interval is +/-16 points. That is not a measurement."""
         rows = [example(CHOICE, i % 2, i, source="a") for i in range(24)]
         with pytest.raises(ValueError, match="cannot tell you"):
-            export(self.write_split(tmp_path / "mix", rows), tmp_path / "eval")
+            export(write_test_split(tmp_path / "mix", rows), tmp_path / "eval")
 
 
 class TestVariableQuestions:
@@ -171,10 +169,8 @@ class TestVariableQuestions:
             )
             for i in range(30)
         ]
-        tmp_path.mkdir(parents=True, exist_ok=True)
-        write_jsonl(tmp_path / SPLIT_FILES[Split.TEST], rows)
         out = tmp_path / "eval"
-        index = export(tmp_path, out)
+        index = export(write_test_split(tmp_path, rows), out)
 
         assert set(index["sources"]) == {"a"}
         assert index["skipped_variable_question"] == ["qa"]

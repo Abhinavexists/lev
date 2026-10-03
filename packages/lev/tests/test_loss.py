@@ -41,19 +41,26 @@ class TestDecisionLoss:
             atol=1e-6,
         )
 
-    def test_brier_penalises_overconfidence_at_equal_accuracy(self, train_config):
-        """Why Brier is in the loss at all: CE alone optimises the argmax."""
-        train_config.brier_weight = 1.0
+    @pytest.mark.parametrize("weight", [0.5, 1.0])
+    def test_brier_adds_the_weighted_multiclass_brier_score(self, train_config, weight):
+        """Turning Brier on adds `weight` x the mean over rows of the summed squared
+        error over the whole probability vector, and a padded slot (probability 0,
+        target 0) contributes nothing."""
+        logits = torch.tensor(
+            [[8.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 3.0, float("-inf")]],
+        )
+        targets = torch.tensor([0, 1, 0])
         train_config.ordinal_weight = 0.0
-        targets = torch.tensor([0])
-        confident = decision_loss(torch.tensor([[8.0, 0.0, 0.0]]), targets, train_config)
-        modest = decision_loss(torch.tensor([[2.0, 0.0, 0.0]]), targets, train_config)
-        # Both are correct. The overconfident one must still be preferred *less*
-        # than it would be under CE alone -- checked by comparing the gap.
         train_config.brier_weight = 0.0
-        ce_gap = modest - decision_loss(torch.tensor([[8.0, 0.0, 0.0]]), targets, train_config)
-        train_config.brier_weight = 1.0
-        assert (modest - confident) < ce_gap
+        ce_only = decision_loss(logits, targets, train_config)
+        train_config.brier_weight = weight
+        with_brier = decision_loss(logits, targets, train_config)
+
+        probs = logits.softmax(dim=-1)
+        one_hot = torch.nn.functional.one_hot(targets, 3).float()
+        expected_brier = ((probs - one_hot) ** 2).sum(dim=-1).mean()
+        assert torch.allclose(with_brier - ce_only, weight * expected_brier, atol=1e-6)
+        assert expected_brier > 0.5, "the wrong rows must give the term a non-trivial size"
 
     def test_uniform_soft_target_is_minimised_by_a_uniform_prediction(self, train_config):
         train_config.brier_weight = 0.0
@@ -79,8 +86,10 @@ class TestDecisionLoss:
         train_config.brier_weight = 0.0
         train_config.ordinal_weight = 2.0
         targets = torch.tensor([4])
-        near = decision_loss(torch.tensor([[0.0, 0.0, 0.0, 5.0, 0.0]]), targets, train_config, True)
-        far = decision_loss(torch.tensor([[5.0, 0.0, 0.0, 0.0, 0.0]]), targets, train_config, True)
+        near_logits = torch.tensor([[0.0, 0.0, 0.0, 5.0, 0.0]])
+        far_logits = torch.tensor([[5.0, 0.0, 0.0, 0.0, 0.0]])
+        near = decision_loss(near_logits, targets, train_config, ordinal=True)
+        far = decision_loss(far_logits, targets, train_config, ordinal=True)
         assert near < far, "an ordered scale must not treat every wrong level alike"
 
     def test_ordinal_applies_only_to_the_rows_flagged(self, train_config):
@@ -88,9 +97,11 @@ class TestDecisionLoss:
         train_config.ordinal_weight = 5.0
         logits = torch.randn(4, 5)
         targets = torch.tensor([0, 1, 2, 3])
-        none = decision_loss(logits, targets, train_config, torch.zeros(4, dtype=torch.bool))
+        none = decision_loss(
+            logits, targets, train_config, ordinal=torch.zeros(4, dtype=torch.bool)
+        )
         some = decision_loss(
-            logits, targets, train_config, torch.tensor([True, False, False, False])
+            logits, targets, train_config, ordinal=torch.tensor([True, False, False, False])
         )
         assert not torch.isclose(none, some)
 
@@ -112,9 +123,10 @@ class TestOrdinalCoverage:
         train_config.brier_weight = 0.0
         train_config.ordinal_weight = 1.0
         truth = torch.tensor([8])
-        logits = lambda peak: torch.tensor(  # noqa: E731
-            [[10.0 if i == peak else 0.0 for i in range(9)]]
-        )
-        near = decision_loss(logits(6), truth, train_config, ordinal=torch.tensor([True]))
-        far = decision_loss(logits(0), truth, train_config, ordinal=torch.tensor([True]))
+
+        def peaked_at(rating):
+            return torch.tensor([[10.0 if i == rating else 0.0 for i in range(9)]])
+
+        near = decision_loss(peaked_at(6), truth, train_config, ordinal=torch.tensor([True]))
+        far = decision_loss(peaked_at(0), truth, train_config, ordinal=torch.tensor([True]))
         assert near < far

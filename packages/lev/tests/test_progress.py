@@ -11,17 +11,18 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
+import lev.train.progress as progress  # noqa: E402
+from lev.train.progress import ProgressLog, hms  # noqa: E402
+
 
 class TestProgressLog:
     """A silent run is indistinguishable from a hung one."""
 
-    def make(self, capsys, total=100, every=10):
-        from lev.train.progress import ProgressLog
-
+    def make(self, total=100, every=10):
         return ProgressLog(total, every)
 
     def test_logs_only_on_the_interval(self, capsys):
-        log = self.make(capsys)
+        log = self.make()
         for step in range(9):
             log.record(step, 1.0, "A", 1e-4, tokens=100)
         assert capsys.readouterr().out == ""
@@ -30,14 +31,14 @@ class TestProgressLog:
 
     def test_always_logs_the_final_step(self, capsys):
         """An interval that does not divide the total must not swallow the end."""
-        log = self.make(capsys, total=7, every=10)
+        log = self.make(total=7, every=10)
         for step in range(7):
             log.record(step, 1.0, "A", 1e-4, tokens=10)
         assert "step      7/7" in capsys.readouterr().out
 
     def test_modes_are_reported_separately(self, capsys):
         """Mode B starts near ln(K); blending it with Mode A hides both."""
-        log = self.make(capsys, total=2, every=2)
+        log = self.make(total=2, every=2)
         log.record(0, 1.0, "A", 1e-4, tokens=10)
         log.record(1, 5.0, "B", 1e-4, tokens=10)
         out = capsys.readouterr().out
@@ -45,7 +46,7 @@ class TestProgressLog:
         assert "3.0000" not in out, "the two modes were averaged together"
 
     def test_window_resets_between_reports(self, capsys):
-        log = self.make(capsys, total=4, every=2)
+        log = self.make(total=4, every=2)
         log.record(0, 10.0, "A", 1e-4)
         log.record(1, 10.0, "A", 1e-4)
         capsys.readouterr()
@@ -59,7 +60,7 @@ class TestProgressLog:
         That constant was wrong by 10x once (ADR-016); a readout derived from
         it would have agreed with the mistake rather than exposed it.
         """
-        log = self.make(capsys, total=1, every=1)
+        log = self.make(total=1, every=1)
         log.record(0, 1.0, "A", 1e-4, tokens=4096)
         out = capsys.readouterr().out
         # Parse the value rather than substring-match it: a fast window makes
@@ -69,13 +70,11 @@ class TestProgressLog:
         assert int(match.group(1).replace(",", "")) > 0
 
     def test_throughput_is_zero_when_nothing_was_counted(self, capsys):
-        log = self.make(capsys, total=1, every=1)
+        log = self.make(total=1, every=1)
         log.record(0, 1.0, "A", 1e-4)
         assert re.search(r"\b0 tok/s", capsys.readouterr().out)
 
     def test_hms_formats_hours(self):
-        from lev.train.progress import hms
-
         assert hms(0) == "0:00:00"
         assert hms(59) == "0:00:59"
         assert hms(3661) == "1:01:01"
@@ -90,13 +89,15 @@ class TestWindowedRate:
     which is how a healthy run gets abandoned for being slow.
     """
 
-    def test_rate_reflects_the_window_not_the_startup_stall(self, capsys, monkeypatch):
-        import lev.train.progress as progress
+    @pytest.fixture
+    def clock(self, monkeypatch):
+        """Set `clock["t"]` to move the time `ProgressLog` reads."""
+        now = {"t": 0.0}
+        monkeypatch.setattr(progress.time, "monotonic", lambda: now["t"])
+        return now
 
-        clock = {"t": 0.0}
-        monkeypatch.setattr(progress.time, "monotonic", lambda: clock["t"])
-
-        log = progress.ProgressLog(total_steps=40, log_every=20)
+    def test_rate_reflects_the_window_not_the_startup_stall(self, capsys, clock):
+        log = ProgressLog(total_steps=40, log_every=20)
         # First window: a 100 s stall, then 20 quick steps.
         clock["t"] = 100.0
         for step in range(20):
@@ -110,17 +111,14 @@ class TestWindowedRate:
             log.record(step, 1.0, "A", 1e-4, tokens=100)
         second = capsys.readouterr().out
 
-        rate = lambda out: float(re.search(r"([\d.]+) it/s", out).group(1))  # noqa: E731
+        def rate(out):
+            return float(re.search(r"([\d.]+) it/s", out).group(1))
+
         assert rate(second) == pytest.approx(2.5, abs=0.05), second
-        # The steady-state window must not be dragged by the earlier stall.
         assert rate(second) > 5 * rate(first), f"{rate(first)} -> {rate(second)}"
 
-    def test_eta_uses_the_windowed_rate(self, capsys, monkeypatch):
-        import lev.train.progress as progress
-
-        clock = {"t": 0.0}
-        monkeypatch.setattr(progress.time, "monotonic", lambda: clock["t"])
-        log = progress.ProgressLog(total_steps=1000, log_every=10)
+    def test_eta_uses_the_windowed_rate(self, capsys, clock):
+        log = ProgressLog(total_steps=1000, log_every=10)
 
         clock["t"] = 500.0  # a long stall before the first step
         for step in range(10):
@@ -135,12 +133,8 @@ class TestWindowedRate:
         # 980 steps left at 1 s/step = 0:16:20, not inflated by the 500 s stall.
         assert "eta 0:16:20" in out, out
 
-    def test_throughput_is_also_windowed(self, capsys, monkeypatch):
-        import lev.train.progress as progress
-
-        clock = {"t": 0.0}
-        monkeypatch.setattr(progress.time, "monotonic", lambda: clock["t"])
-        log = progress.ProgressLog(total_steps=4, log_every=2)
+    def test_throughput_is_also_windowed(self, capsys, clock):
+        log = ProgressLog(total_steps=4, log_every=2)
 
         clock["t"] = 100.0
         for step in range(2):

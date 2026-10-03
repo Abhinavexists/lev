@@ -36,8 +36,11 @@ DEFAULT_FRACTIONS: dict[Split, float] = {
 
 
 def row_key(source: str, index: int, text: str) -> str:
-    """A stable identity for a row: its source, its position within that source,
-    and the first 512 characters of its text."""
+    """A stable identity for a row.
+
+    Combines the source, the row's position within it and the first 512
+    characters of its text.
+    """
     return f"{source}|{index}|{text[:512]}"
 
 
@@ -96,7 +99,7 @@ def split_examples(
 
 
 def check_coverage(splits: dict[Split, list[Example]], strict: bool = True) -> SplitReport:
-    """Two coverage checks.
+    """Run two label-coverage checks; with `strict`, raise `ValueError` on either.
 
     1. Every label observed anywhere also appears in train; one seen only in
        calibration or test measures nothing.

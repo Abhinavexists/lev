@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+ADAPTER_WEIGHTS = "adapter_model.safetensors"
 TRAINING_STATE = "training_state.pt"
 MODE_B_HEAD = "mode_b_head.pt"
 CALIBRATION = "calibration.json"
@@ -16,7 +17,7 @@ def latest_checkpoint(output: str | Path) -> Path | None:
     """
     source = Path(output)
     steps = sorted(
-        (d for d in source.glob("step-*") if (d / "adapter_model.safetensors").is_file()),
+        (d for d in source.glob("step-*") if (d / ADAPTER_WEIGHTS).is_file()),
         key=lambda d: int(d.name.split("-")[1]),
     )
     return steps[-1] if steps else None
@@ -25,18 +26,27 @@ def latest_checkpoint(output: str | Path) -> Path | None:
 def fetch_checkpoint(spec: str | Path, cache_dir: str | None = None) -> Path:
     """A local directory as-is; a Hub id (`hf://org/name` or `org/name`) downloaded.
 
-    Anything on disk is local; otherwise only `org/name` is treated as a Hub
-    repo, so a mistyped local path fails instead of reaching the Hub.
+    Anything on disk is local. A missing path is tried as a Hub id only if,
+    after stripping `hf://`, it has exactly one `/` and does not start with `/`
+    or `.`; anything else fails locally. A typo like `checkpoints/lev-instuct`
+    therefore reaches the Hub, and a repo the Hub does not have raises
+    `FileNotFoundError` naming both readings.
     """
     local = Path(spec)
     if local.exists():
         return local
     repo = str(spec).removeprefix("hf://")
-    if repo.count("/") != 1 or repo.startswith("/") or repo.startswith("."):
+    if repo.count("/") != 1 or repo.startswith(("/", ".")):
         raise FileNotFoundError(f"{spec!r} is neither a local path nor a Hub id like org/name")
     from huggingface_hub import snapshot_download
+    from huggingface_hub.errors import RepositoryNotFoundError
 
-    return Path(snapshot_download(repo, repo_type="model", cache_dir=cache_dir))
+    try:
+        return Path(snapshot_download(repo, repo_type="model", cache_dir=cache_dir))
+    except RepositoryNotFoundError as error:
+        raise FileNotFoundError(
+            f"no local directory {spec!r}, and no Hub repo {repo!r} (or no access to it)"
+        ) from error
 
 
 def resolve_checkpoint(path: str | Path, cache_dir: str | None = None) -> Path:
@@ -47,7 +57,7 @@ def resolve_checkpoint(path: str | Path, cache_dir: str | None = None) -> Path:
     `<output_dir>`, so the newest step is resolved here.
     """
     source = fetch_checkpoint(path, cache_dir)
-    if (source / "adapter_model.safetensors").is_file():
+    if (source / ADAPTER_WEIGHTS).is_file():
         return source
     latest = latest_checkpoint(source)
     if latest is None:
@@ -69,9 +79,10 @@ def load_training_state(path: str | Path) -> dict | None:
     file = resolve_checkpoint(path) / TRAINING_STATE
     if not file.is_file():
         return None
-    # `weights_only=False`: the payload holds the RNG state (a tuple). The file
-    # is written by `save_checkpoint`, never downloaded.
-    return torch.load(file, map_location="cpu", weights_only=False)
+    # The payload is tensors, dicts, tuples and ints (optimiser and scheduler
+    # state dicts, `random.getstate()`), so it needs no arbitrary unpickling:
+    # a Hub id passed as `path` is downloaded and loaded the same way.
+    return torch.load(file, map_location="cpu", weights_only=True)
 
 
 def load_checkpoint(model, head, path: str | Path) -> None:
@@ -85,7 +96,7 @@ def load_checkpoint(model, head, path: str | Path) -> None:
     from safetensors.torch import load_file
 
     source = resolve_checkpoint(path)
-    set_peft_model_state_dict(model, load_file(str(source / "adapter_model.safetensors")))
+    set_peft_model_state_dict(model, load_file(str(source / ADAPTER_WEIGHTS)))
 
     head_file = source / MODE_B_HEAD
     if head is not None:

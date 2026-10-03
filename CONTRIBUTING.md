@@ -13,9 +13,9 @@ Both must be clean. Tests run without a GPU, network or API keys. A basic `uv sy
 | Work on | Start here | Focused tests |
 | --- | --- | --- |
 | Request schema, prompts or routing | `packages/lev/src/lev/{types,prompt,router,labels}.py` | `test_core.py` |
-| Inference and HTTP serving | `packages/lev/src/lev/{model,server}.py`, `readout/` | `test_core.py`, `test_cache_fork.py` |
-| Training data and contamination | `packages/lev/src/lev/data/` | `test_data_pipeline.py`, `test_contamination.py`, `test_eval_export.py` |
-| Training and resume | `packages/lev/src/lev/train/{loop,collate,checkpoints}.py` | `test_training_loop.py`, `test_collate.py`, `test_loss.py` |
+| Inference and HTTP serving | `packages/lev/src/lev/{model,server,batcher}.py`, `readout/` | `test_core.py`, `test_cache_fork.py`, `test_engine_forward.py`, `test_batcher.py` |
+| Training data and contamination | `packages/lev/src/lev/data/` | `test_data_pipeline.py`, `test_contamination.py`, `test_eval_export.py`, `test_s1bench.py` |
+| Training and resume | `packages/lev/src/lev/train/{loop,collate,checkpoints,progress}.py` | `test_training_loop.py`, `test_collate.py`, `test_loss.py`, `test_progress.py` |
 | Calibration and evaluation | `packages/lev/src/lev/calibrate.py`, `train/{calibration_run,evaluate}.py` | `test_calibration.py`, `test_evaluate.py` |
 | CLI and release packaging | `packages/lev/src/lev/{cli,release}.py` | `test_cli.py`, `test_release.py`, `test_packaging.py` |
 | Benchmark harness and demo | `packages/levbench/src/levbench/` | `test_offline.py`, `test_snake.py` |
@@ -45,7 +45,7 @@ Keep benchmark histories and design comparisons in `docs/FINDINGS.md` and `docs/
 
 ## House rules
 
-**Claims carry provenance.** Every number in the docs is tagged: verified here, taken from someone's published result, or projected. Keep the distinction, most of this repo's value is that a reader can tell which is which.
+**Claims carry provenance.** Every number in the docs is tagged: verified here, taken from someone's published result, or projected. Keep the distinction: most of this repo's value is that a reader can tell which is which.
 
 **Never quote a stopped benchmark run.** S1Bench has completed runs (6 subsets, 1,999 rows) and stopped ones (1 subset, 599 rows). Mixing them silently breaks every conclusion. `jeff-gpu` at 0.6644 is stopped; `jeff-gpu-full` at 0.5595 is not.
 

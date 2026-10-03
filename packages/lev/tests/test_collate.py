@@ -5,6 +5,8 @@ torch is in the `train` extra, so these skip on a bare `uv sync`.
 
 from __future__ import annotations
 
+import random
+
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -82,7 +84,8 @@ class TestCollator:
         assert batch.candidate_input_ids.shape[0] == 40
 
     def test_the_candidate_pool_is_shared_across_rows(self, collator):
-        """A 77-option question must not cost 8x77 encodes in a batch of 8."""
+        """The pool holds each option once, not once per row: a 77-option
+        question in a batch of 8 must not cost 8x77 encodes."""
         rows = [an_example(a_choice(40), target=i) for i in range(4)]
         batch = collator(rows)
         assert batch.candidate_input_ids.shape[0] == 40, "pool grew with batch size"
@@ -128,15 +131,12 @@ class TestModeBatcher:
 class TestLengthBucketing:
     """A batch pads to its longest row, so compute is the rectangle.
 
-    Measured on the real mixture at batch 32: random batching wastes 4.43x of
-    every forward pass on padding, bucketing brings it to 1.43x. That is the
-    difference between a 23-hour run and a 7-hour one.
+    Measured on the real mixture at batch 32 (ADR-017): random batching wastes
+    4.43x of every forward pass on padding; bucketing brings it to 1.43x.
     """
 
     def rows(self, n=512):
-        import random as _r
-
-        rng = _r.Random(0)
+        rng = random.Random(0)
         # Bimodal, like the real mixture: short intents and long reviews.
         return [
             an_example(a_choice(4), target=i % 4, state="x" * rng.choice([20, 20, 20, 1200]))
@@ -155,9 +155,8 @@ class TestLengthBucketing:
         before = self.waste(list(unbucketed(rows)))
         after = self.waste(list(bucketed(rows)))
         assert before > 2.0, f"fixture is not bimodal enough to show the effect ({before:.2f})"
-        # A relative claim, not an absolute one: the absolute floor depends on
-        # how the window boundary falls, and what matters is the multiple of
-        # compute saved. On the real mixture this is 4.43x -> 1.43x.
+        # Relative, not absolute: the absolute floor depends on where the window
+        # boundary falls, and the multiple of compute saved is what matters.
         assert after < before / 2, f"bucketing only got {before:.2f}x -> {after:.2f}x"
         assert after < 1.5, f"bucketing left {after:.2f}x waste"
 
@@ -185,6 +184,6 @@ class TestLengthBucketing:
     def test_ordering_is_reproducible_for_a_given_epoch(self, batching_tokenizer):
         rows = self.rows(256)
         batcher = ModeBatcher(batching_tokenizer, 32, bucket_window=4)
-        a = [[id(e) for e in b] for b in batcher(rows, epoch=3)]
-        b = [[id(e) for e in b] for b in batcher(rows, epoch=3)]
-        assert a == b
+        first = [[id(e) for e in batch] for batch in batcher(rows, epoch=3)]
+        second = [[id(e) for e in batch] for batch in batcher(rows, epoch=3)]
+        assert first == second

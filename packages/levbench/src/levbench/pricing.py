@@ -17,10 +17,8 @@ class Price:
 
 
 PRICES: dict[str, Price] = {
-    # TypeSafe bills input only.
     "jev-latest": Price(0.042, 0.0),
     "jev-1.13": Price(0.042, 0.0),
-    # Anthropic first-party rates.
     "claude-opus-5": Price(5.00, 25.00),
     "claude-sonnet-5": Price(2.00, 10.00),
     "claude-haiku-4-5": Price(1.00, 5.00),
@@ -28,7 +26,9 @@ PRICES: dict[str, Price] = {
 }
 
 
-# A self-hosted model costs GPU time, not tokens
+# A self-hosted model costs GPU time, not tokens. An unlisted `jev*` name is
+# priced as jev-latest; any other unlisted name, including an unlisted
+# `claude-*`, counts as self-hosted and costs $0.
 SELF_HOSTED = Price(0.0, 0.0)
 
 

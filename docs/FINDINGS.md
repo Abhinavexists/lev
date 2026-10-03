@@ -156,8 +156,6 @@ It returns the **same** `NoulAnswer`/`ChoiceAnswer`/`ScoreAnswer` types as the r
 
 ---
 
----
-
 ## 8. The architecture question is answered — and it kills §13
 
 **Provenance note.** Both X/Twitter links supplied were fetched and both returned **HTTP 402**; neither tweet was read. What follows was reconstructed from web search and then verified at source: repository existence and metadata via the GitHub API, READMEs read directly. One search hit (`slavadubrov/jev-judge-bench`) **404s** and was discarded — the list below is filtered, not transcribed.
@@ -238,8 +236,6 @@ Bespoke Nimble, 324 held-out examples. Read the caveat before the table:
 | Qwen3.5-9B (base) | 66.36% (215/324) |
 
 **This is reference-label agreement, not accuracy.** The labels are *synthetic*, and the 324 examples are 162 deliberately contrastive pairs. Nimble did not distil from Jev. Do not place these beside this repo's harness numbers as though they measure the same thing.
-
----
 
 ---
 
@@ -655,3 +651,29 @@ The serving path is not the cause and training is. Run on Modal over the same 14
 **Latency is not comparable across these two runs.** lev's per-call p50 was 600–654 ms against 414–463 ms in §16, on the same checkpoint and configuration; Jev's was 335–346 ms, unchanged. A bare `GET /health` from the laptop took 0.42 s median, and Modal's request log records about 108 ms of execution even for that handler, which does no work. Twenty warm sequential aegis2 calls afterwards (states of about 470 tokens): 589 ms at the laptop, 381 ms of request duration and 287 ms of execution in Modal's log. The 69 ms compute figure (ADR-023) is for `profile_engine`'s short reference state, measured inside the container; it is not the per-call cost on S1Bench's longer states. Why the end-to-end path moved by ~180 ms between runs is open.
 
 Logs: `docs/charts/logs/{jev,lev}-s1bench-2026-09-24.txt`. Comparison charts: `docs/charts/lev-vs-jev.html`, rendered by `docs/charts/build.py` from those logs.
+
+---
+
+## 18. Boundary instability: training made Noul binary, not the backbone
+
+A user on a 3090 reported that lev "suffers in boundary conditions. When the answer is not really clear, it can flip back and forth wildly with very different probabilities." Probed 2026-10-03 on the released weights (`weights/lev`, bf16 on Apple MPS, not CUDA). The sample is 30 uniformly drawn items from each of eight S1Bench subsets (multinli, vitaminc-dev, pubmedqa as Choice; civil_comments, boolq, aegis2, paws, squad2 as Noul), one seed, 240 items in total. Each item ran under meaning-preserving perturbations a caller can trigger: a whitespace-only change, an instruction prefixed with "Read carefully.", and an unrelated companion question in the same request. Each ran with the adapter **on** and **off** (the frozen `Qwen3.5-4B`), calibration off in both, so raw margins are compared.
+
+```text
+                         flips   steep flips (spread >= 0.5)   base p in (0.25, 0.75)
+    Noul    adapter on    5/150    4/150                          6/150
+    Noul    adapter off   5/150    0/150                         36/150
+    Choice  adapter on    3/90     1/90                          10/90
+    Choice  adapter off   5/90     0/90                          26/90
+```
+
+**Both models are unsure about the same few items; only the trained one hides it.** The frozen backbone flips at the same rate, but between moderate values. Across all perturbations, layout included, its flipped items span a median 0.39 ↔ 0.59, against the adapter's 0.01 ↔ 0.98. One aegis2 state, *"How would I carry this out exactly?"*, gave 0.95 unsafe, 0.008 after adding a trailing newline, and 0.999 for the negated question ("would it be safe…?"). The frozen model gave 0.02, 0.02 and 0.98. The frozen backbone's Noul readout is binary and order-averaged, but that does not explain the gap: with order averaging off, it still moves by at most about 0.13 on the same steep-flip items.
+
+**Mechanism.** Every Noul training target is rating 0 or rating 8 (`_noul_rating` in `lev/data/sources.py`), so the nine-level scale is trained only at its ends. On 144 of the 150 Noul items, 98.7% of the mass sits on 0 and 8, and levels 3–5 carry 0.2%. An ambiguous input cannot be given a middle rating, so it is pushed to one end, and a perturbation that nudges the margin moves the mass to the other end. The only rows that teach spread-out mass are the abstain rows, which remove the state (ADR-012), so the model learns that uncertainty means *no input*, never *ambiguous input*. Choice, trained with the same loss but read the same way in both arms, came out *more* stable than the frozen model (median spread across all perturbations 0.011 against 0.123). The steepness is specific to the Noul targets.
+
+**Supporting evidence, not reachable by a caller:** under the schema-first layout, which training uses for half its rows and serving never renders, 10 of the 16 steep Noul crossings flip. The adapter learned two confident, conflicting rules for the same boundary items.
+
+**What does not fix it.** The per-bucket temperature (`noul:A` 2.33) narrows the median steep-flip spread only from 0.93 to 0.65, which still crosses 0.5. Averaging both layouts moved Noul Brier 0.188 → 0.182 and Choice accuracy by one item, both within noise at this n.
+
+**What should, in order:** graded or smoothed Noul targets through the existing `soft_targets` path, instead of one-hot 0/8; a paired consistency loss across whitespace and paraphrase variants of the same row; distillation toward the frozen model's Noul distribution, which these measurements show is well behaved at the boundary. Stripping trailing whitespace from the state before rendering is a near-free partial patch.
+
+**Limits.** The sample is 30 items per subset with one seed, so per-subset rates are noisy (civil_comments, the worst, is 8 of 30 counting the layout flips). bf16 on MPS is not the reporter's CUDA. On the same weights, batching alone moves p by up to 0.07 in bf16 (ADR-030), so small differences between perturbations are within that floor; spreads of 0.5 or more are not.

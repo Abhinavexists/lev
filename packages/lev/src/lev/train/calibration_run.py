@@ -23,8 +23,9 @@ def fit_profile(
 
     `method="transfer"` fits each bucket both by rows and by task family and
     keeps whichever has the lower leave-one-family-out ECE (ADR-028), writing
-    the comparison to `calibration.report.json`. `method="rows"` is the
-    original fit. An existing profile is kept as `calibration.previous.json`.
+    the comparison to `calibration.report.json`; a bucket with too few families
+    keeps the row fit. `method="rows"` fits pooled rows only, ignoring family.
+    An existing profile is kept as `calibration.previous.json`.
     """
     rows = collect_logits(checkpoint_dir, data_dir, split, config=config)
     out = Path(checkpoint_dir) / CALIBRATION
@@ -84,10 +85,10 @@ def collect_logits(
     from ..data.sources import family_of
     from ..data.splits import Split
     from ..prompt import Style
-    from ..train.checkpoints import load_checkpoint
-    from ..train.collate import DecisionCollator, ModeBatcher, RouteCache
-    from ..train.config import PRESETS
-    from ..train.loop import build_head, build_model, candidate_logits, device_of, to_device
+    from .checkpoints import load_checkpoint
+    from .collate import DecisionCollator, ModeBatcher, RouteCache
+    from .config import PRESETS
+    from .loop import build_head, build_model, candidate_logits, device_of, to_device
 
     config = config or PRESETS["4b"]
     model, tokenizer = build_model(config, None)

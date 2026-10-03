@@ -20,7 +20,7 @@ def overconfident_samples(n: int = 600, seed: int = 7, sharpness: float = 4.0):
     """Logits that are directionally right but far too sharp.
 
     This is the untuned-backbone failure mode the benchmark measured at ECE 0.4252.
-    The correct class wins ~70% of the time, but the margin implies ~99%.
+    The correct class wins ~70% of the time, but the margin implies ~96%.
     """
     rng = random.Random(seed)
     samples = []
@@ -111,11 +111,10 @@ class TestProfile:
         assert loaded.temperatures == p.temperatures
         assert loaded.fitted_on == "calib"
 
-    def test_fit_refuses_the_test_split(self):
-        samples = overconfident_samples(100)
-        for forbidden in ("test", "TEST", "eval", "holdout"):
-            with pytest.raises(ValueError, match="refusing to fit"):
-                fit({"choice:A": samples}, split_name=forbidden)
+    @pytest.mark.parametrize("forbidden", ["test", "TEST", "eval", "holdout"])
+    def test_fit_refuses_the_test_split(self, forbidden):
+        with pytest.raises(ValueError, match="refusing to fit"):
+            fit({"choice:A": overconfident_samples(100)}, split_name=forbidden)
 
     def test_fit_skips_undersized_buckets(self):
         profile = fit({"choice:A": overconfident_samples(10)}, "calib", min_samples=50)
@@ -131,8 +130,6 @@ class TestProfile:
 
 class TestOptionBands:
     def test_choice_keys_carry_a_band_and_other_types_do_not(self):
-        from lev.calibrate import CalibrationProfile
-
         assert CalibrationProfile.key("choice", "A", 4) == "choice:A:small"
         assert CalibrationProfile.key("choice", "A", 20) == "choice:A:mid"
         assert CalibrationProfile.key("choice", "A", 60) == "choice:A:large"
@@ -140,8 +137,6 @@ class TestOptionBands:
         assert CalibrationProfile.key("noul", "A", 9) == "noul:A"
 
     def test_banded_temperature_falls_back_to_the_unbanded_bucket(self):
-        from lev.calibrate import CalibrationProfile
-
         profile = CalibrationProfile(temperatures={"choice:A": 2.0, "choice:A:large": 1.2})
         assert profile.temperature("choice", "A", 60) == 1.2
         assert profile.temperature("choice", "A", 5) == 2.0, "small band unfitted -> old bucket"
@@ -149,10 +144,11 @@ class TestOptionBands:
 
 
 class TestTransferSelectedCalibration:
-    def make(self):
-        """Two confident, accurate 'easy' families dominate by size; one small
-        'hard' family is confidently wrong half the time. The row fit is set by
-        the easy families and is overconfident on the hard one."""
+    def family_rows(self):
+        """Equally confident rows: two large 'easy' families (400 rows each, 97%
+        and 95% correct) dominate a small 'hard' one (60 rows, 55%) and a 'mid'
+        one (120 rows, 80%). The row fit is set by the easy families and is
+        overconfident on the hard one."""
         rows = []
         for fam, n, acc in (
             ("easy1", 400, 0.97),
@@ -169,12 +165,13 @@ class TestTransferSelectedCalibration:
         from lev.calibrate import family_weights
 
         w = family_weights(["a", "a", "a", "b"])
-        assert sum(w[:3]) == pytest.approx(1.0) and w[3] == pytest.approx(1.0)
+        assert sum(w[:3]) == pytest.approx(1.0), "family a's three rows share one unit"
+        assert w[3] == pytest.approx(1.0), "family b's single row carries one unit alone"
 
     def test_family_fit_is_softer_when_small_families_are_harder(self):
         from lev.calibrate import _fit
 
-        rows = self.make()
+        rows = self.family_rows()
         samples = [(lg, y) for lg, y, _ in rows]
         fams = [f for _, _, f in rows]
         assert _fit(samples, fams, "family") > _fit(samples, fams, "rows")
@@ -182,7 +179,7 @@ class TestTransferSelectedCalibration:
     def test_selection_reports_both_and_picks_lower_transfer_ece(self):
         from lev.calibrate import fit_for_transfer
 
-        profile, report = fit_for_transfer({"choice:A:small": self.make()}, "calibration")
+        profile, report = fit_for_transfer({"choice:A:small": self.family_rows()}, "calibration")
         entry = report["choice:A:small"]
         assert entry["families"] == 4
         better = "family" if entry["lofo_ece_family"] < entry["lofo_ece_rows"] else "rows"
@@ -192,9 +189,12 @@ class TestTransferSelectedCalibration:
     def test_too_few_families_keeps_the_row_fit(self):
         from lev.calibrate import fit_for_transfer
 
-        rows = [r for r in self.make() if r[2] in ("easy1", "hard")]
+        rows = [r for r in self.family_rows() if r[2] in ("easy1", "hard")]
         _, report = fit_for_transfer({"choice:B": rows}, "calibration")
-        assert report["choice:B"]["chosen"] == "rows" and "lofo_ece_rows" not in report["choice:B"]
+        assert report["choice:B"]["chosen"] == "rows"
+        assert "lofo_ece_rows" not in report["choice:B"], (
+            "too few families to run leave-one-family-out"
+        )
 
     def test_refuses_the_test_split(self):
         from lev.calibrate import fit_for_transfer

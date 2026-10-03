@@ -30,9 +30,7 @@ class Route:
 
 
 def candidate_count(question: Question) -> int:
-    if isinstance(question, Choice):
-        return len(question.criteria)
-    if isinstance(question, Score):
+    if isinstance(question, Choice | Score):
         return len(question.criteria)
     if isinstance(question, Noul):
         return len(NOUL_RATING_TOKENS)

@@ -84,8 +84,8 @@ VOLUMES: dict[str | PurePosixPath, modal.Volume | modal.CloudBucketMount] = {
     DATA_DIR: datasets_vol,
 }
 
-# Which preset `serve` exposes. Not a function argument: Modal requires
-# `@modal.asgi_app` functions to take none.
+# The preset `serve` exposes when `LEV_SERVE_PRESET` is unset. Not a function
+# argument: Modal requires `@modal.asgi_app` functions to take none.
 SERVE_PRESET = "4b"
 
 
@@ -106,8 +106,10 @@ def _hf_secrets() -> list:
 
 # Deploy-time knobs, read where `modal deploy` runs. Decorator arguments are
 # fixed at import, so these cannot travel as Secrets the way the preset does.
-#   LEV_SERVE_CONCURRENCY  requests one container handles at once (default 4);
-#                          GPU forwards serialise, parsing and network overlap.
+#   LEV_SERVE_CONCURRENCY  requests one container handles at once (default 32);
+#                          concurrent requests share batched forwards (lev.batcher).
+#                          Also the server's `max_pending`, so Modal's input cap
+#                          and the 503 limit agree; forwarded into the container.
 #   LEV_SERVE_WARM         containers kept running (default 0). One removes the
 #                          20-55 s cold start, at the cost of an idle GPU.
 #   LEV_SERVE_REGION       a Modal region near the client; the measured 280 ms
@@ -116,7 +118,7 @@ def _hf_secrets() -> list:
 #   LEV_SERVE_MAX          container ceiling (default unset: Modal's own limit).
 #                          Pin it for a benchmark sweep, where a parallel client
 #                          would otherwise open a GPU per burst of requests.
-SERVE_CONCURRENCY = int(os.environ.get("LEV_SERVE_CONCURRENCY", "4"))
+SERVE_CONCURRENCY = int(os.environ.get("LEV_SERVE_CONCURRENCY", "32"))
 SERVE_WARM = int(os.environ.get("LEV_SERVE_WARM", "0"))
 SERVE_REGION = os.environ.get("LEV_SERVE_REGION")
 SERVE_SCALEDOWN = int(os.environ.get("LEV_SERVE_SCALEDOWN", "300"))
@@ -135,7 +137,7 @@ def _prompt_style(value: str | None) -> Literal["plain", "chat"] | None:
 def _serve_overrides() -> list:
     """Which checkpoint the server loads, chosen from the local environment.
 
-    `LEV_SERVE_PRESET=4b-instruct make deploy` serves that preset's newest
+    `make deploy PRESET=4b-instruct` serves that preset's newest
     checkpoint; `LEV_SERVE_MODEL=Qwen/Qwen3.5-4B` serves that model frozen (no
     adapter, binary Noul) as the zero-shot baseline. Local env does not reach
     the container, so whichever are set travel as a Secret.
@@ -149,6 +151,7 @@ def _serve_overrides() -> list:
             "LEV_SERVE_MAX_LABEL_OPTIONS",
             "LEV_SERVE_PROMPT",
             "LEV_SERVE_SKIP_CODES",
+            "LEV_SERVE_CONCURRENCY",
         )
         if (value := os.environ.get(key))
     }
@@ -227,8 +230,8 @@ def train(
 def build_data(limit_per_source: int = 20_000, n_examples: int = 200_000) -> dict:
     """Download every source and write the three splits to the data volume.
 
-    No GPU: it is downloads and CPU. Run it once; `train` then fails in seconds,
-    not minutes, if the data is missing.
+    No GPU: it is downloads and CPU. Run it once, before `train`; without the
+    data `train` fails in seconds, not minutes, before loading the model.
     """
     from lev.data.build import build_dataset
 
@@ -250,9 +253,7 @@ def smoke(steps: int = 40) -> dict:
     Builds a small mixture if the volume is empty, so a fresh workspace needs
     one command. Covers every part of `train` except its duration.
     """
-    from pathlib import Path as _Path
-
-    if not (_Path(DATA_DIR) / "train.jsonl").is_file():
+    if not (Path(DATA_DIR) / "train.jsonl").is_file():
         # On the GPU, which `build_data` avoids, but only for the small smoke
         # mixture (a couple of minutes). Run `build_data` before `train`.
         print("data volume is empty; building a small mixture first")
@@ -301,8 +302,6 @@ def evaluate(
 ) -> dict:
     """Score the newest checkpoint on a held-out split, with and without the
     fitted temperature.
-
-    Runs in the container, next to the checkpoint and data volumes.
     """
     from lev.calibrate import CalibrationProfile
     from lev.train.checkpoints import CALIBRATION
@@ -352,21 +351,14 @@ def serve():
     With no trained checkpoint for the preset it serves the base backbone
     uncalibrated, with a warning, rather than refusing to start.
     """
-    from pathlib import Path as _Path
-
     from lev.server import create_app
-    from lev.train.checkpoints import latest_checkpoint
+    from lev.train.checkpoints import ADAPTER_WEIGHTS, latest_checkpoint
     from lev.train.config import PRESETS
 
     preset = os.environ.get("LEV_SERVE_PRESET", SERVE_PRESET)
     if preset not in PRESETS:
         raise ValueError(f"LEV_SERVE_PRESET={preset!r} is not a preset; have {sorted(PRESETS)}")
     config = PRESETS[preset]
-    output = _Path(f"{CKPT_DIR}/{preset}")
-    # `latest_checkpoint` skips a step directory without weights (an interrupted save).
-    trained = (
-        latest_checkpoint(output) is not None or (output / "adapter_model.safetensors").is_file()
-    )
 
     # Off unless asked: measured slower than eager on this model (ADR-023).
     compile = os.environ.get("LEV_SERVE_COMPILE", "0") in ("1", "true", "yes")
@@ -380,27 +372,25 @@ def serve():
     frozen = os.environ.get("LEV_SERVE_MODEL")
     if frozen:
         print(f"serving {frozen} frozen: no adapter, binary Noul, raw softmax")
-        return create_app(
-            checkpoint_dir=None,
-            model_cache=MODELS_DIR,
-            model_id=frozen,
-            compile=compile,
-            max_label_options=max_label_options,
-            prompt_style=prompt_style,
-            skip_multi_token_codes=skip_codes,
-        )
-
-    if not trained:
-        print(f"WARNING: nothing trained at {output}; serving the base backbone uncalibrated")
+        checkpoint_dir, model_id = None, frozen
+    else:
+        output = Path(f"{CKPT_DIR}/{preset}")
+        # `latest_checkpoint` skips a step directory without weights (an interrupted save).
+        trained = latest_checkpoint(output) is not None or (output / ADAPTER_WEIGHTS).is_file()
+        if not trained:
+            print(f"WARNING: nothing trained at {output}; serving the base backbone uncalibrated")
+        checkpoint_dir = str(output) if trained else None
+        model_id = config.model_id
 
     return create_app(
-        checkpoint_dir=str(output) if trained else None,
+        checkpoint_dir=checkpoint_dir,
         model_cache=MODELS_DIR,
-        model_id=config.model_id,
+        model_id=model_id,
         compile=compile,
         max_label_options=max_label_options,
         prompt_style=prompt_style,
         skip_multi_token_codes=skip_codes,
+        max_pending=SERVE_CONCURRENCY,
     )
 
 
@@ -424,15 +414,15 @@ def export_checkpoint(preset: str = "4b", name: str | None = None) -> dict:
     from lev.release import build_release
     from lev.train.config import PRESETS
 
+    target = name or preset
     manifest = build_release(
         f"{CKPT_DIR}/{preset}",
-        f"{RELEASES_DIR}/{name or preset}",
+        f"{RELEASES_DIR}/{target}",
         preset=preset,
         name=name,
         prompt_style=PRESETS[preset].prompt_style,
     )
     checkpoints.commit()
-    target = name or preset
     print(
         f"release {manifest['name']} -> {RELEASES_DIR}/{target}  ({len(manifest['files'])} files)"
     )
@@ -485,9 +475,9 @@ def check_release(name: str = "4b") -> dict:
 
     with TestClient(create_app(release, model_cache=MODELS_DIR)) as client:
         health = client.get("/health").json()
-        served = client.post("/v1/systemone", json=request)
-    served.raise_for_status()
-    served = served.json()
+        response = client.post("/v1/systemone", json=request)
+    response.raise_for_status()
+    served = response.json()
     for question, answer in served["answers"].items():
         expected = direct["answers"][question]
         gaps = [abs(answer["probabilities"][k] - p) for k, p in expected["probabilities"].items()]
@@ -508,6 +498,10 @@ def diagnose_candidates(model_id: str = "Qwen/Qwen3.5-4B-Base") -> dict:
     reordering options changed the served distribution almost entirely (L1 1.23
     on massive-en-US). A vector that differs between "alone" and "in a batch"
     would mean the padded forward leaks across rows.
+
+    Result (FINDINGS §12): representations are bit-identical across batch
+    orders (`max_abs 0.0`). massive-en-US's 60 options route to Mode A, and the
+    order sensitivity is Mode A letter-position bias.
     """
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -710,8 +704,7 @@ def profile_engine(preset: str = "4b", rounds: int = 20) -> dict:
     for label in shapes:
         for name, a in answers["fork"][label].items():
             b = answers["single"][label][name]
-            pa = a.probabilities or {1: a.noul}
-            pb = b.probabilities or {1: b.noul}
+            pa, pb = _probabilities(a), _probabilities(b)
             worst = max(worst, *(abs(pa[k] - pb[k]) for k in pa))
     report["fork_vs_single_max_prob_diff"] = round(worst, 5)
     print(f"fork vs single: max |dp| over all answers = {worst:.5f}", flush=True)

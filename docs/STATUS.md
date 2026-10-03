@@ -19,6 +19,7 @@ What is built, and how far each part has been exercised.
 | Modal `serve` | **runs**; scored on S1Bench over HTTP |
 | S1Bench harness | **done**; all 13 subsets on S1Bench's pinned items, Jev within 0.8 pp of its published numbers on each |
 | Decision engine (batched forward, optional fork, readout) | **runs**; batched forward (ADR-023), skipped label codes and fitted temperatures (ADR-028) |
+| Cross-request batching, admission control (503/504) | **done, tested** (offline); last-token logits matched against the full forward; measured on a CPU stand-in and on MPS; no CUDA measurement ([ADR-030](DECISIONS.md#adr-030--the-server-batches-across-requests-and-refuses-work-it-cannot-do-in-time)) |
 | Mode B head | **trains and serves**; weak unseen-taxonomy transfer measured on massive-en-US ([FINDINGS §12](FINDINGS.md#12-first-head-to-head-on-s1bench-two-named-failure-modes)) |
 | `lev.load`, release packaging, Hub publishing | **done**; the release loads through both `lev.load` and the server on an H100 (`check_release`) |
 

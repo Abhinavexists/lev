@@ -27,8 +27,9 @@ class CallResult:
     served_by: str
     input_tokens: int
     output_tokens: int
-    # Adapter-only: retries the LLM needed to emit a schema-valid answer.
-    # Always 0 for Jev, where schema conformance is structural.
+    # Adapter-only: retries the LLM needed to emit a schema-valid answer, and
+    # retries after transient provider failures. Always 0 on the TypeSafe SDK
+    # (Jev, lev), where schema conformance is structural.
     schema_retries: int = 0
     transient_retries: int = 0
 
@@ -208,7 +209,7 @@ def run_eval(
                 )
             )
 
-    served = {c.served_by for c in report.calls}
+    served = report.served_by
     if backend == "lev" and len(served) == 1:
         # The label was a placeholder; the server knows what it loaded.
         report.model = served.pop()
@@ -229,15 +230,14 @@ def _format_summary(report: EvalReport) -> list[str]:
     lines.append(f"=== {report.backend} / {report.model} ===")
     if report.wall_seconds:
         lines.append(
-            f"{'wall time':<18} {report.wall_seconds:.1f}s  "
-            f"({len(report.calls) / report.wall_seconds:.2f} items/s)"
+            f"{'wall time':<18} {report.wall_seconds:.1f}s  ({n / report.wall_seconds:.2f} items/s)"
         )
     lines.append(f"calls              {n}")
     if n:
         lines.append(f"latency p50        {report.pct(0.5):.3f}s")
         lines.append(f"latency mean       {statistics.mean(report.latencies):.3f}s")
-        # Under 100 calls a p95 is one order statistic, mostly connection
-        # setup; report the slowest call instead.
+        # Under 100 calls the p95 falls among the few slowest calls, which are
+        # mostly connection setup; report the slowest call instead.
         if n >= 100:
             lines.append(f"latency p95        {report.pct(0.95):.3f}s")
         else:

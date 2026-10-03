@@ -1,11 +1,14 @@
-"""Reject training sources that resolve to any of the 13 S1Bench subsets."""
+"""Reject training sources that resolve to any of the 13 S1Bench subsets.
+
+`assert_eval_only` is the inverse gate, for the S1Bench evaluation loader.
+"""
 
 from __future__ import annotations
 
 import re
 from collections.abc import Iterable
 
-# All 13 S1Bench evaluation
+# The 13 S1Bench evaluation subsets.
 BLOCKED_SUBSETS: frozenset[str] = frozenset(
     {
         "vitaminc-dev",
@@ -73,7 +76,11 @@ class ContaminationError(RuntimeError):
 
 
 def normalise(name: str) -> str:
-    """Lowercase, strip a split suffix, collapse separators to hyphens."""
+    """Canonicalise a dataset name for lookup.
+
+    Lowercases, collapses whitespace and underscores to a hyphen, and strips a
+    `:train`, `:validation`, `:dev` or `:test` suffix.
+    """
     cleaned = name.strip().lower()
     cleaned = re.sub(r"[\s_]+", "-", cleaned)
     return re.sub(r":(train|validation|dev|test)$", "", cleaned)
@@ -81,10 +88,10 @@ def normalise(name: str) -> str:
 
 _BLOCKED_BY_NORMALISED: dict[str, str] = {normalise(s): s for s in BLOCKED_SUBSETS}
 _ALIASES_BY_NORMALISED: dict[str, str] = {normalise(a): t for a, t in _ALIASES.items()}
-# Bare aliases (`massive`, `aegis`, `squad-v2`) as segment sets, so a re-hosted
-# copy under a new name (`SetFit/amazon_massive_intent_en-US`,
-# `nvidia/Aegis-AI-Content-Safety-Dataset-1.0`) is caught like a blocked subset
-# name inside a longer id. Org-qualified aliases stay exact-match only.
+# Bare aliases (`massive`, `aegis`, `squad-v2`) as segment sets, so an unlisted
+# re-host (`someorg/amazon_massive_intent_fr`, `someorg/squad_v2_dedup`) is caught
+# like a blocked subset name inside a longer id. Org-qualified aliases stay
+# exact-match only.
 _ALIAS_SEGMENTS: tuple[tuple[frozenset[str], str], ...] = tuple(
     (frozenset(alias.split("-")), target)
     for alias, target in _ALIASES_BY_NORMALISED.items()
@@ -100,7 +107,7 @@ def resolve(name: str) -> str | None:
         return _BLOCKED_BY_NORMALISED[normalised]
     if normalised in _ALIASES_BY_NORMALISED:
         return _ALIASES_BY_NORMALISED[normalised]
-    # Bare name after an org prefix: `tals/vitaminc` -> `vitaminc`.
+    # Unlisted org prefix: `someorg/boolq` -> `boolq`.
     if "/" in normalised:
         return resolve(normalised.split("/", 1)[1])
     # A blocked name appearing as one hyphen-separated segment, e.g. `mix-boolq-v2`.
@@ -126,7 +133,7 @@ def check_mixture(dataset_names: Iterable[str]) -> dict[str, str]:
 
 
 def assert_eval_only(dataset_name: str) -> str:
-    """Return the blocked subset name; reject sources outside the evaluation set."""
+    """Return the blocked subset `dataset_name` resolves to; raise `ContaminationError` if none."""
     subset = resolve(dataset_name)
     if subset is None:
         raise ContaminationError(
@@ -139,9 +146,8 @@ def assert_eval_only(dataset_name: str) -> str:
 
 
 def assert_clean(dataset_names: Iterable[str]) -> None:
-    """Raise if any dataset resolves to a blocked evaluation subset."""
-    names = list(dataset_names)
-    if hits := check_mixture(names):
+    """Raise `ContaminationError` if any dataset resolves to a blocked evaluation subset."""
+    if hits := check_mixture(dataset_names):
         listed = "\n".join(f"  {src!r} -> blocked subset {dst!r}" for src, dst in hits.items())
         raise ContaminationError(
             f"{len(hits)} dataset(s) in the mixture collide with S1Bench evaluation "

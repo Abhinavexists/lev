@@ -87,6 +87,11 @@ def snapshot() -> dict:
     return json.loads((REPO_ROOT / "data" / "s1bench-snapshot.json").read_text())
 
 
+def jev_board(data: dict) -> dict:
+    """The snapshot's per-subset leaderboard results for jev."""
+    return next(t for t in data["targets"] if t["target"] == "jev")["subsets"]
+
+
 class TestPinnedDefinitions:
     def test_every_blocked_subset_is_loadable(self) -> None:
         assert set(EVAL_SUBSETS) == BLOCKED_SUBSETS
@@ -103,7 +108,7 @@ class TestPinnedDefinitions:
     def test_record_counts_match_the_board(self, name: str) -> None:
         """helpsteer2 is one record short of the board's 250: the manifest's
         token-length filter dropped rows."""
-        board = next(t for t in snapshot()["targets"] if t["target"] == "jev")["subsets"][name]
+        board = jev_board(snapshot())[name]
         expected = board["total"] - (1 if name == "helpsteer2" else 0)
         assert definition(name)["count"] == expected
 
@@ -111,7 +116,7 @@ class TestPinnedDefinitions:
         """Read from `data/s1bench-snapshot.json` rather than restated, so a
         regenerated snapshot fails here."""
         data = snapshot()
-        board = next(t for t in data["targets"] if t["target"] == "jev")["subsets"]
+        board = jev_board(data)
         for name, subset in EVAL_SUBSETS.items():
             assert subset.jev_published == pytest.approx(data["published_jev"][name], abs=1e-6)
             measured = board.get(name, {}).get("acc")

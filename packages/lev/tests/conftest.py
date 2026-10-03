@@ -1,7 +1,7 @@
 """Shared test fixtures: fake tokenizers, and builders for Examples/questions.
 
-Nothing here imports torch, so the torch-free half of the suite still collects
-on a bare `uv sync`.
+torch is imported only inside `BatchingTokenizer.__call__`, so the torch-free
+half of the suite still collects on a bare `uv sync`.
 """
 
 from __future__ import annotations
@@ -102,9 +102,6 @@ def batching_tokenizer() -> BatchingTokenizer:
     from string import ascii_uppercase
 
     return BatchingTokenizer({f" {c}" for c in ascii_uppercase} | {f" {i}" for i in range(9)})
-
-
-# Builders shared by the training-side tests.
 
 
 @pytest.fixture
