@@ -30,7 +30,7 @@ uv run pytest packages/lev/tests/test_core.py
 
 ## Comments and structure
 
-Use names and direct control flow to explain ordinary operations. Keep comments for constraints, tensor shapes, units, compatibility requirements and reasons a seemingly simpler implementation would be wrong. Docstrings should describe a contract or non-obvious behavior; omit ones that only repeat the function name.
+Use names and direct control flow to explain ordinary operations. Keep comments for constraints, tensor shapes, units, compatibility requirements and reasons a seemingly simpler implementation would be wrong. Docstrings should describe a contract or non-obvious behavior; omit ones that only repeat the function name. The full comment rules, which coding agents also follow, are in [CLAUDE.md](CLAUDE.md#comments).
 
 Keep benchmark histories and design comparisons in `docs/FINDINGS.md` and `docs/DECISIONS.md`, with a short reference beside code when needed. Avoid copying those narratives into module headers or adding generic helpers for a single call site. Preserve package boundaries and public interfaces during cleanup.
 
