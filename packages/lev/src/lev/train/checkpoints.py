@@ -79,10 +79,10 @@ def load_training_state(path: str | Path) -> dict | None:
     file = resolve_checkpoint(path) / TRAINING_STATE
     if not file.is_file():
         return None
-    # `weights_only=False` unpickles arbitrary objects. Safe for files
-    # `save_checkpoint` wrote; releases omit this file, but a Hub id passed as
-    # `path` is downloaded and loaded the same way.
-    return torch.load(file, map_location="cpu", weights_only=False)
+    # The payload is tensors, dicts, tuples and ints (optimiser and scheduler
+    # state dicts, `random.getstate()`), so it needs no arbitrary unpickling:
+    # a Hub id passed as `path` is downloaded and loaded the same way.
+    return torch.load(file, map_location="cpu", weights_only=True)
 
 
 def load_checkpoint(model, head, path: str | Path) -> None:
