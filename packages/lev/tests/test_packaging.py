@@ -105,7 +105,8 @@ def _inspect_cli(tool: str) -> tuple[set[str], dict[str, set[str]]]:
 def _documented_flag_values(flag: str) -> dict[str, set[str]]:
     """Every `--flag value` the docs name, and which file named it."""
     found: dict[str, set[str]] = {}
-    sources = [ROOT / "README.md", ROOT / "Makefile"] + sorted((ROOT / "docs").glob("*.md"))
+    sources = [ROOT / "README.md", ROOT / "Makefile", ROOT / "CONTRIBUTING.md"]
+    sources += sorted((ROOT / "docs").glob("*.md"))
     for src in sources:
         if src.is_file():
             for value in re.findall(rf"{flag}[= ]([a-z][a-z0-9-]*)", src.read_text()):

@@ -41,24 +41,26 @@ class TestDecisionLoss:
             atol=1e-6,
         )
 
-    def test_brier_penalises_overconfidence_at_equal_accuracy(self, train_config):
-        """Asserts only that the Brier term adds a positive amount to the confident row.
-
-        `ce_gap` subtracts a Brier-off confident loss from a Brier-on `modest`, so
-        `modest - confident < ce_gap` reduces to Brier(confident) > 0, about 7e-7
-        in float32 here. Not tested: that Brier penalises overconfidence relative to
-        CE. Both rows are correct, and Brier widens the confident row's lead (CE
-        gap 0.239, CE+Brier gap 0.307).
-        """
-        train_config.brier_weight = 1.0
+    @pytest.mark.parametrize("weight", [0.5, 1.0])
+    def test_brier_adds_the_weighted_multiclass_brier_score(self, train_config, weight):
+        """Turning Brier on adds `weight` x the mean over rows of the summed squared
+        error over the whole probability vector, and a padded slot (probability 0,
+        target 0) contributes nothing."""
+        logits = torch.tensor(
+            [[8.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 3.0, float("-inf")]],
+        )
+        targets = torch.tensor([0, 1, 0])
         train_config.ordinal_weight = 0.0
-        targets = torch.tensor([0])
-        confident = decision_loss(torch.tensor([[8.0, 0.0, 0.0]]), targets, train_config)
-        modest = decision_loss(torch.tensor([[2.0, 0.0, 0.0]]), targets, train_config)
         train_config.brier_weight = 0.0
-        ce_gap = modest - decision_loss(torch.tensor([[8.0, 0.0, 0.0]]), targets, train_config)
-        train_config.brier_weight = 1.0
-        assert (modest - confident) < ce_gap
+        ce_only = decision_loss(logits, targets, train_config)
+        train_config.brier_weight = weight
+        with_brier = decision_loss(logits, targets, train_config)
+
+        probs = logits.softmax(dim=-1)
+        one_hot = torch.nn.functional.one_hot(targets, 3).float()
+        expected_brier = ((probs - one_hot) ** 2).sum(dim=-1).mean()
+        assert torch.allclose(with_brier - ce_only, weight * expected_brier, atol=1e-6)
+        assert expected_brier > 0.5, "the wrong rows must give the term a non-trivial size"
 
     def test_uniform_soft_target_is_minimised_by_a_uniform_prediction(self, train_config):
         train_config.brier_weight = 0.0
