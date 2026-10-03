@@ -5,6 +5,8 @@ torch is in the `train` extra, so these skip on a bare `uv sync`.
 
 from __future__ import annotations
 
+import random
+
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -134,9 +136,7 @@ class TestLengthBucketing:
     """
 
     def rows(self, n=512):
-        import random as _r
-
-        rng = _r.Random(0)
+        rng = random.Random(0)
         # Bimodal, like the real mixture: short intents and long reviews.
         return [
             an_example(a_choice(4), target=i % 4, state="x" * rng.choice([20, 20, 20, 1200]))
@@ -185,6 +185,6 @@ class TestLengthBucketing:
     def test_ordering_is_reproducible_for_a_given_epoch(self, batching_tokenizer):
         rows = self.rows(256)
         batcher = ModeBatcher(batching_tokenizer, 32, bucket_window=4)
-        a = [[id(e) for e in b] for b in batcher(rows, epoch=3)]
-        b = [[id(e) for e in b] for b in batcher(rows, epoch=3)]
-        assert a == b
+        first = [[id(e) for e in batch] for batch in batcher(rows, epoch=3)]
+        second = [[id(e) for e in batch] for batch in batcher(rows, epoch=3)]
+        assert first == second

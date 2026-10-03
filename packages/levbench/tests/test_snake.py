@@ -20,6 +20,16 @@ from levbench.snake.game import hamiltonian_cycle
 from levbench.snake.policy import describe
 from levbench.snake.ui import compose, layout_size, status_line
 
+SMALL_BOARD = {"width": 8, "height": 6, "initial_length": 3}
+
+
+def planner_move(game):
+    return max((m for m in game.moves() if m.safe), key=lambda m: m.advance).direction
+
+
+def unsafe_direction(game):
+    return next(m.direction for m in game.moves() if not m.safe)
+
 
 class StubServer:
     """Answers from a chosen direction and two Noul probabilities, SDK-shaped."""
@@ -70,13 +80,13 @@ class TestRules:
     def test_same_seed_same_game(self):
         a, b = SnakeGame(seed=3), SnakeGame(seed=3)
         for _ in range(40):
-            move = max((m for m in a.moves() if m.safe), key=lambda m: m.advance).direction
+            move = planner_move(a)
             a.step(move)
             b.step(move)
         assert a.snapshot() == b.snapshot()
 
     def test_following_the_planner_never_dies(self):
-        game = SnakeGame(width=8, height=6, seed=1, initial_length=3)
+        game = SnakeGame(**SMALL_BOARD, seed=1)
         for _ in range(500):
             if game.won:
                 break
@@ -86,18 +96,18 @@ class TestRules:
         assert game.alive
 
     def test_eating_grows_and_scores(self):
-        game = SnakeGame(width=8, height=6, seed=1, initial_length=3)
+        game = SnakeGame(**SMALL_BOARD, seed=1)
         length = len(game.body)
         while True:
             eating = [m for m in game.moves() if m.safe and m.eats]
             if eating:
                 assert game.step(eating[0].direction) is True
                 break
-            game.step(max((m for m in game.moves() if m.safe), key=lambda m: m.advance).direction)
+            game.step(planner_move(game))
         assert len(game.body) == length + 1 and game.score == 1
 
     def test_wall_and_reverse_are_illegal(self):
-        game = SnakeGame(width=8, height=6, initial_length=3)
+        game = SnakeGame(**SMALL_BOARD)
         game.body = deque([(0, 0), (1, 0), (2, 0)])  # head in the top-left corner
         assert game.legal_reason("LEFT") == "wall"
         assert game.legal_reason("UP") == "wall"
@@ -130,12 +140,9 @@ class TestPrompts:
 
 
 class TestShield:
-    def unsafe_direction(self, game):
-        return next(m.direction for m in game.moves() if not m.safe)
-
     def test_shield_executes_best_safe_move_and_keeps_raw_probabilities(self):
         game = SnakeGame()
-        bad = self.unsafe_direction(game)
+        bad = unsafe_direction(game)
         decision = ModelPolicy(StubServer(pick=bad)).decide(game)
         assert decision.proposed == bad
         assert decision.executed in decision.safe_directions
@@ -144,7 +151,7 @@ class TestShield:
 
     def test_unassisted_executes_the_raw_choice(self):
         game = SnakeGame()
-        bad = self.unsafe_direction(game)
+        bad = unsafe_direction(game)
         decision = ModelPolicy(StubServer(pick=bad), guarded=False).decide(game)
         assert decision.executed == bad and not decision.intervened
 
@@ -173,9 +180,7 @@ class TestPlay:
             StubServer(follow_planner=True),
             "lev",
             "local",
-            width=8,
-            height=6,
-            initial_length=3,
+            **SMALL_BOARD,
             steps=25,
             record=record,
         )
@@ -197,9 +202,7 @@ class TestPlay:
             StubServer(follow_planner=True, invert=True),
             "lev",
             "local",
-            width=8,
-            height=6,
-            initial_length=3,
+            **SMALL_BOARD,
             steps=20,
         )
         assert summary.route_accuracy == 0.0
@@ -210,9 +213,7 @@ class TestPlay:
             StubServer(pick="UP"),
             "lev",
             "local",
-            width=8,
-            height=6,
-            initial_length=3,
+            **SMALL_BOARD,
             steps=200,
             guarded=False,
         )
@@ -224,9 +225,7 @@ class TestPlay:
             StubServer(follow_planner=True),
             "lev",
             "local",
-            width=8,
-            height=6,
-            initial_length=3,
+            **SMALL_BOARD,
             steps=5,
         )
         text = "\n".join(summary.lines())
@@ -235,9 +234,7 @@ class TestPlay:
 
 class TestPlannerBackend:
     def test_planner_never_needs_the_shield_and_reads_its_state(self):
-        summary = play(
-            PlannerClient(), "planner", "planner", width=8, height=6, initial_length=3, steps=60
-        )
+        summary = play(PlannerClient(), "planner", "planner", **SMALL_BOARD, steps=60)
         assert summary.interventions == 0 and summary.raw_safe_rate == 1.0
         assert summary.route_accuracy == 1.0 and summary.food_accuracy == 1.0
         assert summary.alive
@@ -259,8 +256,8 @@ class TestDisplay:
         assert layout_size(24, 16) == (104, 36)
 
     def test_compose_shows_shield_truth_and_backend(self):
-        game = SnakeGame(width=8, height=6, initial_length=3)
-        bad = next(m.direction for m in game.moves() if not m.safe)
+        game = SnakeGame(**SMALL_BOARD)
+        bad = unsafe_direction(game)
         decision = ModelPolicy(StubServer(pick=bad, route=0.3, food=0.9)).decide(game).to_dict()
         stats = {
             "backend": "lev",
@@ -282,7 +279,7 @@ class TestDisplay:
         assert "unsafe" in text
 
     def test_status_line_is_one_line(self):
-        game = SnakeGame(width=8, height=6, initial_length=3)
+        game = SnakeGame(**SMALL_BOARD)
         decision = ModelPolicy(StubServer(follow_planner=True)).decide(game).to_dict()
         line = status_line(
             game.snapshot(), decision, {"steps": 1, "round": 1, "steps_per_second": 2.0}
@@ -297,9 +294,7 @@ class TestReplay:
             PlannerClient(),
             "planner",
             "planner",
-            width=8,
-            height=6,
-            initial_length=3,
+            **SMALL_BOARD,
             steps=8,
             record=record,
         )
@@ -337,10 +332,8 @@ class TestReplay:
                 PlannerClient(),
                 "planner",
                 "planner",
-                width=8,
-                height=6,
+                **SMALL_BOARD,
                 seed=seed,
-                initial_length=3,
                 steps=steps,
                 record=record,
             )

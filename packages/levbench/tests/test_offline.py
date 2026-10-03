@@ -3,19 +3,26 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import math
+import random
 import sys
 from pathlib import Path
+from threading import Barrier
+from types import SimpleNamespace
 
 PKG = Path(__file__).resolve().parents[1]
 ROOT = next(p for p in PKG.parents if (p / "data").is_dir())
 sys.path.insert(0, str(PKG / "src"))
 sys.path.insert(0, str(PKG / "tests"))
 
+import httpx2  # noqa: E402
 import pytest  # noqa: E402
 from fake_transport import transport  # noqa: E402
 from levbench import batching, confidence_id, metrics, runner  # noqa: E402
-from levbench.tasks import dataset  # noqa: E402
-from typesafe_sdk import TypeSafeClient  # noqa: E402
+from levbench.pricing import cost_usd  # noqa: E402
+from levbench.tasks import FileItem, dataset, detectable_difference, load_task_file  # noqa: E402
+from typesafe_sdk import Choice, Noul, TypeSafeClient  # noqa: E402
 
 
 def fake_client() -> TypeSafeClient:
@@ -24,8 +31,6 @@ def fake_client() -> TypeSafeClient:
 
 def test_metrics_are_arithmetically_right() -> None:
     """Check the metric maths against values computed by hand."""
-    import math
-
     dist = {"a": 0.7, "b": 0.2, "c": 0.1}
     assert abs(metrics.log_loss(dist, "a") - (-math.log(0.7))) < 1e-12
     # Brier: (0.7-1)^2 + 0.2^2 + 0.1^2 = 0.09 + 0.04 + 0.01
@@ -68,11 +73,6 @@ def test_every_primitive_flattens_to_a_distribution() -> None:
 def test_ece_bins_on_the_top_probability_not_the_vendor_confidence_field() -> None:
     """lev's `confidence` is Gini concentration and Jev's is chance-corrected max
     probability, so ECE bins on the answer's own top probability instead."""
-    from types import SimpleNamespace
-
-    from levbench.runner import run_eval
-    from levbench.tasks import FileItem
-    from typesafe_sdk import Choice
 
     class Server:
         def system_one(self, state, questions):
@@ -88,7 +88,7 @@ def test_ece_bins_on_the_top_probability_not_the_vendor_confidence_field() -> No
 
     items = [FileItem(f"s{i}", {"q": "a" if i < 9 else "b"}) for i in range(10)]
     questions = {"q": Choice(instructions="?", criteria={"a": None, "b": None})}
-    report = run_eval(Server(), "lev", "stub", items, questions)
+    report = runner.run_eval(Server(), "lev", "stub", items, questions)
     # Every answer is 0.9 confident and 9 of 10 are right: perfectly calibrated.
     assert report.per_question["q"].ece == pytest.approx(0.0, abs=1e-9)
 
@@ -109,7 +109,7 @@ def test_sweep_arithmetic_over_a_fixed_billing_shape() -> None:
     state = (ROOT / "data" / "sample_policy.md").read_text()
     rows = batching.sweep(fake_client(), "jev-latest", state, [1, 2, 4, 8, 13])
 
-    assert rows[0].cost_ratio == 1.0 or abs(rows[0].cost_ratio - 1.0) < 0.01, (
+    assert abs(rows[0].cost_ratio - 1.0) < 0.01, (
         "at N=1 batched and split are the same call; ratio must be ~1"
     )
     ratios = [r.cost_ratio for r in rows]
@@ -126,10 +126,6 @@ def test_confidence_identifier_recovers_a_planted_formula() -> None:
     If planted formulas were ambiguous, a match against a real server would
     prove nothing.
     """
-    import json
-
-    import httpx2
-    from typesafe_sdk import Choice, TypeSafeClient
 
     def server(conf_fn):
         def handle(request):
@@ -176,9 +172,6 @@ def test_confidence_identifier_recovers_a_planted_formula() -> None:
 
 def test_base_url_routes_to_a_local_clone() -> None:
     """`--base-url` must actually change where requests go."""
-    import httpx2
-    from typesafe_sdk import TypeSafeClient
-
     seen: dict[str, str] = {}
 
     def handle(request):
@@ -191,8 +184,6 @@ def test_base_url_routes_to_a_local_clone() -> None:
                 "usage": {"input_tokens": 5, "output_tokens": 0},
             },
         )
-
-    from typesafe_sdk import Noul
 
     client = TypeSafeClient(
         api_key="local",
@@ -232,8 +223,6 @@ def test_empty_local_key_env_var_falls_back(monkeypatch) -> None:
 
 
 def _write_task_file(path, question_type="choice", n=5):
-    import json
-
     question = {
         "choice": {
             "type": "choice",
@@ -258,9 +247,7 @@ def _write_task_file(path, question_type="choice", n=5):
 def test_eval_runs_over_a_generated_task_file(tmp_path) -> None:
     """The lev -> levbench seam: the harness reads back and scores the kind of
     file `lev data eval` writes."""
-    from levbench.tasks import dataset as load
-
-    items, questions = load(_write_task_file(tmp_path / "gen.json"))
+    items, questions = dataset(_write_task_file(tmp_path / "gen.json"))
     report = runner.run_eval(fake_client(), "jev", "jev-latest", items, questions)
     assert len(report.calls) == 5
     assert set(report.per_question) == {"q"}
@@ -269,8 +256,6 @@ def test_eval_runs_over_a_generated_task_file(tmp_path) -> None:
 
 @pytest.mark.parametrize("question_type", ["choice", "score", "noul"])
 def test_every_primitive_round_trips_through_a_task_file(tmp_path, question_type) -> None:
-    from levbench.tasks import load_task_file
-
     items, questions = load_task_file(_write_task_file(tmp_path / "g.json", question_type))
     assert questions["q"].type == question_type
     report = runner.run_eval(fake_client(), "jev", "jev-latest", items, questions)
@@ -280,8 +265,6 @@ def test_every_primitive_round_trips_through_a_task_file(tmp_path, question_type
 def test_a_task_file_labelling_an_undefined_question_raises(tmp_path) -> None:
     """Otherwise the label is silently dropped and the eval scores fewer items
     than it was given."""
-    import json
-
     path = tmp_path / "bad.json"
     path.write_text(
         json.dumps(
@@ -291,23 +274,17 @@ def test_a_task_file_labelling_an_undefined_question_raises(tmp_path) -> None:
             }
         )
     )
-    from levbench.tasks import load_task_file
-
     with pytest.raises(ValueError, match="does not define"):
         load_task_file(path)
 
 
 def test_a_missing_task_file_says_how_to_make_one(tmp_path) -> None:
-    from levbench.tasks import load_task_file
-
     with pytest.raises(FileNotFoundError, match="lev data eval"):
         load_task_file(tmp_path / "nope.json")
 
 
 def test_detectable_difference_shrinks_with_n() -> None:
     """The number that says whether an accuracy delta means anything."""
-    from levbench.tasks import detectable_difference
-
     assert detectable_difference(24) > 0.15, "24 items cannot resolve a 5-point gain"
     assert detectable_difference(2000) < 0.02
     assert detectable_difference(0) == 1.0
@@ -347,7 +324,7 @@ def test_worst_residuals_surfaces_the_samples_that_break_a_candidate() -> None:
 
 def test_diagnosis_reports_whether_distributions_are_complete() -> None:
     """A truncated distribution makes every candidate wrong for the same reason."""
-    truncated = [(([0.6, 0.3]), 0.6)]
+    truncated = [([0.6, 0.3], 0.6)]
     assert "sum to 1 within 0.1" in confidence_id.format_diagnosis(truncated)
 
 
@@ -357,8 +334,6 @@ def test_tolerance_accounts_for_how_much_a_statistic_amplifies_rounding() -> Non
     Jev rounds to 2 dp. `max_prob` passes that error through, but
     `norm_max_prob` multiplies it by K/(K-1) to 0.010, twice a flat 5e-3.
     """
-    import random
-
     rng = random.Random(0)
     samples = []
     for size in (4, 3):
@@ -393,13 +368,6 @@ def test_detect_precision_reads_the_quantisation_off_the_data() -> None:
 
 class TestConcurrentEval:
     def test_parallel_requests_keep_item_order_and_report_wall_time(self):
-        from threading import Barrier
-        from types import SimpleNamespace
-
-        from levbench.runner import run_eval
-        from levbench.tasks import FileItem
-        from typesafe_sdk import Noul
-
         barrier = Barrier(4)
 
         class ConcurrentStub:
@@ -416,7 +384,7 @@ class TestConcurrentEval:
 
         items = [FileItem(f"state {i % 2}", {"q": i % 2 == 1}) for i in range(8)]
         questions = {"q": Noul(instructions="one?")}
-        report = run_eval(ConcurrentStub(), "lev", "stub", items, questions, concurrency=4)
+        report = runner.run_eval(ConcurrentStub(), "lev", "stub", items, questions, concurrency=4)
         assert len(report.calls) == 8 and report.wall_seconds > 0
         preds = [rec[1] for rec in report.records["q"]]
         assert preds == [i % 2 == 1 for i in range(8)], "results must stay in item order"
@@ -424,24 +392,18 @@ class TestConcurrentEval:
 
 class TestCostAccounting:
     def test_cost_is_per_million_tokens_at_list_price(self) -> None:
-        from levbench.pricing import cost_usd
-
         assert cost_usd("jev-latest", 1_000_000, 0) == pytest.approx(0.042)
         assert cost_usd("claude-opus-5", 1_000_000, 1_000_000) == pytest.approx(30.0)
         assert cost_usd("Qwen/Qwen3.5-4B", 1_000_000, 1_000_000) == 0.0, "self-hosted is unmetered"
 
     def test_billed_totals_win_over_base_counts(self) -> None:
         """The adapter's `*_total` fields include retried attempts -- what is billed."""
-        from types import SimpleNamespace
-
         usage = SimpleNamespace(
             input_tokens=10, input_tokens_total=25, output_tokens=2, output_tokens_total=4
         )
         assert runner._usage_ints(usage)[:2] == (25, 4)
 
     def test_missing_token_counts_raise_rather_than_count_as_free(self) -> None:
-        from types import SimpleNamespace
-
         with pytest.raises(ValueError, match="refusing to assume 0 tokens"):
             runner._usage_ints(SimpleNamespace(input_tokens=None, output_tokens=None))
 
