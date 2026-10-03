@@ -53,17 +53,17 @@ cover/
 *.mo
 *.pot
 
-# Django stuff:
+# Django
 *.log
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
 
-# Flask stuff:
+# Flask
 instance/
 .webassets-cache
 
-# Scrapy stuff:
+# Scrapy
 .scrapy
 
 # Sphinx documentation
@@ -85,10 +85,10 @@ ipython_config.py
 .pdm-python
 .pdm-build/
 
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
+# PEP 582 (pdm, pyflow)
 __pypackages__/
 
-# Celery stuff
+# Celery
 celerybeat-schedule
 celerybeat.pid
 
@@ -130,7 +130,7 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
-# Ruff stuff:
+# Ruff
 .ruff_cache/
 
 # PyPI configuration file
@@ -143,7 +143,7 @@ wandb/
 *.safetensors
 *.bin
 
-# Generated data — rebuild with `make data` / `make eval-set`, never commit.
+# Generated data — rebuild with `make data` / `make eval-set` / `make s1bench`, never commit.
 data/mixture/
 data/eval/
 data/s1bench/

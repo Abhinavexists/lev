@@ -116,7 +116,10 @@ def build_dataset(
     cache_dir: str | None = None,
     loader: Callable | None = None,
 ) -> dict:
-    """Split source rows before drawing or augmenting any mixture."""
+    """Write each split's JSONL and the manifest to `out_dir`; return the manifest.
+
+    Source rows are split before any mixture is drawn or augmented.
+    """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     weights = sources or default_weights()
@@ -157,7 +160,7 @@ def build_dataset(
                 n_examples if is_train else sum(len(rows) for rows in by_source[split].values())
             ),
             schema_first_fraction=schema_first_fraction,
-            # Unanswerable test rows would measure abstention, not accuracy.
+            # Unanswerable held-out rows would measure abstention, not accuracy or calibration.
             abstain_fraction=abstain_fraction if is_train else 0.0,
             # A different stream per split, so layouts do not repeat in lockstep.
             seed=seed + split_index,
@@ -168,7 +171,7 @@ def build_dataset(
             augment=augment if split is not Split.TEST else {},
             **held_out_overrides,
         )
-        # `name=name` binds the loop variable now, not the last source.
+        # Default arguments bind this iteration's source; a bare closure sees the last.
         loaders = {
             name: (lambda name=name, split=split: by_source[split][name]) for name in available
         }

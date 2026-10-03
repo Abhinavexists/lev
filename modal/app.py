@@ -84,8 +84,8 @@ VOLUMES: dict[str | PurePosixPath, modal.Volume | modal.CloudBucketMount] = {
     DATA_DIR: datasets_vol,
 }
 
-# Which preset `serve` exposes. Not a function argument: Modal requires
-# `@modal.asgi_app` functions to take none.
+# The preset `serve` exposes when `LEV_SERVE_PRESET` is unset. Not a function
+# argument: Modal requires `@modal.asgi_app` functions to take none.
 SERVE_PRESET = "4b"
 
 
@@ -135,7 +135,7 @@ def _prompt_style(value: str | None) -> Literal["plain", "chat"] | None:
 def _serve_overrides() -> list:
     """Which checkpoint the server loads, chosen from the local environment.
 
-    `LEV_SERVE_PRESET=4b-instruct make deploy` serves that preset's newest
+    `make deploy PRESET=4b-instruct` serves that preset's newest
     checkpoint; `LEV_SERVE_MODEL=Qwen/Qwen3.5-4B` serves that model frozen (no
     adapter, binary Noul) as the zero-shot baseline. Local env does not reach
     the container, so whichever are set travel as a Secret.
@@ -227,8 +227,8 @@ def train(
 def build_data(limit_per_source: int = 20_000, n_examples: int = 200_000) -> dict:
     """Download every source and write the three splits to the data volume.
 
-    No GPU: it is downloads and CPU. Run it once; `train` then fails in seconds,
-    not minutes, if the data is missing.
+    No GPU: it is downloads and CPU. Run it once, before `train`; without the
+    data `train` fails in seconds, not minutes, before loading the model.
     """
     from lev.data.build import build_dataset
 
@@ -299,8 +299,6 @@ def evaluate(
 ) -> dict:
     """Score the newest checkpoint on a held-out split, with and without the
     fitted temperature.
-
-    Runs in the container, next to the checkpoint and data volumes.
     """
     from lev.calibrate import CalibrationProfile
     from lev.train.checkpoints import CALIBRATION
@@ -496,6 +494,10 @@ def diagnose_candidates(model_id: str = "Qwen/Qwen3.5-4B-Base") -> dict:
     reordering options changed the served distribution almost entirely (L1 1.23
     on massive-en-US). A vector that differs between "alone" and "in a batch"
     would mean the padded forward leaks across rows.
+
+    Result (FINDINGS §12): representations are bit-identical across batch
+    orders (`max_abs 0.0`). massive-en-US's 60 options route to Mode A, and the
+    order sensitivity is Mode A letter-position bias.
     """
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer

@@ -20,7 +20,7 @@ def overconfident_samples(n: int = 600, seed: int = 7, sharpness: float = 4.0):
     """Logits that are directionally right but far too sharp.
 
     This is the untuned-backbone failure mode the benchmark measured at ECE 0.4252.
-    The correct class wins ~70% of the time, but the margin implies ~99%.
+    The correct class wins ~70% of the time, but the margin implies ~96%.
     """
     rng = random.Random(seed)
     samples = []
@@ -145,9 +145,10 @@ class TestOptionBands:
 
 class TestTransferSelectedCalibration:
     def family_rows(self):
-        """Two confident, accurate 'easy' families dominate by size; one small
-        'hard' family is confidently wrong half the time. The row fit is set by
-        the easy families and is overconfident on the hard one."""
+        """Equally confident rows: two large 'easy' families (400 rows each, 97%
+        and 95% correct) dominate a small 'hard' one (60 rows, 55%) and a 'mid'
+        one (120 rows, 80%). The row fit is set by the easy families and is
+        overconfident on the hard one."""
         rows = []
         for fam, n, acc in (
             ("easy1", 400, 0.97),

@@ -97,8 +97,8 @@ class TestRegistry:
     def test_mode_b_gets_a_material_share_of_the_mixture(self):
         weights = default_weights()
         share = sum(weights[n] for n in MODE_B_SOURCES)
-        # Size-proportional weighting would starve Mode B; this keeps the
-        # over-weighting.
+        # Size-proportional weighting would starve Mode B; this pins the
+        # deliberate over-weighting.
         assert share >= 0.2, f"Mode B is only {share:.1%} of the mixture"
 
     def test_weights_are_a_distribution_over_known_sources(self):

@@ -20,7 +20,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Optional model dependencies; the core needs none of them.
 # transformers 5.x: the prefix-cache fork calls `reorder_cache` on a hybrid cache.
 train = [
     "torch>=2.6",

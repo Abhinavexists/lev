@@ -115,7 +115,6 @@ class TestWindowedRate:
             return float(re.search(r"([\d.]+) it/s", out).group(1))
 
         assert rate(second) == pytest.approx(2.5, abs=0.05), second
-        # The steady-state window must not be dragged by the earlier stall.
         assert rate(second) > 5 * rate(first), f"{rate(first)} -> {rate(second)}"
 
     def test_eta_uses_the_windowed_rate(self, capsys, clock):

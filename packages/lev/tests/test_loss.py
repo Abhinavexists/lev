@@ -42,14 +42,19 @@ class TestDecisionLoss:
         )
 
     def test_brier_penalises_overconfidence_at_equal_accuracy(self, train_config):
-        """Why Brier is in the loss at all: CE alone optimises the argmax."""
+        """Asserts only that the Brier term adds a positive amount to the confident row.
+
+        `ce_gap` subtracts a Brier-off confident loss from a Brier-on `modest`, so
+        `modest - confident < ce_gap` reduces to Brier(confident) > 0, about 7e-7
+        in float32 here. Not tested: that Brier penalises overconfidence relative to
+        CE. Both rows are correct, and Brier widens the confident row's lead (CE
+        gap 0.239, CE+Brier gap 0.307).
+        """
         train_config.brier_weight = 1.0
         train_config.ordinal_weight = 0.0
         targets = torch.tensor([0])
         confident = decision_loss(torch.tensor([[8.0, 0.0, 0.0]]), targets, train_config)
         modest = decision_loss(torch.tensor([[2.0, 0.0, 0.0]]), targets, train_config)
-        # Both are correct. The overconfident one must still be preferred *less*
-        # than it would be under CE alone -- checked by comparing the gap.
         train_config.brier_weight = 0.0
         ce_gap = modest - decision_loss(torch.tensor([[8.0, 0.0, 0.0]]), targets, train_config)
         train_config.brier_weight = 1.0

@@ -1,10 +1,10 @@
 """The game loop: one decision per move, rounds, pacing, a replayable record.
 
 Round semantics follow laya: with the shield on, a finished board starts the
-next round on the next seed; unassisted, the first death ends the run so the
-survival number means something. The JSONL record is laya's format
-(`metadata`, `frame`, `round_end`, `end`) with `at` timestamps, so
-`levbench replay` plays it back at original speed.
+next round on the next seed; unassisted, the first round's end (a death or a
+cleared board) ends the run, so the survival number means something. The
+JSONL record is laya's format (`metadata`, `frame`, `round_end`, `end`) with
+`at` timestamps, so `levbench replay` plays it back at original speed.
 """
 
 from __future__ import annotations
@@ -125,10 +125,11 @@ def play(
     keys: Callable[[], str] | None = None,
     on_step: Callable[[dict, dict, dict], None] | None = None,
 ) -> RunSummary:
-    """Play until `steps` moves, `duration` seconds, Q, or -- unassisted -- a death.
+    """Play until `steps` moves, `duration` seconds, Q, or -- unassisted -- a round's end.
 
-    `fps` paces moves to a budget; None waits only on inference. `display` is a
-    `LiveDisplay`; `keys` returns pressed keys (SPACE pause, +/- speed, R reset,
+    Ctrl-C also stops the run. `fps` paces moves to a budget; None waits only
+    on inference. `display` is a `LiveDisplay`; `keys` returns pressed keys
+    (SPACE pause, +/- or arrow up/down speed, R next round on the next seed,
     Q quit); `on_step` gets `(game, decision, stats)` as dicts for headless
     status lines.
     """

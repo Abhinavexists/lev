@@ -44,7 +44,7 @@ class RouteCache:
 @dataclass
 class Batch:
     """One homogeneous training batch. Tensors are torch, typed loosely to keep
-    this module importable without torch for the shape tests."""
+    this module importable without torch."""
 
     mode: Mode
     input_ids: object  # (B, T)

@@ -31,8 +31,10 @@ QUESTION_NAME = "decision"  # S1Bench asks every record one question under this 
 
 @dataclass(frozen=True)
 class EvalItem:
-    """One record: its S1Bench id, the state to send, and the answer to compare
-    against (an option string for Choice, a level index for Score, a bool for Noul)."""
+    """One record: its S1Bench id, the state to send, and the answer to compare against.
+
+    `truth` is an option string for Choice, a level index for Score, a bool for Noul.
+    """
 
     id: str
     state: dict | str

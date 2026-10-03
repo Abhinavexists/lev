@@ -116,11 +116,11 @@ def run_resumable(
 
 
 class TestCheckpointCadence:
-    """Drives the real `run_training` loop with the expensive parts stubbed.
+    """Drives the real `run_training` loop.
 
-    Only the backbone, the forward pass and the checkpoint write are replaced;
-    the batching, the mode routing, the step counter and the checkpoint
-    decisions are the shipping code.
+    Only data loading, the backbone, the forward pass and the checkpoint write
+    are stubbed; the batching, the mode routing, the step counter and the
+    checkpoint decisions are the shipping code.
     """
 
     def run(self, tmp_path, monkeypatch, *, max_steps, checkpoint_every, epochs=1):
@@ -156,8 +156,8 @@ class TestCheckpointCadence:
 
 class TestResume:
     """A preempted run continues at the step it stopped, through the batches it
-    had not seen, on the schedule it had reached -- driven through the real loop
-    with only the backbone, forward and weight I/O stubbed."""
+    had not seen, on the schedule it had reached. Stubbed as in
+    `TestCheckpointCadence`, plus weight loading."""
 
     def test_resumes_at_the_saved_step_and_sees_only_the_remaining_batches(
         self, tmp_path, monkeypatch
@@ -190,8 +190,8 @@ class TestResume:
         assert summary["history"][0]["step"] == 0
 
     def test_weights_only_checkpoint_restarts_the_schedule(self, tmp_path, monkeypatch):
-        """A checkpoint without training state (as before ADR-021) restores its
-        weights and counts from zero."""
+        """A checkpoint without training state (pre-ADR-021) restarts the step count
+        from zero. `load_checkpoint` is stubbed, so weight restore is not checked."""
         run_resumable(tmp_path, monkeypatch, max_steps=6, persist=False)
         saved, _, summary = run_resumable(tmp_path, monkeypatch, max_steps=6)
         assert saved == [3, 6]

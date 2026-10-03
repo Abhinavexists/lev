@@ -32,6 +32,8 @@ class Decision:
     safe_directions: list[str]
     intervened: bool
     # The model's two Noul estimates, and what the planner knows to be true.
+    # `dead_end_risk` is 1 - the `risk` answer, which asks whether a safe route
+    # exists, so the field inverts its question.
     dead_end_risk: float
     food_reachable: float
     route_truth: bool
@@ -156,7 +158,10 @@ class PlannerClient:
 
 
 class ModelPolicy:
-    """Asks the server for a move; with `guarded`, refuses to execute an unsafe one."""
+    """Asks the server for a move; with `guarded`, executes the likeliest safe one.
+
+    A guarded policy raises if no safe move exists.
+    """
 
     def __init__(self, client, *, guarded: bool = True, prompt: str = "compact"):
         if prompt not in PROMPTS:

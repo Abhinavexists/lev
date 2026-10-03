@@ -27,8 +27,9 @@ class CallResult:
     served_by: str
     input_tokens: int
     output_tokens: int
-    # Adapter-only: retries the LLM needed to emit a schema-valid answer.
-    # Always 0 for Jev, where schema conformance is structural.
+    # Adapter-only: retries the LLM needed to emit a schema-valid answer, and
+    # retries after transient provider failures. Always 0 on the TypeSafe SDK
+    # (Jev, lev), where schema conformance is structural.
     schema_retries: int = 0
     transient_retries: int = 0
 
@@ -235,8 +236,8 @@ def _format_summary(report: EvalReport) -> list[str]:
     if n:
         lines.append(f"latency p50        {report.pct(0.5):.3f}s")
         lines.append(f"latency mean       {statistics.mean(report.latencies):.3f}s")
-        # Under 100 calls a p95 is one order statistic, mostly connection
-        # setup; report the slowest call instead.
+        # Under 100 calls the p95 falls among the few slowest calls, which are
+        # mostly connection setup; report the slowest call instead.
         if n >= 100:
             lines.append(f"latency p95        {report.pct(0.95):.3f}s")
         else:

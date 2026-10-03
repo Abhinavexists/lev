@@ -32,7 +32,9 @@ class Example:
 
 @dataclass(frozen=True)
 class Augment:
-    """How one source's questions may be varied in the training mixture.
+    """How one source's questions may be varied in a mixture.
+
+    Train varies wording and options; calibration varies options only (ADR-026).
 
     `negations` ask the opposite question, flipping the Noul target, so "yes"
     does not mean "good" in every row. `min_options` is the floor when a Choice
@@ -42,14 +44,14 @@ class Augment:
     paraphrases: tuple[str, ...] = ()
     negations: tuple[str, ...] = ()
     min_options: int = 2
-    # Fraction of Choice rows that keep their full option set (shuffle only).
+    # Fraction of Choice rows exempt from subsampling; they may still be shuffled.
     # For a large taxonomy this is the candidate-path head's training data.
     keep_full_fraction: float = 0.0
 
 
 @dataclass
 class MixtureSpec:
-    """Whichsources to draw from, and in what proportion."""
+    """Which sources to draw from, and in what proportion."""
 
     sources: dict[str, float] = field(default_factory=dict)
     n_examples: int = 200_000
@@ -59,7 +61,7 @@ class MixtureSpec:
     # source -> sources whose states must not be used as abstain donors,
     # because they would in fact answer the question. See `sources.ADJACENT`.
     adjacent: dict[str, frozenset[str]] = field(default_factory=dict)
-    # Training variation per source; empty means canonical questions (ADR-020).
+    # Variation per source; empty means canonical questions (ADR-020).
     augment: dict[str, Augment] = field(default_factory=dict)
     paraphrase_fraction: float = 0.7
     negate_fraction: float = 0.5
@@ -83,7 +85,10 @@ Loader = Callable[[], Iterable[Example]]
 def build_mixture(spec: MixtureSpec, loaders: dict[str, Loader]) -> Iterator[Example]:
     """Yield `spec.n_examples`, respecting weights, layout split and abstain rate.
 
-    `loaders` maps a source name to a callable returning its Examples.
+    `loaders` maps a source name to a callable returning its Examples. Raises
+    `ContaminationError` for a blocked source, `KeyError` for a source with no
+    loader, and `ValueError` for no sources, weights not summing to 1, or a
+    source that yields nothing.
     """
     spec.validate()
     missing = set(spec.sources) - set(loaders)

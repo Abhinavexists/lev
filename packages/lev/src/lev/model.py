@@ -1,8 +1,10 @@
 """Batched inference over typed questions, without token generation.
 
-The default repeats the shared prefix in one batch. The optional fork mode
-prefills it once and copies its cache for each question (ADR-023). Mode B
-requires a trained head and separately encodes uncached candidate texts.
+The default repeats the shared prefix in one batch, and rows from several
+requests can share that batch (ADR-030). The optional fork mode prefills the
+prefix once and copies its cache for each question (ADR-023). Logits are
+projected only at each row's last token. Mode B requires a trained head and
+separately encodes uncached candidate texts.
 """
 
 from __future__ import annotations
@@ -133,7 +135,8 @@ def serving_routes(
 
 
 class DecisionEngine:
-    """Answers a batch of typed questions about one state in one forward pass."""
+    """Answers typed questions about a state in one forward pass; `answer` puts
+    several prepared requests in the same forward."""
 
     def __init__(
         self,
@@ -150,7 +153,6 @@ class DecisionEngine:
         self.mode_b_head = mode_b_head
         self.checkpoint: Path | None = None
         self._candidate_cache: dict[tuple[str, ...], Any] = {}
-        # Read once: a compiled module proxies attributes, but not reliably.
         self._device = getattr(model, "device", None)
         # One forward at a time: CUDA-graph replay is not thread-safe. The server
         # batches concurrent requests into one forward instead (`lev.batcher`).

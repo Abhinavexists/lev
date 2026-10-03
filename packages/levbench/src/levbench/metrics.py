@@ -1,7 +1,8 @@
 """Accuracy and calibration over typed answer distributions.
 
 ECE uses top probability, since servers define their `confidence` fields
-differently. Noul is represented as {True: p, False: 1-p} for both backends.
+differently (lev: normalized Gini; Jev: chance-corrected max probability). Noul
+is represented as {True: p, False: 1-p} for every backend.
 """
 
 from __future__ import annotations
@@ -29,13 +30,13 @@ def to_distribution(answer: Any) -> dict[Any, float]:
 
 
 def predicted_label(answer: Any) -> Any:
-    """The argmax label. Uses the model's own pick where it reports one."""
+    """The argmax label, except for Choice, which uses the model's own pick."""
     kind = answer.type
     if kind == "noul":
         return float(answer.noul) >= 0.5
     if kind == "choice":
-        # The model's own pick, not a recomputed argmax: they differ on ties, and
-        # `choice` is what a caller acts on.
+        # Not a recomputed argmax: they differ on ties, and `choice` is what a
+        # caller acts on.
         return answer.choice
     if kind == "score":
         return max(answer.probabilities.items(), key=lambda kv: kv[1])[0]
@@ -137,7 +138,7 @@ def calibration(
 def selective_accuracy(
     records: list[tuple[dict[Any, float], Any, Any, float]], threshold: float
 ) -> tuple[float, float]:
-    """Accuracy on answers above a confidence threshold, plus the kept fraction.
+    """Accuracy on answers at or above a confidence threshold, plus the kept fraction.
 
     Decides whether confidence is usable for routing: if accuracy does not rise
     with the threshold, confidence carries no signal.

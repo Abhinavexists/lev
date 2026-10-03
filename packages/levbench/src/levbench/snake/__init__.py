@@ -9,7 +9,7 @@ Added over laya: the planner knows the true answer to both Noul questions ("is a
 safe route available?", "is food reachable?"), so the model's yes/no estimates
 are scored live. The compact prompt's state text *states* those answers, making
 this the cheapest test of whether a model reads its question -- the failure
-behind the first run's aegis2 score, 52 points below Jev.
+that put lev 52 points below Jev on aegis2 (docs/FINDINGS.md §12).
 """
 
 from .game import DIRECTIONS, SnakeGame

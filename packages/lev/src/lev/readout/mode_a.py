@@ -21,7 +21,8 @@ class LabelTokenReadout:
     prefix: str = " "
 
     def candidate_ids(self, codes: list[str]) -> list[int]:
-        """Token id for each label code, as it appears after `Answer:`."""
+        """Token id for each label code as the model emits it at the answer boundary:
+        after `Answer:` in the plain style, opening the assistant turn in chat."""
         ids = []
         for code in codes:
             encoded = self.tokenizer.encode(self.prefix + code, add_special_tokens=False)

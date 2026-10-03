@@ -32,11 +32,11 @@ class ProgressLog:
             return
 
         now = time.monotonic()
-        # A coarse clock can report zero on a fast window; never divide by it.
         elapsed = max(now - self.start, 1e-9)
         # Over the window, not since start: startup (weight loading, a Triton JIT
         # compile of minutes) made a cumulative rate read 0.33 it/s against 2.50
-        # steady-state, with the ETA wrong by the same factor (ADR-017).
+        # steady-state, with the ETA wrong by the same factor (ADR-017). A coarse
+        # clock can report zero on a fast window; never divide by it.
         span = max(now - self.mark, 1e-9)
         rate = (done - self.mark_step) / span
         remaining = (self.total - done) / rate if rate else 0.0

@@ -26,8 +26,10 @@ def latest_checkpoint(output: str | Path) -> Path | None:
 def fetch_checkpoint(spec: str | Path, cache_dir: str | None = None) -> Path:
     """A local directory as-is; a Hub id (`hf://org/name` or `org/name`) downloaded.
 
-    Anything on disk is local; otherwise only `org/name` is treated as a Hub
-    repo, so a mistyped local path fails instead of reaching the Hub.
+    Anything on disk is local. A missing path is tried as a Hub id only if,
+    after stripping `hf://`, it has exactly one `/` and does not start with `/`
+    or `.`; anything else fails locally. A typo like `checkpoints/lev-instuct`
+    therefore reaches the Hub.
     """
     local = Path(spec)
     if local.exists():
@@ -70,8 +72,9 @@ def load_training_state(path: str | Path) -> dict | None:
     file = resolve_checkpoint(path) / TRAINING_STATE
     if not file.is_file():
         return None
-    # `weights_only=False`: the payload holds the RNG state (a tuple). The file
-    # is written by `save_checkpoint`, never downloaded.
+    # `weights_only=False` unpickles arbitrary objects. Safe for files
+    # `save_checkpoint` wrote; releases omit this file, but a Hub id passed as
+    # `path` is downloaded and loaded the same way.
     return torch.load(file, map_location="cpu", weights_only=False)
 
 

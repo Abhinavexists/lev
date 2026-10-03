@@ -1,4 +1,4 @@
-"""Training: configuration, data mixture, and the LoRA fine-tune loop."""
+"""Training: presets, batching, the fine-tune loop, checkpoints, evaluation, calibration fitting."""
 
 from .config import TrainConfig
 

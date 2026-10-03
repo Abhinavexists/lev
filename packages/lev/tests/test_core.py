@@ -1,4 +1,4 @@
-"""Tests for everything that runs without a GPU: schema, labels, router, prompts."""
+"""GPU-free tests: schema, labels, router, prompts, order averaging and `lev route`."""
 
 from __future__ import annotations
 

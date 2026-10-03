@@ -98,8 +98,9 @@ class TestResolvingAReleaseBack:
 
 
 def test_model_card_describes_routing_as_it_is_served_and_trained(tmp_path):
-    """The card ships with the weights, so it must describe Mode B as training on
-    the full large taxonomies and Choice temperatures as banded by option count."""
+    """The card ships with the weights, so it must match how routing is served
+    and trained: no stale `27+` Mode B threshold, and Choice temperatures
+    described as banded by option count."""
     out = fake_checkpoint(tmp_path)
     build_release(out, tmp_path / "release", preset="4b")
     card = (tmp_path / "release" / MODEL_CARD).read_text()

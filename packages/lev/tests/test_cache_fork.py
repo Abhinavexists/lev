@@ -1,7 +1,7 @@
 """Regression test for the hybrid cache fork (`prefix_mode="fork"`).
 
 `Cache.batch_repeat_interleave` exists only on full-attention layers, and 24 of
-Qwen3.5's 32 layers are `LinearAttentionLayer` (conv/recurrent state, not
+Qwen3.5-4B's 32 layers are `LinearAttentionLayer` (conv/recurrent state, not
 keys/values), so a fork built on it died with
 
     AttributeError: 'LinearAttentionLayer' object has no attribute
@@ -80,8 +80,8 @@ def test_the_old_approach_still_fails():
     """Pin the reason for the fix, so nobody 'simplifies' it back.
 
     If a future transformers gives `LinearAttentionLayer` a
-    `batch_repeat_interleave`, this test fails and the comment in `_fork` can be
-    revisited -- deliberately, rather than by accident.
+    `batch_repeat_interleave`, this test fails and the `_fork` docstring can be
+    revisited deliberately rather than by accident.
     """
     linear = cache_utils.LinearAttentionLayer()
     assert not hasattr(linear, "batch_repeat_interleave"), (

@@ -29,7 +29,7 @@ HISTORY = "history.json"
 
 
 def build_model(config: TrainConfig, model_cache: str | None = None):
-    """Load the backbone, attach LoRA, and keep new heads at full precision."""
+    """Load the tokenizer and backbone, wrapped in LoRA when `config.use_lora`."""
     import torch
     from peft import LoraConfig, get_peft_model
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -169,8 +169,8 @@ def candidate_logits(model, batch, head=None):
 
         flat = batch.candidate_index.reshape(-1)
         reprs = candidate_repr[flat].view(*batch.candidate_index.shape, -1)  # (B, K, H)
-        # Cast hidden states up to the fp32 head. Casting down raises on GPU and
-        # is invisible on CPU, where both are fp32.
+        # Cast hidden states up to the fp32 head. Casting to the bf16 activations'
+        # dtype instead raises on GPU, and is invisible on CPU, where both are fp32.
         target_dtype = next(head.parameters()).dtype
         logits = head(question_repr.to(target_dtype), reprs.to(target_dtype), batch.candidate_mask)
 
@@ -224,8 +224,8 @@ def prepare_data(config: TrainConfig, data_dir: str):
     if not train:
         raise ValueError(f"{root / 'train.jsonl'} is empty")
 
-    # The guard again, at the last moment: the only place a hand-edited mixture
-    # is caught.
+    # Repeats the contamination guard on the manifest's Hub ids: the only check
+    # that sees a manifest edited after the build. Skipped without a manifest.
     manifest_path = root / MANIFEST
     if manifest_path.is_file():
         from ..data.contamination import assert_clean
@@ -252,8 +252,9 @@ def run_training(
     resumed; `fresh=True` starts over. A checkpoint carries the optimiser
     moments, schedule position, step, epoch, and the RNG state behind the
     epoch's data order, so a resumed run continues through the batches it had
-    not seen, at the learning rate it had reached. Checkpoints from before
-    ADR-021 restore weights only.
+    not seen, at the learning rate it had reached. A final checkpoint that falls
+    between `checkpoint_every` saves, and any from before ADR-021, restore
+    weights only.
     """
     import torch
     from torch.optim import AdamW
