@@ -99,8 +99,9 @@ class TestResolvingAReleaseBack:
     def test_a_mistyped_local_path_that_looks_like_a_hub_id_fails_clearly(self, monkeypatch):
         """`checkpoints/lev-instuct` has one `/`, so it is tried on the Hub; a
         missing repo must read as a missing path, not a raw Hub 404."""
-        import httpx
-        import huggingface_hub
+        # Both ship with the `train` extra, absent on a bare `uv sync`.
+        huggingface_hub = pytest.importorskip("huggingface_hub")
+        httpx = pytest.importorskip("httpx")
         from huggingface_hub.errors import RepositoryNotFoundError
 
         def not_on_the_hub(repo, **kwargs):
