@@ -54,7 +54,9 @@ def create_app(
             max_label_options=max_label_options,
             skip_multi_token_codes=skip_multi_token_codes,
         )
-        state["batcher"] = Batcher(engine, max_pending, max_batch_tokens, timeout)
+        state["batcher"] = Batcher(
+            engine, max_pending=max_pending, max_batch_tokens=max_batch_tokens, timeout=timeout
+        )
         state["engine"] = engine
 
     # Async, so a saturated thread pool cannot starve it.

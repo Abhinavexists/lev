@@ -56,7 +56,7 @@ def cmd_plan(args: argparse.Namespace) -> None:
         if measured["max"] > config.max_seq_len:
             print(
                 f"  note: {measured['max']} > max_seq_len {config.max_seq_len}; "
-                f"the longest prompts will be truncated"
+                "the longest prompts will be truncated"
             )
         config.avg_tokens_per_example = measured["mean"]
     config.validate()
@@ -212,11 +212,11 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
     uvicorn.run(
         create_app(
-            args.checkpoint,
-            args.model_cache,
-            args.calibration,
-            args.model,
-            args.noul_readout,
+            checkpoint_dir=args.checkpoint,
+            model_cache=args.model_cache,
+            calibration=args.calibration,
+            model_id=args.model,
+            noul_readout=args.noul_readout,
             compile=args.compile,
             prompt_style=args.prompt_style,
             max_pending=args.max_pending,

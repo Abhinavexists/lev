@@ -240,14 +240,12 @@ class DecisionEngine:
 
     def _respond(self, request: Prepared, logits, hidden) -> SystemOneResponse:
         questions, routes = request.questions, request.routes
-        prefix_ids, variants = request.prefix_ids, request.variants
-        suffixes = [v.suffix_ids for v in variants]
 
         # Calibrate each rendered variant, then average per question in the
         # question's own candidate order.
         probs_by_question: dict[str, list[list[float]]] = defaultdict(list)
         orders_by_question: dict[str, list[list[int] | None]] = defaultdict(list)
-        for row, variant in enumerate(variants):
+        for row, variant in enumerate(request.variants):
             question, route = questions[variant.name], routes[variant.name]
             scores = self._scores(
                 logits[row], None if hidden is None else hidden[row], route, question
@@ -271,9 +269,10 @@ class DecisionEngine:
             model=self.config.model_id,
             answers=answers,
             usage=Usage(
-                input_tokens=len(prefix_ids) + sum(len(s) for s in suffixes),
+                input_tokens=len(request.prefix_ids)
+                + sum(len(v.suffix_ids) for v in request.variants),
                 output_tokens=0,
-                cached_input_tokens=len(prefix_ids),
+                cached_input_tokens=len(request.prefix_ids),
             ),
         )
 
