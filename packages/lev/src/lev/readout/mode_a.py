@@ -1,8 +1,4 @@
-"""Map verified label codes to vocabulary ids at the answer boundary.
-
-The caller selects their logits at the final prompt position; no tokens
-are generated and no extra parameters are needed.
-"""
+"""Map verified label codes to vocabulary ids at the answer boundary."""
 
 from __future__ import annotations
 

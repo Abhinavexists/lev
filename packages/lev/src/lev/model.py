@@ -1,11 +1,4 @@
-"""Batched inference over typed questions, without token generation.
-
-The default repeats the shared prefix in one batch, and rows from several
-requests can share that batch (ADR-030). The optional fork mode prefills the
-prefix once and copies its cache for each question (ADR-023). Logits are
-projected only at each row's last token. Mode B requires a trained head and
-separately encodes uncached candidate texts.
-"""
+"""Batched inference over typed questions, without token generation (ADR-023, ADR-030)."""
 
 from __future__ import annotations
 
@@ -106,9 +99,8 @@ class Prepared:
 def average_orders(prob_rows: list[list[float]], orders: list[list[int] | None]) -> list[float]:
     """Map each rendered-order distribution back to canonical order and average.
 
-    Rendered position `j` showed candidate `order[j]`, so `probs[j]` belongs to
-    canonical slot `order[j]`. Averaging probabilities rather than logits keeps
-    the result a distribution without renormalising.
+    `probs[j]` belongs to canonical slot `order[j]`; averaging probabilities, not
+    logits, keeps the result a distribution.
     """
     if len(prob_rows) != len(orders):
         raise ValueError("one order per probability row")
@@ -157,10 +149,8 @@ class DecisionEngine:
         # One forward at a time: CUDA-graph replay is not thread-safe. The server
         # batches concurrent requests into one forward instead (`lev.batcher`).
         self._lock = threading.Lock()
-        # Every tokenizer call goes through this: a fast tokenizer's padding and
-        # truncation are state on the shared Rust object, set by each call, and
-        # concurrent calls from request threads and the GPU worker can raise
-        # "Already borrowed" or encode with another call's truncation.
+        # A fast tokenizer's padding and truncation are shared state: concurrent
+        # calls raise "Already borrowed" or encode with another call's truncation.
         self._tokenizer_lock = threading.RLock()
         # The decoder runs alone and `lm_head` projects only the scored
         # positions: full (rows, width, vocab) logits are GBs at a 248k vocabulary.
@@ -253,8 +243,6 @@ class DecisionEngine:
     def _respond(self, request: Prepared, logits, hidden) -> SystemOneResponse:
         questions, routes = request.questions, request.routes
 
-        # Calibrate each rendered variant, then average per question in the
-        # question's own candidate order.
         probs_by_question: dict[str, list[list[float]]] = defaultdict(list)
         orders_by_question: dict[str, list[list[int] | None]] = defaultdict(list)
         for row, variant in enumerate(request.variants):
@@ -289,12 +277,9 @@ class DecisionEngine:
         )
 
     def _orders(self, question: Question, route: Route) -> list[list[int] | None]:
-        """Return candidate orders; None means the original order.
-
-        Only lettered Choice and binary Noul in state-first layout are reversed.
-        Schema-first shares options in the prefix; ordered scales retain the
-        low-to-high ordering used in training.
-        """
+        """Candidate orders to render; None means the original order. Only lettered
+        Choice and binary Noul in state-first layout are reversed (ordered scales
+        keep training's low-to-high order; schema-first shares options)."""
         if (
             not self.config.order_average
             or route.mode is not Mode.LABEL_TOKEN
@@ -363,13 +348,9 @@ class DecisionEngine:
         return logits, hidden
 
     def _forward_single(self, rows: list[list[int]], want_hidden: bool):
-        """One right-padded batch of prefix+suffix rows; no cache, no fork.
-
-        Under `compile`, the batch is padded to a shape bucket -- rows to a
-        power of two (duplicating the first row), width to `pad_to` -- so the
-        set of recorded graphs stays small. Padding rows and tokens change no
-        real row's logits: right padding is masked, and rows are independent.
-        """
+        """One right-padded batch of prefix+suffix rows. Under `compile`, rows pad to
+        a power of two and width to `pad_to`, so few graphs are recorded; padding
+        changes no real row, since right padding is masked and rows are independent."""
         import torch
 
         device = self._device
@@ -463,13 +444,9 @@ class DecisionEngine:
         return scores[0].float().tolist()
 
     def _candidate_reprs(self, texts: list[str]):
-        """One hidden vector per candidate string, from a single batched forward.
-
-        Cached per candidate set, so a served schema encodes its candidates
-        once. The cache is unbounded: fine for a fixed set of schemas (151
-        candidates at hidden 2560 is ~1.5 MB), not for arbitrary caller-supplied
-        option sets.
-        """
+        """One hidden vector per candidate string, cached per candidate set. The cache
+        is unbounded: fine for fixed schemas (151 candidates ~1.5 MB), not for
+        arbitrary caller-supplied option sets."""
         import torch
 
         key = tuple(texts)
@@ -560,9 +537,8 @@ def load(
 
     from .train.checkpoints import CALIBRATION, resolve_checkpoint
 
-    # A checkpoint directory holds a LoRA *adapter*, not a full model: it has
-    # `adapter_config.json` and no model config. So the base is loaded from
-    # `model_id` and the adapter applied on top.
+    # A checkpoint holds a LoRA adapter, not a full model: load the base from
+    # `model_id`, then apply the adapter.
     resolved = resolve_checkpoint(checkpoint, cache_dir) if checkpoint else None
     manifest_file = resolved / "lev_release.json" if resolved else None
     if manifest_file and manifest_file.is_file():
@@ -575,9 +551,8 @@ def load(
             )
             model_id = manifest["base_model"]
 
-    # Tokenizer from the checkpoint when it saved one: the label-token readout
-    # depends on which ids a code encodes to, so a mismatch produces plausible
-    # wrong answers rather than an error.
+    # The checkpoint's own tokenizer when saved: Mode A reads specific token ids,
+    # so a mismatched tokenizer gives plausible wrong answers, not an error.
     tok_source = resolved if resolved and (resolved / "tokenizer.json").is_file() else model_id
     tokenizer = AutoTokenizer.from_pretrained(str(tok_source), cache_dir=cache_dir)
 

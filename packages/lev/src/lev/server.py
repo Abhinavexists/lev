@@ -1,10 +1,7 @@
 """FastAPI endpoints for typed decisions and model health.
 
-Malformed requests return 422; requests without a loaded engine return 529.
-Concurrent requests share forwards (`lev.batcher`); past `max_pending` in
-flight a request gets 503 at once, and one queued past `timeout` seconds 504.
-`/health` reports the resolved checkpoint, readout settings and calibration,
-and stays responsive under load.
+Status codes: 422 malformed, 529 still loading, 503 past `max_pending` in flight
+or worker stopped, 504 queued past `timeout`.
 """
 
 from __future__ import annotations
@@ -110,9 +107,8 @@ def create_app(
 
 
 async def _disconnected(request: Request) -> None:
-    """Return when the client hangs up. The body is already read, so the next
-    ASGI message is the disconnect; any other message means this server does
-    not report one, and the watch waits forever rather than spin or fire."""
+    """Return when the client hangs up. With the body read, the next ASGI message is
+    the disconnect; any other means none is reported, so wait forever, not spin."""
     if (await request.receive())["type"] == "http.disconnect":
         return
     await asyncio.Event().wait()

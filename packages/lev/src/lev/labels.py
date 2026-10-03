@@ -5,9 +5,8 @@ from __future__ import annotations
 from itertools import islice, product
 from string import ascii_uppercase
 
-# The single-letter boundary: above it the source registry treats a label set as
-# a large taxonomy, whose full set trains the Mode B head. Routing itself follows
-# the tokenizer, not this cap (ADR-025/026).
+# Above this the source registry trains a label set's full taxonomy on the Mode B
+# head; routing follows the tokenizer, not this cap (ADR-025/026).
 LABEL_OPTION_CAP = len(ascii_uppercase)
 
 
@@ -62,9 +61,8 @@ def _is_single_token(tokenizer, text: str) -> bool:
     return len(tokenizer.encode(text, add_special_tokens=False)) == 1
 
 
-# Noul is read from a rating scale rather than a two-way yes/no, so the answer
-# carries a real distribution and is calibratable like Choice and Score.
-# See docs/ARCHITECTURE.md §3.4.
+# A rating scale, not yes/no, so a Noul answer carries a calibratable
+# distribution (docs/ARCHITECTURE.md §3.4).
 NOUL_RATING_TOKENS = [str(i) for i in range(9)]
 
 

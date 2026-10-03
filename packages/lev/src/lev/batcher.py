@@ -1,11 +1,6 @@
-"""Cross-request batching and admission control for the HTTP server.
+"""Cross-request batching and admission control for the HTTP server (ADR-030).
 
-One worker thread owns the GPU. Requests queue while a forward runs, and the
-next forward takes every queued request that fits the token budget, so batches
-grow with load and an idle server adds no wait. Past `max_pending` requests in
-flight, a new one is refused at once instead of queueing behind work whose
-clients have already given up; a client that disconnects, or a request that
-waited past its deadline, is dropped before it reaches the GPU.
+One worker thread owns the GPU; each forward takes every queued request that fits.
 """
 
 from __future__ import annotations
@@ -143,11 +138,8 @@ class Batcher:
             job.future.set_result(response)
 
     def _fill(self, batch: list[_Job]) -> None:
-        """Block for one live request, then add every queued one that fits.
-
-        A request is marked running only once it joins the batch, so one held
-        back for the next batch can still be cancelled or time out.
-        """
+        # Marked running only on joining, so a request held for the next batch
+        # can still be cancelled or time out.
         rows = width = 0
         while (job := self._take(block=not batch)) is not None:
             grown_rows, grown_width = rows + job.prepared.rows, max(width, job.prepared.width)

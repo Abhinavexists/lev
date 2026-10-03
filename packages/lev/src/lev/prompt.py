@@ -1,8 +1,4 @@
-"""Prompt text and prefix/suffix boundaries shared by training and serving.
-
-State-first shares the state prefix across questions. Schema-first shares
-the question catalogue across states. Both score the final suffix token.
-"""
+"""Prompt text and prefix/suffix boundaries shared by training and serving."""
 
 from __future__ import annotations
 
@@ -91,12 +87,9 @@ def render_question(
 ) -> str:
     """Render one question. `codes` are Mode A label codes; None means Mode B.
 
-    `order` gives the display sequence as indices into the question's own
-    candidate order. Codes are assigned by position, so averaging two orders
-    cancels the model's preference for the first letter (as reflex does).
-
-    A Noul with exactly two codes is the binary yes/no readout for an untrained
-    checkpoint, which cannot rate 0-8 (ADR-007) but can pick a lettered option.
+    `order` indexes the question's own candidates; codes are positional, so two
+    orders averaged cancel first-letter bias. A Noul with two codes is the binary
+    readout for an untrained checkpoint, which cannot rate 0-8 (ADR-007).
     """
     if style is Style.CHAT:
         return _render_question_chat(name, question, codes, order)
@@ -221,9 +214,8 @@ def build(
     if layout is Layout.STATE_FIRST:
         return Rendered(prefix=state_block, suffix=f"{question_block}\n{ANSWER_CUE}")
 
-    # Schema-first: the question catalogue is the reusable prefix, so it must not
-    # depend on the state. `cached_schema` lets a caller pass the whole catalogue
-    # (every question, not just this one) to be cached across requests.
+    # Schema-first: the catalogue is the reusable prefix and must not depend on the
+    # state; `cached_schema` passes the whole catalogue, not just this question.
     prefix = (cached_schema if cached_schema is not None else question_block) + "\n\n"
     return Rendered(prefix=prefix, suffix=f"{state_block}{ANSWER_CUE}")
 

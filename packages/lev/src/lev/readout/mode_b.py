@@ -1,9 +1,4 @@
-"""Score candidate text with a shared attention head.
-
-Question and candidate representations are projected to the same dimension.
-Candidates attend to each other before scoring. Ordered targets also use
-`ordinal_penalty` during training.
-"""
+"""Score candidate text with a shared set-attention head (Mode B)."""
 
 from __future__ import annotations
 

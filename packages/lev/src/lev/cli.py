@@ -10,11 +10,7 @@ from pathlib import Path
 
 
 def _measure_tokens(config, data_dir: str, sample: int = 1500) -> dict:
-    """Tokenise real rendered prompts and report the length distribution.
-
-    The budget rests on `avg_tokens_per_example`; a guessed value was once off
-    by 10x (ADR-016).
-    """
+    """Length distribution of real rendered prompts; the budget rests on it (ADR-016)."""
     import statistics
 
     from transformers import AutoTokenizer
@@ -78,7 +74,6 @@ def cmd_route(args: argparse.Namespace) -> None:
         skip_multi_token_codes=not args.no_skip_codes,
     )
     for name, r in serving_routes(request.questions, tokenizer, config).items():
-        # Mode B routes carry no codes.
         codes = ""
         if r.codes:
             codes = f"  codes={r.codes[:6]}{'...' if len(r.codes) > 6 else ''}"

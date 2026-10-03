@@ -1,8 +1,4 @@
-"""Route questions to label-token readout or candidate-text scoring.
-
-Mode A requires a verified single token per option and respects an optional
-policy cap. Questions that do not fit use Mode B.
-"""
+"""Route questions to label-token readout (Mode A) or candidate-text scoring (Mode B)."""
 
 from __future__ import annotations
 
@@ -50,13 +46,10 @@ def route(
 ) -> Route:
     """Pick a mode for one question.
 
-    `max_label_options` is an optional policy cap below the tokenizer limit: decider
-    measured Mode A losing 5-24 points on 50-219 options. None uses Mode A whenever
-    it is expressible.
-
-    `noul_binary` reads a Noul as two lettered options instead of the 0-8 rating
-    scale. The scale is the trained, calibratable form, but a stock checkpoint pins
-    it at one end regardless of content (ADR-007), so untrained serving uses this.
+    `max_label_options` caps Mode A below the tokenizer limit (decider measured it
+    losing 5-24 points on 50-219 options); None uses Mode A whenever it fits.
+    `noul_binary` reads a Noul as two lettered options: a stock checkpoint pins the
+    0-8 scale at one end regardless of content (ADR-007).
     """
     n = candidate_count(question)
 

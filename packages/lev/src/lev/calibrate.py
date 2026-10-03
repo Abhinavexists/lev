@@ -1,8 +1,4 @@
-"""Temperature scaling by question type, readout mode and Choice option count.
-
-Fits reject test, eval and holdout splits. Transfer selection compares row-
-and family-weighted fits using leave-one-family-out ECE (ADR-028).
-"""
+"""Temperature scaling per question type, readout mode and Choice option band (ADR-028)."""
 
 from __future__ import annotations
 
@@ -51,11 +47,9 @@ def fit_temperature(
     tol: float = 1e-4,
     weights: Sequence[float] | None = None,
 ) -> float:
-    """Minimise NLL over temperature by ternary search.
+    """Minimise NLL over temperature by ternary search (NLL is unimodal in it).
 
-    NLL is unimodal in temperature for fixed logits, so this needs no gradients
-    and no torch. Returns the identity, 1.0, when no temperature beats it (a flat
-    objective, e.g. all-equal logits).
+    Returns 1.0 when no temperature beats the identity, e.g. for all-equal logits.
     """
     if not samples:
         return 1.0
@@ -107,11 +101,10 @@ def fit_for_transfer(
     split_name: str,
     min_samples: int = 50,
 ) -> tuple[CalibrationProfile, dict[str, dict]]:
-    """Per bucket, fit both ways and keep the one that transfers better.
+    """Per bucket, keep whichever of the row and family fits transfers better.
 
-    Buckets drawn from fewer than `MIN_FAMILIES_FOR_TRANSFER` families have no
-    meaningful leave-one-out, and keep the row fit. Returns the profile and a
-    per-bucket report of both temperatures, both transfer ECEs and the choice.
+    Buckets from fewer than `MIN_FAMILIES_FOR_TRANSFER` families keep the row fit.
+    Returns the profile and a per-bucket report of both fits and the choice.
     """
     _refuse_held_out(split_name)
     profile = CalibrationProfile(fitted_on=f"{split_name} (transfer-selected)")
