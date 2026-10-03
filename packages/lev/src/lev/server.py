@@ -9,12 +9,13 @@ and stays responsive under load.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Literal
 
 # Module level: FastAPI resolves the endpoint's string annotations here.
 from fastapi import Request
 
-from .batcher import Batcher, ClientGone, Overloaded
+from .batcher import Batcher, ClientGone, Overloaded, WorkerStopped
 from .model import load
 from .types import SystemOneRequest, SystemOneResponse
 
@@ -67,7 +68,7 @@ def create_app(
             return {"status": "loading", "model": model_id}
         config = engine.config
         return {
-            "status": "ok",
+            "status": "ok" if state["batcher"].alive else "worker stopped",
             "model": config.model_id,
             "checkpoint": str(engine.checkpoint) if engine.checkpoint else None,
             "calibrated": bool(engine.calibration.temperatures),
@@ -100,6 +101,8 @@ def create_app(
             ) from exc
         except TimeoutError as exc:
             raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except WorkerStopped as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ClientGone:
             return Response(status_code=499)  # nobody is listening; for the access log
 
@@ -108,6 +111,8 @@ def create_app(
 
 async def _disconnected(request: Request) -> None:
     """Return when the client hangs up. The body is already read, so the next
-    ASGI message is the disconnect."""
-    while (await request.receive())["type"] != "http.disconnect":
-        pass
+    ASGI message is the disconnect; any other message means this server does
+    not report one, and the watch waits forever rather than spin or fire."""
+    if (await request.receive())["type"] == "http.disconnect":
+        return
+    await asyncio.Event().wait()

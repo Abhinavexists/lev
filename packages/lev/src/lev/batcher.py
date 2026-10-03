@@ -14,6 +14,7 @@ import asyncio
 import queue
 import threading
 import time
+import traceback
 from collections.abc import Awaitable, Callable
 from concurrent.futures import Future
 from dataclasses import dataclass
@@ -28,6 +29,10 @@ class Overloaded(Exception):
 
 class ClientGone(Exception):
     """The client disconnected before its answer was ready."""
+
+
+class WorkerStopped(RuntimeError):
+    """The GPU worker thread has exited; the server needs a restart."""
 
 
 @dataclass
@@ -51,43 +56,76 @@ class Batcher:
         # A request larger than the budget still runs, alone.
         self.max_batch_tokens = max_batch_tokens
         self.timeout = timeout
-        # Read and written only on the event loop, so it needs no lock.
-        self.pending = 0
+        # A request counts until the worker finishes or skips it, not until its
+        # client leaves: abandoned work still occupies the GPU.
+        self._pending = 0
+        self._pending_lock = threading.Lock()
         self._queue: queue.SimpleQueue[_Job] = queue.SimpleQueue()
         self._held: _Job | None = None
-        threading.Thread(target=self._run, name="lev-gpu", daemon=True).start()
+        self._batch: list[_Job] = []
+        self._worker = threading.Thread(target=self._run, name="lev-gpu", daemon=True)
+        self._worker.start()
+
+    @property
+    def pending(self) -> int:
+        with self._pending_lock:
+            return self._pending
+
+    @property
+    def alive(self) -> bool:
+        return self._worker.is_alive()
 
     async def submit(
         self, prepared: Prepared, disconnected: Callable[[], Awaitable] | None = None
     ) -> SystemOneResponse:
         """Queue one request and wait for its answer. `disconnected` makes an
         awaitable that completes if the client leaves; it is called only once
-        the request is admitted."""
-        if self.pending >= self.max_pending:
-            raise Overloaded(f"{self.pending} requests in flight; retry shortly")
+        the request is admitted. If it raises instead, disconnects go undetected
+        and the answer is awaited alone."""
+        if not self.alive:
+            raise WorkerStopped("the GPU worker has stopped; restart the server")
+        with self._pending_lock:
+            if self._pending >= self.max_pending:
+                raise Overloaded(f"{self._pending} requests in flight; retry shortly")
+            self._pending += 1
         job = _Job(prepared, Future(), time.monotonic() + self.timeout)
-        self.pending += 1
+        job.future.add_done_callback(self._release)
         self._queue.put(job)
-        # Cancelling this wrapper cancels `job.future`, which the worker skips.
+        # Cancelling this wrapper cancels `job.future` unless the worker has
+        # already started it.
         result = asyncio.wrap_future(job.future)
+        if disconnected is None:
+            return await result
+        watcher = asyncio.ensure_future(disconnected())
         try:
-            if disconnected is None:
+            await asyncio.wait({result, watcher}, return_when=asyncio.FIRST_COMPLETED)
+            if not result.done() and watcher.exception() is not None:
                 return await result
-            watcher = asyncio.ensure_future(disconnected())
-            try:
-                await asyncio.wait({result, watcher}, return_when=asyncio.FIRST_COMPLETED)
-            finally:
-                watcher.cancel()
-            if not result.done():
-                result.cancel()
-                raise ClientGone
-            return result.result()
         finally:
-            self.pending -= 1
+            if watcher.done() and not watcher.cancelled():
+                watcher.exception()  # retrieved, so asyncio does not log it as lost
+            watcher.cancel()
+        if not result.done():
+            result.cancel()
+            raise ClientGone
+        return result.result()
+
+    def _release(self, _future: Future) -> None:
+        with self._pending_lock:
+            self._pending -= 1
 
     def _run(self) -> None:
-        while True:
-            self._compute(self._next_batch())
+        try:
+            while True:
+                self._batch = []
+                try:
+                    self._fill(self._batch)
+                    self._compute(self._batch)
+                except Exception as error:  # noqa: BLE001 -- the worker must outlive any one batch
+                    traceback.print_exc()
+                    _fail([job.future for job in self._batch], error)
+        finally:
+            self._fail_queued()
 
     def _compute(self, batch: list[_Job]) -> None:
         try:
@@ -104,35 +142,61 @@ class Batcher:
         for job, response in zip(batch, responses, strict=True):
             job.future.set_result(response)
 
-    def _next_batch(self) -> list[_Job]:
-        """Block for one live request, then take every queued one that fits."""
-        first = self._take(block=True)
-        assert first is not None
-        batch, rows, width = [first], first.prepared.rows, first.prepared.width
-        while (job := self._take(block=False)) is not None:
+    def _fill(self, batch: list[_Job]) -> None:
+        """Block for one live request, then add every queued one that fits.
+
+        A request is marked running only once it joins the batch, so one held
+        back for the next batch can still be cancelled or time out.
+        """
+        rows = width = 0
+        while (job := self._take(block=not batch)) is not None:
             grown_rows, grown_width = rows + job.prepared.rows, max(width, job.prepared.width)
-            if grown_rows * grown_width > self.max_batch_tokens:
+            if batch and grown_rows * grown_width > self.max_batch_tokens:
                 self._held = job
-                break
+                return
+            if not job.future.set_running_or_notify_cancel():
+                continue  # the client left between `_take` and here
             batch.append(job)
             rows, width = grown_rows, grown_width
-        return batch
 
     def _take(self, block: bool) -> _Job | None:
-        """The next request still worth computing, marked running."""
+        """The next request still worth computing, not yet marked running."""
         while True:
             if self._held is not None:
                 job, self._held = self._held, None
-                return job
-            try:
-                job = self._queue.get(block=block)
-            except queue.Empty:
-                return None
-            if not job.future.set_running_or_notify_cancel():
-                continue  # the client left while it was queued
+            else:
+                try:
+                    job = self._queue.get(block=block)
+                except queue.Empty:
+                    return None
+            if job.future.cancelled():
+                continue  # the client left while it waited
             if time.monotonic() > job.deadline:
-                job.future.set_exception(
-                    TimeoutError(f"queued longer than the {self.timeout:.0f}s deadline")
-                )
+                if job.future.set_running_or_notify_cancel():
+                    job.future.set_exception(
+                        TimeoutError(f"queued longer than the {self.timeout:.0f}s deadline")
+                    )
                 continue
             return job
+
+    def _fail_queued(self) -> None:
+        """On worker exit, fail the running batch and everything still waiting,
+        rather than leave them hanging."""
+        stopped = WorkerStopped("the GPU worker has stopped; restart the server")
+        _fail([job.future for job in self._batch], stopped)
+        while (job := self._held or self._next_queued()) is not None:
+            self._held = None
+            if job.future.set_running_or_notify_cancel():
+                job.future.set_exception(stopped)
+
+    def _next_queued(self) -> _Job | None:
+        try:
+            return self._queue.get_nowait()
+        except queue.Empty:
+            return None
+
+
+def _fail(futures: list[Future], error: BaseException) -> None:
+    for future in futures:
+        if not future.done():
+            future.set_exception(error)
