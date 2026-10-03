@@ -15,14 +15,14 @@ from typing import TYPE_CHECKING, Any, Literal
 if TYPE_CHECKING:  # `lev` is installed in the container, not where deploy runs.
     from lev.types import Answer
 
-from dotenv import load_dotenv
-
 import modal
 
-# The deploy-time knobs below are read where `modal deploy` runs, not in the
-# container, so they come from this machine's environment — and `.env` is part
-# of it. A real export still wins, since load_dotenv does not override.
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ModuleNotFoundError:
+    pass
 
 APP_NAME = "lev"
 
@@ -113,10 +113,14 @@ def _hf_secrets() -> list:
 #   LEV_SERVE_REGION       a Modal region near the client; the measured 280 ms
 #                          TCP round trip is a continent, not a server.
 #   LEV_SERVE_SCALEDOWN    idle seconds before a container stops (default 300).
+#   LEV_SERVE_MAX          container ceiling (default unset: Modal's own limit).
+#                          Pin it for a benchmark sweep, where a parallel client
+#                          would otherwise open a GPU per burst of requests.
 SERVE_CONCURRENCY = int(os.environ.get("LEV_SERVE_CONCURRENCY", "4"))
 SERVE_WARM = int(os.environ.get("LEV_SERVE_WARM", "0"))
 SERVE_REGION = os.environ.get("LEV_SERVE_REGION")
 SERVE_SCALEDOWN = int(os.environ.get("LEV_SERVE_SCALEDOWN", "300"))
+SERVE_MAX = int(os.environ["LEV_SERVE_MAX"]) if os.environ.get("LEV_SERVE_MAX") else None
 
 
 def _prompt_style(value: str | None) -> Literal["plain", "chat"] | None:
@@ -334,6 +338,7 @@ def evaluate(
     secrets=SECRETS,
     scaledown_window=SERVE_SCALEDOWN,
     min_containers=SERVE_WARM,
+    max_containers=SERVE_MAX,
     region=SERVE_REGION or None,  # `LEV_SERVE_REGION=` must mean unset, not ""
 )
 @modal.concurrent(max_inputs=SERVE_CONCURRENCY)
