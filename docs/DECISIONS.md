@@ -581,6 +581,62 @@ Serving now skips by default; training does not, so Mode B keeps its data. Mode 
 
 ---
 
+## ADR-029 — Score is read in one order; measure the position effect, and offer averaging off by default
+
+**Open.** Proposed in [#1](https://github.com/Abhinavexists/lev/issues/1); the default is the maintainer's call.
+
+**Problem.** Choice and binary Noul are read in two orders and averaged, which cancels the preference for the first letter (ADR-020). Score is not: its levels keep the low-to-high order training uses, because reversing them measured -2.4 points on helpsteer2, inside sampling noise, on a prompt training never produces (FINDINGS §12). What that leaves was not measured. On `interfaze-ai/lev` with Score questions over the 290 states of sokudan's `bench_en`, an identical-option control (every level the same text, so levels differ only by position and code) put slot 0 at -0.332 below the mean in calibrated log-probability and -0.931 in raw scores, and the first slot won 0.270 of the decisions over all six orders of three levels, where an order-free readout is at 1/3 (#1). The check is the one NandhaKishorM/laya#259 added to Laya, whose gate is -0.20 on raw scores.
+
+**Options.**
+
+- (a) Average Score over orders by default: `reversed` (2 rows, as Choice) or `cyclic` (every rotation, K rows). Both show the model level orders training never produces; in the `chat` style each line still names its level (`(level i of K)`).
+- (b) Keep Score in one order by default, ship averaging as `EngineConfig.score_order_average` (off), and put the control in CI: `lev presentation-checks` against a committed report, failing on drift.
+
+**What is measured, fixed before the runs.** One checkpoint (`interfaze-ai/lev`, bf16, one RTX 5090), sokudan's `bench_en` (290) and `bench_ja` (300), `score_order_average` in {off, reversed, cyclic}:
+
+1. The identical-option control and the first-slot rate, for Score and Choice, with the shipped calibration and raw (an empty `CalibrationProfile`).
+2. Score RPS and accuracy on the benches' 3-level urgency question, with Choice and Noul on the same requests expected unchanged (Score rows are the only rows added).
+3. Milliseconds per three-question request, as the cost of each mode.
+4. With averaging off, every answer identical to the current code on the same items.
+
+Every result is reported whichever way it goes, including accuracy that does not improve.
+
+**Evidence.** Run 2026-09-29 on `interfaze-ai/lev` (HF f8ef711), bf16, one RTX 5090. The numbers behind every table are in [`data/adr-029-summary.json`](../data/adr-029-summary.json), and the raw per-run reports are available on request. The committed report CI compares against is [`data/presentation-checks.json`](../data/presentation-checks.json). `bench_ja` is Japanese, outside Lev's target language, so its rows are a reference only; `bench_en` is the one that bears on the decision.
+
+Issue #1 reproduced with averaging off (Score probe alone, 12 questions per call): identical control -0.332 calibrated / -0.931 raw, first-slot rate 0.270. With averaging off, every answer on 20 items of each bench, the probe included, is identical to the current code.
+
+Score, identical control (slot 0 minus the mean; gate -0.20 raw) and first-slot rate (1/3 is order-free):
+
+```text
+               bench_en (290)                      bench_ja (300, reference)
+            calibrated   raw     first slot    calibrated   raw     first slot
+  off         -0.332   -0.931      0.270         -0.518   -1.453      0.240
+  reversed    -0.010   +0.088      0.321         -0.059   +0.038      0.315
+  cyclic      -0.016   -0.037      0.312         -0.056   -0.131      0.301
+```
+
+Choice, which is already read in two orders, with Score averaging off: identical control -0.100 / -0.160 (en) and -0.055 / -0.036 (ja), first-slot rate 0.333 and 0.331.
+
+The benches' three questions per request (4-way Choice, 3-level Score, Noul), shipped calibration:
+
+```text
+                  Score acc   Score RPS   Choice acc   Noul acc   Noul AUROC   ms / request
+  en  off           0.583       0.150       0.917        0.938      0.9778       164.6
+      reversed      0.652       0.128       0.917        0.938      0.9780       184.0  (1.12x)
+      cyclic        0.641       0.125       0.917        0.938      0.9784       215.4  (1.31x)
+  ja  off (ref.)    0.643       0.138       0.887        0.817      0.8890       150.9
+      reversed      0.730       0.108       0.887        0.813      0.8877       171.4  (1.14x)
+      cyclic        0.717       0.108       0.887        0.813      0.8876       199.9  (1.32x)
+```
+
+Choice does not move. Noul moves by one item on bench_ja, and asked alone it is identical under all three modes on all 300 items: the change comes from the batch the extra Score rows make (bf16), not from the Noul readout.
+
+Two caveats. Asking the probe's questions together or one at a time differs by up to |Δp| 0.18 (raw, bench_ja, off) on the three states checked per run, so a metric is tied to how many questions share a call; `lev presentation-checks` fixes that at one call of at most 24 Score rows. And `cyclic` needs that cap: 42 Score rows per call exhausted a 32 GB card. Even capped, PyTorch's reserved memory went past the card (44-49 GiB for `cyclic`, 62 GiB for the default probe of both kinds), which Windows backs with shared system memory.
+
+**Reading, for the decision.** `reversed` removes most of the slot-0 deficit and lifts Score accuracy by 6.9 points on bench_en (8.7 on the Japanese reference bench) at 1.12-1.14x the time. `cyclic` is no better than `reversed` on either bench and costs 1.31-1.32x. Neither was tested on helpsteer2, the case that kept Score out of averaging in ADR-020, and both benches are one family of synthetic support messages. The proposal keeps the default off and leaves the choice between (a) and (b) to the maintainer.
+
+---
+
 ## Open questions
 
 | # | Question | How it gets settled |

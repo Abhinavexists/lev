@@ -1,0 +1,134 @@
+{
+ "about": "Summary of the ADR-029 runs: the numbers behind its tables. interfaze-ai/lev (HF f8ef711), bf16, one RTX 5090, 2026-09-29. Raw per-run reports are not committed and are available on request.",
+ "benches": {
+  "bench_en": "sokudan data/bench_en.jsonl, 290 states (English)",
+  "bench_ja": "sokudan data/bench_ja.jsonl, 300 states (Japanese, outside Lev's target language; reference only)"
+ },
+ "score_presentation": {
+  "bench_en": {
+   "off": {
+    "identical_calibrated": -0.3321,
+    "identical_raw": -0.931,
+    "first_slot": 0.2695,
+    "first_slot_raw": 0.2695
+   },
+   "reversed": {
+    "identical_calibrated": -0.0101,
+    "identical_raw": 0.0878,
+    "first_slot": 0.3207,
+    "first_slot_raw": 0.3207
+   },
+   "cyclic": {
+    "identical_calibrated": -0.0161,
+    "identical_raw": -0.0365,
+    "first_slot": 0.3126,
+    "first_slot_raw": 0.3121
+   }
+  },
+  "bench_ja": {
+   "off": {
+    "identical_calibrated": -0.5184,
+    "identical_raw": -1.4532,
+    "first_slot": 0.24,
+    "first_slot_raw": 0.24
+   },
+   "reversed": {
+    "identical_calibrated": -0.0586,
+    "identical_raw": 0.038,
+    "first_slot": 0.315,
+    "first_slot_raw": 0.3139
+   },
+   "cyclic": {
+    "identical_calibrated": -0.0558,
+    "identical_raw": -0.1313,
+    "first_slot": 0.3017,
+    "first_slot_raw": 0.3006
+   }
+  }
+ },
+ "choice_presentation_off": {
+  "bench_en": {
+   "identical_calibrated": -0.1001,
+   "identical_raw": -0.1597,
+   "first_slot": 0.3333
+  },
+  "bench_ja": {
+   "identical_calibrated": -0.0547,
+   "identical_raw": -0.0362,
+   "first_slot": 0.3306
+  }
+ },
+ "bench_accuracy": {
+  "bench_en": {
+   "off": {
+    "score_acc": 0.5828,
+    "score_rps": 0.1504,
+    "choice_acc": 0.9172,
+    "noul_acc": 0.9379,
+    "noul_auroc": 0.9778,
+    "ms_per_request": 164.6
+   },
+   "reversed": {
+    "score_acc": 0.6517,
+    "score_rps": 0.1275,
+    "choice_acc": 0.9172,
+    "noul_acc": 0.9379,
+    "noul_auroc": 0.978,
+    "ms_per_request": 184.0
+   },
+   "cyclic": {
+    "score_acc": 0.6414,
+    "score_rps": 0.1249,
+    "choice_acc": 0.9172,
+    "noul_acc": 0.9379,
+    "noul_auroc": 0.9784,
+    "ms_per_request": 215.4
+   }
+  },
+  "bench_ja": {
+   "off": {
+    "score_acc": 0.6433,
+    "score_rps": 0.1384,
+    "choice_acc": 0.8867,
+    "noul_acc": 0.8167,
+    "noul_auroc": 0.889,
+    "ms_per_request": 150.9
+   },
+   "reversed": {
+    "score_acc": 0.73,
+    "score_rps": 0.1079,
+    "choice_acc": 0.8867,
+    "noul_acc": 0.8133,
+    "noul_auroc": 0.8877,
+    "ms_per_request": 171.4
+   },
+   "cyclic": {
+    "score_acc": 0.7167,
+    "score_rps": 0.108,
+    "choice_acc": 0.8867,
+    "noul_acc": 0.8133,
+    "noul_auroc": 0.8876,
+    "ms_per_request": 199.9
+   }
+  }
+ },
+ "noul_alone_bench_ja": {
+  "requests": 300,
+  "identical_across_modes": true
+ },
+ "off_vs_main_cf104b6": {
+  "bench_en": {
+   "responses": 40,
+   "identical": true
+  },
+  "bench_ja": {
+   "responses": 40,
+   "identical": true
+  }
+ },
+ "issue_1_reproduced": {
+  "identical_calibrated": -0.3321,
+  "identical_raw": -0.931,
+  "first_slot": 0.2695
+ }
+}

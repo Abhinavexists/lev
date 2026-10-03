@@ -1,0 +1,88 @@
+{
+ "about": "Committed report for `lev presentation-checks --compare` (ADR-029). One run: interfaze-ai/lev (HF f8ef711), bf16, one RTX 5090, the shipped calibration, score_order_average off, kinds score and choice, lang en, 2026-09-29.",
+ "checkpoint": "interfaze-ai/lev",
+ "states": "sokudan bench_en.jsonl (github.com/hiroki-abe-58/sokudan, data/bench_en.jsonl, CC BY 4.0), 290 states",
+ "n_states": 290,
+ "lang": "en",
+ "raw": false,
+ "kinds": [
+  "score",
+  "choice"
+ ],
+ "score_order_average": "off",
+ "split_checks": false,
+ "max_score_rows": 24,
+ "checkpoint_revision": "f8ef71157ec06a7d3b6435bc0756f9d735c33748",
+ "dtype": "torch.bfloat16",
+ "packed_max_abs_diff": 0.0207,
+ "checks": {
+  "score": {
+   "identical": {
+    "metric": -0.3323,
+    "leave_one_out": [
+     -0.3362,
+     -0.3298
+    ],
+    "gate": -0.2,
+    "passed": false,
+    "by_config": {
+     "moderate|3": -0.1182,
+     "moderate|4": -0.2365,
+     "moderate|5": -0.3193,
+     "a request|3": -0.3249,
+     "a request|4": -0.4617,
+     "a request|5": -0.5332
+    }
+   },
+   "first_slot": {
+    "metric": 0.2713,
+    "leave_one_out": [
+     0.2699,
+     0.2722
+    ],
+    "gate": 0.15,
+    "passed": true,
+    "decisions": 1740,
+    "argmax_by_slot": [
+     472,
+     598,
+     670
+    ]
+   }
+  },
+  "choice": {
+   "identical": {
+    "metric": -0.1006,
+    "leave_one_out": [
+     -0.1024,
+     -0.0991
+    ],
+    "gate": -0.2,
+    "passed": true,
+    "by_config": {
+     "a team|3": -0.0569,
+     "a team|4": -0.1228,
+     "a team|5": -0.2804,
+     "a request|3": 0.0892,
+     "a request|4": -0.0295,
+     "a request|5": -0.2033
+    }
+   },
+   "first_slot": {
+    "metric": 0.3333,
+    "leave_one_out": [
+     0.3328,
+     0.3339
+    ],
+    "gate": 0.15,
+    "passed": true,
+    "decisions": 1740,
+    "argmax_by_slot": [
+     580,
+     581,
+     579
+    ]
+   }
+  }
+ }
+}
