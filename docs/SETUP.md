@@ -83,7 +83,7 @@ Read on the machine where `modal deploy` runs — from the environment or from `
 | `LEV_SERVE_MAX_LABEL_OPTIONS` | unset | Cap on label options. Unset means Mode A up to the tokenizer limit (ADR-025) |
 | `LEV_SERVE_PROMPT` | the preset's | Override the prompt style, mainly for a frozen model |
 | `LEV_SERVE_SKIP_CODES` | `1` | Skip label codes that tokenize to more than one token (ADR-028) |
-| `LEV_SERVE_CONCURRENCY` | `4` | Requests one container handles at once; GPU forwards serialise, parsing and network overlap |
+| `LEV_SERVE_CONCURRENCY` | `32` | Requests one container handles at once; concurrent requests share batched forwards |
 | `LEV_SERVE_WARM` | `0` | Containers kept running. One removes the 20-55 s cold start, at the cost of an idle GPU |
 | `LEV_SERVE_REGION` | unset | A Modal region near the client; the measured 280 ms round trip is a continent, not a server |
 | `LEV_SERVE_SCALEDOWN` | `300` | Idle seconds before a container stops |

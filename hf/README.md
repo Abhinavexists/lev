@@ -125,7 +125,7 @@ response = client.system_one(
 print(response.answers["team"].choice, response.answers["bug"].noul)  # technical 0.92
 ```
 
-`GET /health` reports the loaded checkpoint, whether calibration is active, and the routing settings. The server batches every question in a request into one forward pass, accepts concurrent requests, and returns 422 with the reason for a malformed question.
+`GET /health` reports the loaded checkpoint, whether calibration is active, and the routing settings. The server batches every question in a request into one forward pass, and concurrent requests into shared forwards, so clients need not batch for throughput. Past `--max-pending` requests in flight it answers 503 at once rather than queueing, and it returns 422 with the reason for a malformed question.
 
 ## Benchmarks
 

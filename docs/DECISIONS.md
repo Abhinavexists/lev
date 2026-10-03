@@ -581,6 +581,31 @@ Serving now skips by default; training does not, so Mode B keeps its data. Mode 
 
 ---
 
+## ADR-030 — The server batches across requests and refuses work it cannot do in time
+
+**Accepted.**
+
+**What broke.** A user saw 26 requests/s on a 3090, then a server that stopped answering under more parallel requests until restarted. Both endpoints were sync, so they shared Starlette's ~40-thread pool, and every inference thread queued on the engine lock: one request per forward, no limit on queued work, and `/health` starved with the rest. Abandoned requests still ran, so a client that retries grows the backlog faster than it drains. Reproduced with the real `create_app` and a 50 ms stand-in forward: 20 parallel requests all succeed at 20/s; 300 parallel requests with a 2 s client timeout give **0 successes**, `/health` times out, and the server is still busy with the abandoned requests after every client has left. A second cause on a 24 GB card: the engine kept full `(rows, width, vocab)` logits, 248,320 wide, for one value per row. Eight rating Nouls on a 991-token state measured +3.40 GB peak memory per request (fp32 on CPU).
+
+**Decision.** Three changes, none of which needs vLLM or SGLang:
+
+1. **Last-token projection.** The engine runs the decoder alone and applies `lm_head` only at each row's last real token. That gives `(rows, vocab)` logits, and the Mode B hidden state comes from the same gather instead of `output_hidden_states`' 33 layers. Same request: +0.06 GB. Against the old engine on a random Qwen3.5 with both layer kinds, max |Δp| is 1.7e-8 across Mode A and Mode B in both prefix modes; on the released weights (bf16, MPS) it is exactly 0 on nine S1Bench requests. `hidden_states[-1]` equals the decoder's `last_hidden_state` exactly, so the trained Mode B head sees the same vectors.
+2. **Cross-request batching (`lev.batcher`).** One worker thread owns the GPU. A request is validated and tokenised (`DecisionEngine.prepare`), then queued. Each forward takes every queued request that fits `max_batch_tokens` (rows × widest row) and runs them as one batch (`DecisionEngine.answer`). There is no timer: batches grow only while a forward is already running, so an idle server adds no wait. Rows are independent, so a batched request has the same inputs as a solo one. This is what vLLM's continuous batching reduces to when there is no decode loop.
+3. **Admission control.** A request arriving with `max_pending` (64) already in flight gets 503 with `Retry-After` immediately. A request whose client disconnects, or that has waited past `timeout` (30 s, then 504), is dropped before the GPU. `/health` is async and reports `in_flight`.
+
+**Measured, CPU stand-in** (tiny random Qwen3.5 plus a fixed 50 ms per forward to imitate the launch-bound GPU of FINDINGS §13; not a GPU number):
+
+```text
+    old server   20 parallel: 20/s, one request per forward      300 parallel @2 s: 0 ok, /health timed out
+    new server   20 parallel: 39/s                                64 parallel: 66/s, 63 requests in one forward
+                 300 parallel @2 s: 300 ok at 75/s, /health 0.7 s during the burst, 2 ms after
+                 max_pending=4, 20 clients: 16 x 503 within 23 ms; clients gone at 0.3 s -> 2 forwards for 20 requests
+```
+
+**Trade-off, accepted knowingly.** A request's batch, and so its padding and kernel shapes, now depends on what else arrives with it. Measured on the released weights (MPS, nine S1Bench requests, each solo vs all nine in one batch): the old and new engines agree exactly solo; batched vs solo moves |Δp| by a median 0.005 and at most **0.07** (squad2) in bf16, and by at most 2e-5 in fp32. So the shift is bf16 rounding of differently shaped matmuls, not a padding error. It is the same effect that companion questions in one request already had (ADR-019), but it now depends on traffic. CUDA numbers will differ from MPS ones. `LEV_SERVE_CONCURRENCY` rises from 4 to 32 so a Modal container sees enough requests to batch; past that, Modal scales out as before. Under `compile`, batched row counts are not covered by the warmup shapes and capture graphs on first use.
+
+---
+
 ## Open questions
 
 | # | Question | How it gets settled |
