@@ -157,6 +157,11 @@ class DecisionEngine:
         # One forward at a time: CUDA-graph replay is not thread-safe. The server
         # batches concurrent requests into one forward instead (`lev.batcher`).
         self._lock = threading.Lock()
+        # Every tokenizer call goes through this: a fast tokenizer's padding and
+        # truncation are state on the shared Rust object, set by each call, and
+        # concurrent calls from request threads and the GPU worker can raise
+        # "Already borrowed" or encode with another call's truncation.
+        self._tokenizer_lock = threading.RLock()
         # The decoder runs alone and `lm_head` projects only the scored
         # positions: full (rows, width, vocab) logits are GBs at a 248k vocabulary.
         base = model.get_base_model() if hasattr(model, "get_base_model") else model
@@ -208,8 +213,13 @@ class DecisionEngine:
 
     def prepare(self, state, questions: Mapping[str, Question | dict]) -> Prepared:
         """Validate, route and tokenise one request. Raises `ValueError` or
-        `TypeError` for a malformed one, before any GPU work."""
+        `TypeError` for a malformed one, and `RuntimeError` for one that needs
+        Mode B with no head loaded, before any GPU work."""
         questions = _QUESTIONS.validate_python(questions)
+        with self._tokenizer_lock:
+            return self._route_and_tokenise(state, questions)
+
+    def _route_and_tokenise(self, state, questions: dict[str, Question]) -> Prepared:
         routes = serving_routes(questions, self.tokenizer, self.config)
 
         unsupported = [
@@ -431,7 +441,8 @@ class DecisionEngine:
         readout = LabelTokenReadout(
             self.tokenizer, prefix=label_prefix(Style(self.config.prompt_style))
         )
-        candidate_ids = readout.candidate_ids(route.codes)
+        with self._tokenizer_lock:
+            candidate_ids = readout.candidate_ids(route.codes)
         return logits[candidate_ids].float().tolist()
 
     def _candidate_path_scores(self, hidden, question: Question) -> list[float]:
@@ -465,14 +476,15 @@ class DecisionEngine:
         if key in self._candidate_cache:
             return self._candidate_cache[key]
 
-        encoded = self.tokenizer(
-            texts,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=64,
-            add_special_tokens=False,
-        )
+        with self._tokenizer_lock:
+            encoded = self.tokenizer(
+                texts,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=64,
+                add_special_tokens=False,
+            )
         device = self._device
         ids = encoded["input_ids"].to(device)
         mask = encoded["attention_mask"].to(device)

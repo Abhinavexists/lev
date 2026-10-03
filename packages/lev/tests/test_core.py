@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
+import time
 import types
 from string import ascii_uppercase
 
@@ -440,3 +442,46 @@ class TestSystemOneAcceptsPlainDicts:
         engine = self.engine(rich_tokenizer)
         with pytest.raises(ValueError, match="at least 2 options"):
             engine.system_one("state", {"pick": {"type": "choice", "criteria": {"a": None}}})
+
+
+class TestTokenizerIsUsedOneCallAtATime:
+    """A fast tokenizer keeps padding and truncation as state on one shared Rust
+    object, so request threads running `prepare` while the GPU worker encodes
+    must not overlap: overlapping calls raise "Already borrowed" or encode with
+    another call's truncation."""
+
+    class OverlapDetector:
+        def __init__(self, inner):
+            self.inner = inner
+            self.active = 0
+            self.overlaps = 0
+            self.guard = threading.Lock()
+
+        def encode(self, text, add_special_tokens=True):
+            with self.guard:
+                self.active += 1
+                self.overlaps += self.active > 1
+            time.sleep(0.0005)
+            try:
+                return self.inner.encode(text, add_special_tokens=add_special_tokens)
+            finally:
+                with self.guard:
+                    self.active -= 1
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+    def test_concurrent_prepares_never_overlap_in_the_tokenizer(self, rich_tokenizer):
+        from concurrent.futures import ThreadPoolExecutor
+
+        from lev.model import DecisionEngine, EngineConfig
+
+        tokenizer = self.OverlapDetector(rich_tokenizer)
+        engine = DecisionEngine(model=None, tokenizer=tokenizer, config=EngineConfig())
+        questions = {
+            "pick": {"type": "choice", "criteria": {"a": None, "b": None, "c": None}},
+            "ok": {"type": "noul", "instructions": "Is it fine?"},
+        }
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(lambda i: engine.prepare(f"state {i}", questions), range(32)))
+        assert tokenizer.overlaps == 0
