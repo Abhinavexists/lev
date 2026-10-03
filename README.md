@@ -121,23 +121,30 @@ Text classification in Interfaze runs on a similar system to lev: the model read
 ```
 
 ```python
-  import os
-  from typing import Literal
-  from pydantic import BaseModel, Field
-  from interfaze import Interfaze
-  
-  interfaze = Interfaze(api_key=os.environ["INTERFAZE_API_KEY"])
-  
-  class Ticket(BaseModel):
-      intent: Literal["refund", "cancel", "track", "other"]
-      urgent: bool = Field(..., description="Does this need a human within the hour?")
-  
-  response = interfaze.chat.completions.parse(
-      messages=[{"role": "user", "content": "Hi, I was charged twice for my order #4471 and I want a refund."}],
-      response_format=Ticket,
-  )
-  
-  print(response.choices[0].message.parsed)
+import os
+from typing import Literal
+from pydantic import BaseModel, Field
+from interfaze import Interfaze
+
+interfaze = Interfaze(api_key=os.environ["INTERFAZE_API_KEY"])
+
+
+class Ticket(BaseModel):
+    intent: Literal["refund", "cancel", "track", "other"]
+    urgent: bool = Field(..., description="Does this need a human within the hour?")
+
+
+response = interfaze.chat.completions.parse(
+    messages=[
+        {
+            "role": "user",
+            "content": "Hi, I was charged twice for my order #4471 and I want a refund.",
+        }
+    ],
+    response_format=Ticket,
+)
+
+print(response.choices[0].message.parsed)
 ```
 
 Tokens cost a little speed, but they let one request classify a document while also reading, searching, and extracting from it. Define your labels as an enum in the schema, and the label comes back as a typed field.
