@@ -1,11 +1,7 @@
 """Turn a board into one System One call, and the answer into a move.
 
-The prompts are laya-mlx's, word for word, in both its variants. `compact`
-puts the two Noul answers into the state text itself -- "Safe route: yes.
-Food reachable through empty cells: yes." -- so a model that reads its input
-scores 100% on those questions and one that does not, cannot. `detailed`
-describes the same facts in prose and gives the move options fuller
-descriptions.
+Both prompts are laya-mlx's verbatim. `compact` states the two Noul answers in the state
+text, so a model that reads its input scores 100% on them; `detailed` uses prose.
 """
 
 from __future__ import annotations
@@ -31,9 +27,8 @@ class Decision:
     executed: str
     safe_directions: list[str]
     intervened: bool
-    # The model's two Noul estimates, and what the planner knows to be true.
-    # `dead_end_risk` is 1 - the `risk` answer, which asks whether a safe route
-    # exists, so the field inverts its question.
+    # `dead_end_risk` is 1 - the `risk` answer, which asks whether a safe route exists;
+    # the `*_truth` fields are what the planner knows.
     dead_end_risk: float
     food_reachable: float
     route_truth: bool
@@ -51,11 +46,8 @@ class Decision:
 
 
 def describe(game: SnakeGame, prompt: str) -> tuple[str, dict[str, Any], dict]:
-    """The state text and questions for one board, plus the planner's view.
-
-    Returned separately from `decide` so the wording can be tested without a
-    model and logged without a call.
-    """
+    """The state text and questions for one board, plus the planner's view; separate
+    from `decide` so the wording can be tested and logged without a call."""
     if prompt not in PROMPTS:
         raise ValueError(f"prompt must be one of {PROMPTS}, got {prompt!r}")
     moves = game.moves()
@@ -128,12 +120,8 @@ def describe(game: SnakeGame, prompt: str) -> tuple[str, dict[str, Any], dict]:
 
 
 class PlannerClient:
-    """A stand-in server: the planner's own view, returned in the SDK's shapes.
-
-    For watching the display with no server up, and as the reference row every
-    model is measured against -- it never needs the shield and answers both
-    Noul questions from the same facts the state text states.
-    """
+    """A stand-in server answering from the planner in SDK shapes: the reference row
+    every model is measured against, and a way to run the display with no server."""
 
     served = "planner"
 
@@ -158,10 +146,8 @@ class PlannerClient:
 
 
 class ModelPolicy:
-    """Asks the server for a move; with `guarded`, executes the likeliest safe one.
-
-    A guarded policy raises if no safe move exists.
-    """
+    """Asks the server for a move; with `guarded`, executes the likeliest safe one and
+    raises if no safe move exists."""
 
     def __init__(self, client, *, guarded: bool = True, prompt: str = "compact"):
         if prompt not in PROMPTS:

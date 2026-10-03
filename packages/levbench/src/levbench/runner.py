@@ -27,9 +27,8 @@ class CallResult:
     served_by: str
     input_tokens: int
     output_tokens: int
-    # Adapter-only: retries the LLM needed to emit a schema-valid answer, and
-    # retries after transient provider failures. Always 0 on the TypeSafe SDK
-    # (Jev, lev), where schema conformance is structural.
+    # Adapter-only retries (schema-invalid LLM output, transient provider errors);
+    # always 0 on the TypeSafe SDK, where schema conformance is structural.
     schema_retries: int = 0
     transient_retries: int = 0
 
@@ -76,8 +75,7 @@ class EvalReport:
 DEFAULT_LOCAL_BASE_URL = "http://localhost:8000"
 
 
-# A self-hosted server may be scaling from zero: Modal's 4B cold start measured
-# 20-55 s, against the SDK's 10 s default.
+# Modal's 4B cold start measured 20-55 s, against the SDK's 10 s default (ADR-022).
 DEFAULT_LOCAL_TIMEOUT = 120.0
 
 
@@ -128,13 +126,8 @@ def build_client(
 
 
 def _token_count(usage: Any, total_field: str, base_field: str) -> int:
-    """Read a token count, preferring the adapter's `*_total` field.
-
-    `*_total` covers retried attempts, which is what gets billed; the SDK has
-    only the `Optional[int]` base field. A genuine 0 is a real count, so the
-    check is `is not None`, and an absent count raises rather than booking the
-    call as free.
-    """
+    """Prefer the adapter's `*_total` (it includes billed retries) over the SDK's base
+    field; a genuine 0 counts, but an absent count raises rather than booking it free."""
     for field_name in (total_field, base_field):
         value = getattr(usage, field_name, None)
         if value is not None:
@@ -178,11 +171,8 @@ def run_eval(
     questions: dict[str, Any],
     concurrency: int = 1,
 ) -> EvalReport:
-    """Score every item, with up to `concurrency` requests in flight.
-
-    Each call still times its own round trip, so concurrency lowers wall time,
-    not per-call latency. Results keep item order.
-    """
+    """Score every item, with up to `concurrency` requests in flight and results in
+    item order; concurrency lowers wall time, not the per-call latency reported."""
     from concurrent.futures import ThreadPoolExecutor
 
     report = EvalReport(backend=backend, model=model)
@@ -224,7 +214,6 @@ def format_report(report: EvalReport) -> str:
 
 
 def _format_summary(report: EvalReport) -> list[str]:
-    """Cost, latency and retry totals across the whole run."""
     lines: list[str] = []
     n = len(report.calls)
     lines.append(f"=== {report.backend} / {report.model} ===")
@@ -263,7 +252,6 @@ def _format_summary(report: EvalReport) -> list[str]:
 
 
 def _format_per_question(report: EvalReport) -> list[str]:
-    """Accuracy, calibration and the reliability bins, one block per question."""
     lines: list[str] = []
     for name, calibration in report.per_question.items():
         lines.append(f"-- {name}")

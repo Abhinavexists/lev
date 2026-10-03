@@ -257,8 +257,6 @@ class Keyboard:
 
 
 class LiveDisplay:
-    """The rich full-screen view. `available()` says whether it can run here."""
-
     def __init__(self, alt_screen: bool = True):
         from rich.console import Console
         from rich.live import Live

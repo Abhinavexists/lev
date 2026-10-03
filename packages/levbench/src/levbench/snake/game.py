@@ -16,7 +16,6 @@ VECTORS = {"UP": (0, -1), "DOWN": (0, 1), "LEFT": (-1, 0), "RIGHT": (1, 0)}
 
 
 def hamiltonian_cycle(width: int, height: int) -> list[tuple[int, int]]:
-    """Every cell once, adjacent steps, closing back on the start."""
     if min(width, height) < 4 or (width % 2 and height % 2):
         raise ValueError("board must be >= 4 on each side with at least one even dimension")
     if height % 2:

@@ -1,9 +1,6 @@
-"""A fake Jev endpoint, so the harness can be exercised without an API key.
+"""A fake Jev endpoint: real request parsing, wire-shaped responses, no API key.
 
-It parses the real request body and emits wire-shaped responses, which means it
-catches serialisation and parsing bugs. It does NOT model Jev's judgement --
-answers are deterministic pseudo-random, so accuracy numbers from this
-transport are meaningless by construction. Only plumbing is under test here.
+It tests plumbing only: answers are deterministic pseudo-random, so its accuracy is meaningless.
 """
 
 from __future__ import annotations
@@ -15,7 +12,6 @@ import httpx2
 
 
 def _rand(*parts: str) -> float:
-    """Deterministic pseudo-random float in [0,1) from the given strings."""
     digest = hashlib.sha256("|".join(parts).encode()).digest()
     return int.from_bytes(digest[:8], "big") / 2**64
 

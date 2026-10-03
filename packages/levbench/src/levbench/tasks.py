@@ -232,12 +232,8 @@ def dataset(path: str | Path | None = None) -> tuple[list[Any], dict[str, Any]]:
 
 
 def detectable_difference(n: int, baseline: float = 0.8, z: float = 1.96) -> float:
-    """Roughly the smallest accuracy change `n` items can distinguish.
-
-    The half-width of the normal-approximation interval for one proportion;
-    comparing two runs needs a wider margin still. The built-in 24-item fixture
-    lands around +/-16 points.
-    """
+    """Roughly the smallest accuracy change `n` items can distinguish: the one-proportion
+    normal-approximation half-width (comparing two runs needs more; ADR-015)."""
     if n <= 0:
         return 1.0
     return min(1.0, z * math.sqrt(baseline * (1 - baseline) / n))

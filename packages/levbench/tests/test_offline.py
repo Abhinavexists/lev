@@ -30,7 +30,6 @@ def fake_client() -> TypeSafeClient:
 
 
 def test_metrics_are_arithmetically_right() -> None:
-    """Check the metric maths against values computed by hand."""
     dist = {"a": 0.7, "b": 0.2, "c": 0.1}
     assert abs(metrics.log_loss(dist, "a") - (-math.log(0.7))) < 1e-12
     # Brier: (0.7-1)^2 + 0.2^2 + 0.1^2 = 0.09 + 0.04 + 0.01
@@ -121,11 +120,8 @@ def test_sweep_arithmetic_over_a_fixed_billing_shape() -> None:
 
 
 def test_confidence_identifier_recovers_a_planted_formula() -> None:
-    """Known-answer test: plant each formula, demand it be identified uniquely.
-
-    If planted formulas were ambiguous, a match against a real server would
-    prove nothing.
-    """
+    """If planted formulas were not identified uniquely, a match against a real server
+    would prove nothing."""
 
     def server(conf_fn):
         def handle(request):
@@ -171,7 +167,6 @@ def test_confidence_identifier_recovers_a_planted_formula() -> None:
 
 
 def test_base_url_routes_to_a_local_clone() -> None:
-    """`--base-url` must actually change where requests go."""
     seen: dict[str, str] = {}
 
     def handle(request):
@@ -209,12 +204,8 @@ def test_local_base_url_never_forwards_the_real_key(monkeypatch) -> None:
 
 
 def test_empty_local_key_env_var_falls_back(monkeypatch) -> None:
-    """`LEVBENCH_LOCAL_API_KEY=` (as copied from `.env.example`) must fall back.
-
-    `os.environ.get(var, "local")` returns "" there, and the SDK then sends a
-    malformed `Authorization: Bearer ` header (`LocalProtocolError: Illegal
-    header value`).
-    """
+    """`LEVBENCH_LOCAL_API_KEY=` (from `.env.example`) once reached the SDK as "", which
+    sends a malformed `Bearer ` header (`LocalProtocolError: Illegal header value`)."""
     monkeypatch.setenv("LEVBENCH_LOCAL_API_KEY", "")
     client, _ = runner.build_client("lev")
     assert client._config.api_key == "local", (
@@ -284,18 +275,14 @@ def test_a_missing_task_file_says_how_to_make_one(tmp_path) -> None:
 
 
 def test_detectable_difference_shrinks_with_n() -> None:
-    """The number that says whether an accuracy delta means anything."""
     assert detectable_difference(24) > 0.15, "24 items cannot resolve a 5-point gain"
     assert detectable_difference(2000) < 0.02
     assert detectable_difference(0) == 1.0
 
 
 def test_pooling_can_hide_a_formula_that_holds_per_candidate_set_size() -> None:
-    """Two formulas, one per size, look like "no match" when pooled.
-
-    This is the shape the live Jev run produced: nothing matched overall, and
-    the pooled view could not say which samples broke it.
-    """
+    """The live Jev run's shape: nothing matched pooled, and the pooled view could not
+    say which samples broke it."""
     four = [0.7, 0.1, 0.1, 0.1]
     three = [0.5, 0.3, 0.2]
     samples = [(four, confidence_id.max_prob(four))] * 6
@@ -329,11 +316,8 @@ def test_diagnosis_reports_whether_distributions_are_complete() -> None:
 
 
 def test_tolerance_accounts_for_how_much_a_statistic_amplifies_rounding() -> None:
-    """A flat threshold rejects correct formulas that divide by (K-1).
-
-    Jev rounds to 2 dp. `max_prob` passes that error through, but
-    `norm_max_prob` multiplies it by K/(K-1) to 0.010, twice a flat 5e-3.
-    """
+    """Jev rounds to 2 dp and `norm_max_prob` amplifies that by K/(K-1) to 0.010, so a
+    flat 5e-3 threshold rejected the correct formula."""
     rng = random.Random(0)
     samples = []
     for size in (4, 3):
@@ -352,7 +336,6 @@ def test_tolerance_accounts_for_how_much_a_statistic_amplifies_rounding() -> Non
 
 
 def test_an_unamplified_statistic_keeps_a_tight_tolerance() -> None:
-    """`max_prob` does not divide by (K-1), so its tolerance stays near eps."""
     exact = [[0.62, 0.21, 0.17], [0.44, 0.33, 0.23]]
     samples = [(p, round(max(p), 2)) for p in exact]
     fits = {f.name: f for f in confidence_id.identify(samples)}

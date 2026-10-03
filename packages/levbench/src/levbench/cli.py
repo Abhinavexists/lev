@@ -42,11 +42,8 @@ def _require_key(backend: str, base_url: str | None = None) -> None:
 
 
 def _task_files(path: str | None) -> list[Path | None]:
-    """`None` for the built-in fixture, else one entry per task file.
-
-    A generated eval is a directory with one file per source, because each
-    source has its own questions.
-    """
+    """`None` for the built-in fixture, else one entry per task file; a generated
+    eval is a directory with one file per source (ADR-015)."""
     if path is None:
         return [None]
     target = Path(path)
@@ -122,7 +119,6 @@ def cmd_compare(args: argparse.Namespace) -> None:
 
 
 def cmd_snake(args: argparse.Namespace) -> None:
-    """A decision model plays Snake over `/v1/systemone`; see `levbench.snake`."""
     from .snake import PlannerClient, play
     from .snake.ui import Keyboard, LiveDisplay, network_label, status_line
 
@@ -162,7 +158,6 @@ def cmd_snake(args: argparse.Namespace) -> None:
 
 
 def cmd_replay(args: argparse.Namespace) -> None:
-    """Play a recording back in the same display, at original speed."""
     from .snake import load_record, replay
     from .snake.ui import Keyboard, LiveDisplay
 
@@ -180,7 +175,6 @@ def cmd_replay(args: argparse.Namespace) -> None:
 
 
 def cmd_confidence(args: argparse.Namespace) -> None:
-    """Work out which statistic the server's `confidence` field really is."""
     _require_key("jev", args.base_url)
     items, questions = dataset()
     if args.limit:

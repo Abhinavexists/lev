@@ -17,7 +17,6 @@ _EPS = 1e-15
 
 
 def to_distribution(answer: Any) -> dict[Any, float]:
-    """Flatten any answer type to a label -> probability map."""
     kind = answer.type
     if kind == "noul":
         p = float(answer.noul)
@@ -44,10 +43,7 @@ def predicted_label(answer: Any) -> Any:
 
 
 def top_probability(answer: Any) -> float:
-    """The probability of the most likely label: the confidence ECE bins on.
-
-    For a Noul that is max(p, 1-p).
-    """
+    """The most likely label's probability (max(p, 1-p) for a Noul): what ECE bins on."""
     return max(to_distribution(answer).values())
 
 
@@ -138,11 +134,8 @@ def calibration(
 def selective_accuracy(
     records: list[tuple[dict[Any, float], Any, Any, float]], threshold: float
 ) -> tuple[float, float]:
-    """Accuracy on answers at or above a confidence threshold, plus the kept fraction.
-
-    Decides whether confidence is usable for routing: if accuracy does not rise
-    with the threshold, confidence carries no signal.
-    """
+    """Accuracy on answers at or above a confidence threshold, plus the kept fraction;
+    if accuracy does not rise with the threshold, confidence is useless for routing."""
     kept = [r for r in records if r[3] >= threshold]
     if not kept:
         return 0.0, 0.0

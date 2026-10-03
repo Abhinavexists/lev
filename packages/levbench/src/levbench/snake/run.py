@@ -1,10 +1,7 @@
 """The game loop: one decision per move, rounds, pacing, a replayable record.
 
-Round semantics follow laya: with the shield on, a finished board starts the
-next round on the next seed; unassisted, the first round's end (a death or a
-cleared board) ends the run, so the survival number means something. The
-JSONL record is laya's format (`metadata`, `frame`, `round_end`, `end`) with
-`at` timestamps, so `levbench replay` plays it back at original speed.
+Rounds and the JSONL record follow laya (ADR-022). Shielded, a finished board starts the
+next seed; unassisted, the first round's end ends the run, so survival means something.
 """
 
 from __future__ import annotations

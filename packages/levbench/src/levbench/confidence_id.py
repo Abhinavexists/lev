@@ -1,14 +1,8 @@
 """Identify which statistic the server's `confidence` field actually is.
 
-TypeSafe documents confidence only as "a statistic computed from the
-probability distribution the answer already gives you". Choice and Score answers
-return both, so each candidate statistic is computed over `probabilities` and
-compared with the reported `confidence`. Against Jev this identified
-chance-corrected max probability (`norm_max_prob`), rounded to 2 dp
-(docs/FINDINGS.md §3). LitJev states it uses normalized Gini, which makes a
-LitJev server a known-answer test.
-
-Answers without both probabilities and confidence (including Jev's Noul) are skipped.
+TypeSafe documents it only as "a statistic computed from the probability distribution".
+Jev's is `norm_max_prob` rounded to 2 dp (docs/FINDINGS.md §3); LitJev states normalized
+Gini, so a LitJev server is a known-answer test.
 """
 
 from __future__ import annotations
@@ -49,11 +43,8 @@ def top_two_margin(p: Distribution) -> float:
 
 
 def normalized_max_prob(p: Distribution) -> float:
-    """Max probability, chance-corrected: (K*max - 1) / (K - 1).
-
-    The max_prob analogue of `gini`: a raw 0.5 means something different over
-    2 candidates than over 20.
-    """
+    """Chance-corrected max probability: a raw 0.5 means something different over
+    2 candidates than over 20."""
     k = len(p)
     if k <= 1:
         return 1.0
@@ -61,7 +52,6 @@ def normalized_max_prob(p: Distribution) -> float:
 
 
 def top_two_ratio(p: Distribution) -> float:
-    """Share of the top two candidates' mass held by the winner."""
     if len(p) < 2:
         return 1.0
     a, b = sorted(p, reverse=True)[:2]
@@ -79,10 +69,8 @@ CANDIDATES: dict[str, Callable[[Distribution], float]] = {
 
 
 def detect_precision(values: list[float], max_decimals: int = 6) -> float:
-    """The quantisation step every value is a multiple of, or 0 if none is.
-
-    The API rounds before sending, which sets the floor on any match.
-    """
+    """The quantisation step every value is a multiple of, or 0 if none is; the API
+    rounds before sending, which sets the floor on any match."""
     for decimals in range(1, max_decimals + 1):
         unit = 10.0**-decimals
         if all(abs(v / unit - round(v / unit)) < 1e-6 for v in values):
@@ -91,12 +79,8 @@ def detect_precision(values: list[float], max_decimals: int = 6) -> float:
 
 
 def rounding_sensitivity(fn: Callable[[Distribution], float], p: Distribution, eps: float) -> float:
-    """How far `fn` can move when each probability is off by up to `eps`.
-
-    `max_prob` passes rounding error straight through; `norm_max_prob` divides
-    by (K-1) and amplifies it by K/(K-1), and `gini`, whose sum of squares
-    doubles the slope, by about 2K/(K-1). So each formula gets its own tolerance.
-    """
+    """How far `fn` can move when each probability is off by up to `eps`: `max_prob`
+    passes it through, `norm_max_prob` amplifies it by K/(K-1), `gini` by about 2K/(K-1)."""
     base = fn(p)
     raised = fn([min(1.0, x + eps) for x in p])
     lowered = fn([max(0.0, x - eps) for x in p])
@@ -113,12 +97,8 @@ class Fit:
 
     @property
     def matches(self) -> bool:
-        """Within what the API's own rounding could account for.
-
-        The tolerance is the reported value's rounding plus how far that rounding
-        can move this statistic. A flat 5e-3 rejects Jev's formula:
-        `norm_max_prob` amplifies 2 dp rounding by K/(K-1) to about 0.01.
-        """
+        """Within the API's rounding plus how far it moves this statistic; a flat 5e-3
+        rejects Jev's `norm_max_prob`, which amplifies 2 dp rounding to ~0.01 (FINDINGS §3)."""
         return self.max_abs_error <= self.tolerance
 
 
@@ -160,11 +140,8 @@ def identify(samples: list[tuple[Distribution, float]]) -> list[Fit]:
 
 
 def identify_by_size(samples: list[tuple[Distribution, float]]) -> dict[int, list[Fit]]:
-    """`identify` per candidate-set size.
-
-    A formula that holds for 4-option Choice but not 3-level Score reads as "no
-    match" when pooled; in practice candidate count tracks question type.
-    """
+    """`identify` per candidate-set size: a formula that holds for one size reads as
+    "no match" when pooled, and candidate count tracks question type."""
     by_size: dict[int, list[tuple[Distribution, float]]] = {}
     for dist, reported in samples:
         by_size.setdefault(len(dist), []).append((dist, reported))
