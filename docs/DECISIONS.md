@@ -275,7 +275,7 @@ The cost is accepted knowingly: those two sources are over-represented relative 
 
 Three splits, not two: a temperature fitted on the test set is not a measurement. `calibrate.fit()` already refuses a split named test/eval/holdout; the `calibration` split is the other half of that guarantee — the thing it can legitimately accept.
 
-Assignment is a **blake2b hash of a stable per-row key**, not an RNG draw. The same row lands in the same split on any machine, in any dataset order, on any re-run, which is what makes a resumed or repeated experiment comparable to the original. Python's `hash()` is salted per process and would not reproduce tomorrow.
+Assignment is a **blake2b hash of a stable per-row key**, not an RNG draw. The same row lands in the same split on any machine and any re-run over the same source order, which is what makes a resumed or repeated experiment comparable to the original. The key includes the row's position within its source, so reordering a source reshuffles its splits. Python's `hash()` is salted per process and would not reproduce tomorrow.
 
 Splitting happens **before** the mixture is drawn. Mixing first would let one underlying row appear in train and in test wearing two different layouts — a contamination leak with our own data rather than S1Bench's. Subtler than ADR-009's, and flattering in exactly the same way.
 
