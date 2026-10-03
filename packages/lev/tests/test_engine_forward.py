@@ -1,5 +1,4 @@
-"""The engine projects only each row's last token; pin that against the full
-forward on a tiny random Qwen3.5 with both layer kinds, built offline."""
+"""Pin last-token projection to the full forward of a tiny offline Qwen3.5 with both layer kinds."""
 
 from __future__ import annotations
 

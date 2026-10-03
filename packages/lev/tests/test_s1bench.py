@@ -1,5 +1,4 @@
-"""The evaluation door: it opens only onto blocked subsets, and it has no
-route into the training mixture."""
+"""The eval door opens only onto blocked subsets and has no route into the training mixture."""
 
 from __future__ import annotations
 
@@ -49,9 +48,8 @@ class TestEvalDoorOpensOnlyOnEvalData:
 
 class TestStructuralSeparation:
     def test_s1bench_cannot_reach_the_mixture_builder(self) -> None:
-        """Importing `mixture` (e.g. to reuse `Example`) would give the eval loaders
-        a type the training path consumes. Checked in a fresh interpreter, since
-        in-process the test suite's own imports are visible."""
+        """Importing `mixture` would give the eval loaders a type the training path consumes.
+        A fresh interpreter, since in-process the suite's own imports are visible."""
         probe = (
             "import sys; import lev.data.s1bench; "
             "leaked = sorted(m for m in sys.modules "
@@ -88,7 +86,6 @@ def snapshot() -> dict:
 
 
 def jev_board(data: dict) -> dict:
-    """The snapshot's per-subset leaderboard results for jev."""
     return next(t for t in data["targets"] if t["target"] == "jev")["subsets"]
 
 
@@ -127,8 +124,6 @@ class TestPinnedDefinitions:
 
 
 class TestSelection:
-    """`load_eval_subset` keeps exactly the pinned ids and refuses drifted upstream data."""
-
     def fake(self, monkeypatch, rows, ids, labels):
         spec = {**definition("boolq"), "ids": ids, "labels": labels, "count": len(ids)}
         monkeypatch.setattr(s1bench, "definition", lambda name: spec)

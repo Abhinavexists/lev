@@ -1,7 +1,4 @@
-"""Collation: padding, candidate sets, mode routing and length bucketing.
-
-torch is in the `train` extra, so these skip on a bare `uv sync`.
-"""
+"""torch is in the `train` extra, so these skip on a bare `uv sync`."""
 
 from __future__ import annotations
 
@@ -23,10 +20,7 @@ class TestCollator:
         return DecisionCollator(batching_tokenizer, max_seq_len=512)
 
     def test_last_position_is_the_final_real_token_not_seq_minus_one(self, collator):
-        """Rows are right-padded, so `seq - 1` reads a pad token's logits.
-
-        That trains on noise and never raises.
-        """
+        """Rows are right-padded, so `seq - 1` reads a pad token's logits: noise, and no error."""
         batch = collator(
             [an_example(a_choice(), state="short"), an_example(a_choice(), state="x" * 200)]
         )
@@ -80,12 +74,10 @@ class TestCollator:
         assert batch.mode is Mode.CANDIDATE_PATH
         assert batch.candidate_token_ids is None
         assert batch.candidate_index.shape == (1, 40)
-        # 40 distinct option strings, pooled once rather than per row.
         assert batch.candidate_input_ids.shape[0] == 40
 
     def test_the_candidate_pool_is_shared_across_rows(self, collator):
-        """The pool holds each option once, not once per row: a 77-option
-        question in a batch of 8 must not cost 8x77 encodes."""
+        """A 77-option question in a batch of 8 must not cost 8x77 encodes."""
         rows = [an_example(a_choice(40), target=i) for i in range(4)]
         batch = collator(rows)
         assert batch.candidate_input_ids.shape[0] == 40, "pool grew with batch size"
@@ -118,7 +110,6 @@ class TestModeBatcher:
         assert len(resolved) == 1, "the same question resolved to distinct Route objects"
 
     def test_batcher_and_collator_can_share_one_route_cache(self, batching_tokenizer):
-        """Sharing means a question is routed once for the whole pipeline."""
         from lev.train.collate import RouteCache
 
         shared = RouteCache(batching_tokenizer)
@@ -129,11 +120,8 @@ class TestModeBatcher:
 
 
 class TestLengthBucketing:
-    """A batch pads to its longest row, so compute is the rectangle.
-
-    Measured on the real mixture at batch 32 (ADR-017): random batching wastes
-    4.43x of every forward pass on padding; bucketing brings it to 1.43x.
-    """
+    """A batch pads to its longest row; on the real mixture random batching wasted 4.43x
+    on padding and bucketing 1.43x (ADR-017)."""
 
     def rows(self, n=512):
         rng = random.Random(0)

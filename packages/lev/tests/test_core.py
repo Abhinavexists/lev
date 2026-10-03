@@ -232,9 +232,8 @@ class TestOrderAveraging:
         assert merged == pytest.approx([0.7, 0.2, 0.1])
 
     def test_average_cancels_a_first_position_bias(self):
-        """A model that always adds mass to whatever is listed first sees that
-        bonus land on different candidates in the two orders; averaging spreads
-        it back out."""
+        """A first-position bonus lands on different candidates in the two orders, so averaging
+        spreads it back out."""
         biased_forward = [0.6, 0.2, 0.2]  # candidate 0 first, gets the bonus
         biased_backward = [0.6, 0.2, 0.2]  # candidate 2 first, gets the bonus
         merged = average_orders([biased_forward, biased_backward], [None, [2, 1, 0]])
@@ -411,7 +410,6 @@ class TestRoutePreviewMatchesServing:
         assert "mode A" in out
 
     def test_lev_route_prints_a_mode_b_route_without_codes(self, tmp_path, monkeypatch, capsys):
-        """A Mode B route has no label codes to print."""
         tokenizer = FakeTokenizer({" A", " B"})  # only two codes are single tokens
         request = {
             "state": "s",
@@ -445,10 +443,8 @@ class TestSystemOneAcceptsPlainDicts:
 
 
 class TestTokenizerIsUsedOneCallAtATime:
-    """A fast tokenizer keeps padding and truncation as state on one shared Rust
-    object, so request threads running `prepare` while the GPU worker encodes
-    must not overlap: overlapping calls raise "Already borrowed" or encode with
-    another call's truncation."""
+    """A fast tokenizer keeps padding and truncation as state on one shared Rust object, so
+    overlapping calls raise "Already borrowed" or encode with another call's truncation."""
 
     class OverlapDetector:
         def __init__(self, inner):

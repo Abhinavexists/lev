@@ -5,11 +5,6 @@ from lev.train.evaluate import accuracy_interval, score, score_mixed
 
 
 class TestEvalScoring:
-    """`score` turns raw logits into the numbers a run is judged on.
-
-    Temperature must move calibration and leave accuracy alone.
-    """
-
     def confident_but_wrong(self):
         # Right 50% of the time, always at ~0.95 confidence: badly overconfident.
         return [([3.0, 0.0], 0), ([3.0, 0.0], 1), ([3.0, 0.0], 0), ([3.0, 0.0], 1)]

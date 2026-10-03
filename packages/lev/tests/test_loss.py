@@ -1,7 +1,4 @@
-"""The training objective: cross-entropy, Brier and the ordinal term.
-
-torch is in the `train` extra, so these skip on a bare `uv sync`.
-"""
+"""torch is in the `train` extra, so these skip on a bare `uv sync`."""
 
 from __future__ import annotations
 
@@ -43,9 +40,7 @@ class TestDecisionLoss:
 
     @pytest.mark.parametrize("weight", [0.5, 1.0])
     def test_brier_adds_the_weighted_multiclass_brier_score(self, train_config, weight):
-        """Turning Brier on adds `weight` x the mean over rows of the summed squared
-        error over the whole probability vector, and a padded slot (probability 0,
-        target 0) contributes nothing."""
+        """A padded slot (probability 0, target 0) must add nothing to the Brier term."""
         logits = torch.tensor(
             [[8.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 3.0, float("-inf")]],
         )

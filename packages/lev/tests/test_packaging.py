@@ -1,9 +1,4 @@
-"""Guards against the repo's configuration drifting from its documentation.
-
-Documented commands run from the repo root, so an extra defined only on a member
-package is unreachable (`docs/TRAINING.md` once documented `uv sync --extra serve`
-while the root forwarded only `train`).
-"""
+"""Docs run commands from the repo root, so an extra defined only on a member is unreachable."""
 
 from __future__ import annotations
 
@@ -26,7 +21,6 @@ def _extras(pyproject: Path) -> set[str]:
 
 
 def _documented_extras() -> dict[str, set[str]]:
-    """Every `--extra <name>` appearing in docs, the README or the Makefile."""
     found: dict[str, set[str]] = {}
     sources = [ROOT / "README.md", ROOT / "Makefile", ROOT / "CONTRIBUTING.md"]
     sources += sorted((ROOT / "docs").glob("*.md"))
@@ -39,7 +33,6 @@ def _documented_extras() -> dict[str, set[str]]:
 
 
 def test_root_forwards_every_member_extra():
-    """A member extra unreachable from the root is invisible to every doc command."""
     root = _extras(ROOT / "pyproject.toml")
     for member in sorted((ROOT / "packages").glob("*/pyproject.toml")):
         missing = _extras(member) - root
@@ -65,11 +58,8 @@ def test_known_extras_are_present(expected):
 
 
 def _inspect_cli(tool: str) -> tuple[set[str], dict[str, set[str]]]:
-    """Build the real parser and read back its subcommands and option choices.
-
-    Introspection, not a regex over the source, so it checks what the parser
-    actually accepts.
-    """
+    """Introspects the real parser rather than regexing the source, so it checks what the
+    parser actually accepts."""
     import argparse
     import importlib
 
@@ -103,7 +93,6 @@ def _inspect_cli(tool: str) -> tuple[set[str], dict[str, set[str]]]:
 
 
 def _documented_flag_values(flag: str) -> dict[str, set[str]]:
-    """Every `--flag value` the docs name, and which file named it."""
     found: dict[str, set[str]] = {}
     sources = [ROOT / "README.md", ROOT / "Makefile", ROOT / "CONTRIBUTING.md"]
     sources += sorted((ROOT / "docs").glob("*.md"))
@@ -115,7 +104,6 @@ def _documented_flag_values(flag: str) -> dict[str, set[str]]:
 
 
 def test_every_documented_backend_exists():
-    """A `--backend x` in the docs must be a choice the CLI accepts."""
     _, choices = _inspect_cli("levbench")
     accepted = choices["--backend"]
     for value, where in sorted(_documented_flag_values("--backend").items()):
@@ -129,11 +117,8 @@ CODE_SPANS = re.compile(r"```[a-z]*\n(.*?)```|`([^`\n]+)`", re.S)
 
 
 def _documented_commands(tool: str) -> dict[str, set[str]]:
-    """Every `uv run <tool> <sub>` the docs tell you to run.
-
-    Only inside fenced blocks and inline backticks; prose like "levbench must
-    not import lev" would otherwise match.
-    """
+    """Only fenced blocks and inline backticks count; prose like "levbench must not import
+    lev" would otherwise match."""
     found: dict[str, set[str]] = {}
     sources = [ROOT / "README.md", ROOT / "Makefile", ROOT / "CONTRIBUTING.md"]
     sources += sorted((ROOT / "docs").glob("*.md"))
@@ -157,7 +142,6 @@ def _documented_commands(tool: str) -> dict[str, set[str]]:
 
 @pytest.mark.parametrize("tool", ["lev", "levbench"])
 def test_every_documented_subcommand_is_registered(tool):
-    """Every command the docs name has to parse."""
     registered, _ = _inspect_cli(tool)
 
     for name, where in sorted(_documented_commands(tool).items()):

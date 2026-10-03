@@ -1,7 +1,4 @@
-"""Progress reporting: what the log says while a run is in flight.
-
-torch is in the `train` extra, so these skip on a bare `uv sync`.
-"""
+"""torch is in the `train` extra, so these skip on a bare `uv sync`."""
 
 from __future__ import annotations
 
@@ -55,11 +52,8 @@ class TestProgressLog:
         assert "A=1.0000" in capsys.readouterr().out, "stale window carried forward"
 
     def test_throughput_counts_real_tokens(self, capsys):
-        """Derived from the attention mask, not from the config's average.
-
-        That constant was wrong by 10x once (ADR-016); a readout derived from
-        it would have agreed with the mistake rather than exposed it.
-        """
+        """Counted from the attention mask, not the config's average, which was once wrong by 10x
+        (ADR-016) and would have hidden the mistake."""
         log = self.make(total=1, every=1)
         log.record(0, 1.0, "A", 1e-4, tokens=4096)
         out = capsys.readouterr().out
@@ -81,13 +75,8 @@ class TestProgressLog:
 
 
 class TestWindowedRate:
-    """Startup cost is a one-off; a cumulative average never stops paying it.
-
-    Measured on the 0.8B Modal smoke: 4.68 s/step for the first 25 steps
-    (weight load + Triton JIT), 0.40 s/step after. Reported cumulatively that
-    is 0.33 it/s against a true 2.50 -- and the ETA is wrong by the same 7.5x,
-    which is how a healthy run gets abandoned for being slow.
-    """
+    """A cumulative rate never stops paying the startup cost: the 0.8B smoke read 0.33 it/s
+    against a true 2.50, and the ETA was 7.5x off (ADR-017)."""
 
     @pytest.fixture
     def clock(self, monkeypatch):
@@ -105,7 +94,6 @@ class TestWindowedRate:
             log.record(step, 1.0, "A", 1e-4, tokens=100)
         first = capsys.readouterr().out
 
-        # Second window: steady state only.
         for step in range(20, 40):
             clock["t"] += 0.4
             log.record(step, 1.0, "A", 1e-4, tokens=100)

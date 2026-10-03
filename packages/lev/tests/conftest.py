@@ -1,8 +1,5 @@
-"""Shared test fixtures: fake tokenizers, and builders for Examples/questions.
-
-torch is imported only inside `BatchingTokenizer.__call__`, so the torch-free
-half of the suite still collects on a bare `uv sync`.
-"""
+"""torch is imported only inside `BatchingTokenizer.__call__`, so the torch-free half of
+the suite still collects on a bare `uv sync`."""
 
 from __future__ import annotations
 
@@ -14,12 +11,8 @@ from lev.types import Choice
 
 
 class FakeTokenizer:
-    """Treats a fixed vocabulary of strings as single tokens; splits everything else.
-
-    `single_tokens` is the set of strings (including any leading space) that encode
-    to exactly one id. That is precisely the property `labels.single_token_codes`
-    checks, so a fake is enough to test the routing decision faithfully.
-    """
+    """Strings in `single_tokens` encode to one id -- exactly what `labels.single_token_codes`
+    checks, so a fake tests the routing decision faithfully."""
 
     def __init__(self, single_tokens: set[str]):
         self.single_tokens = single_tokens
@@ -27,9 +20,8 @@ class FakeTokenizer:
     def encode(self, text: str, add_special_tokens: bool = True) -> list[int]:
         if text in self.single_tokens:
             return [1]
-        # Anything outside the vocabulary must encode to *more* than one token,
-        # including single characters -- otherwise a one-char string looks
-        # single-token by accident and the router test proves nothing.
+        # Even a single character must encode to >1 token, or it looks single-token by
+        # accident and the router test proves nothing.
         return [1] * (len(text) + 1)
 
 
@@ -58,12 +50,8 @@ def poor_tokenizer() -> FakeTokenizer:
 
 
 class BatchingTokenizer(FakeTokenizer):
-    """Adds the `__call__` surface the collator needs: padding and tensors.
-
-    Encoding is one id per character so that different prompts get genuinely
-    different lengths -- a fake that returns equal lengths would hide the exact
-    bug `last_positions` exists to prevent.
-    """
+    """One id per character so prompts get different lengths; equal lengths would hide the
+    bug `last_positions` exists to prevent."""
 
     pad_token_id = 0
     padding_side = "right"

@@ -1,8 +1,5 @@
-"""The data pipeline: registry, sampling, splits, and the guards around them.
-
-Offline: `load_source` takes an injected `load_dataset`. Nothing here checks
-that the real dataset ids resolve; a dead id surfaces on the next `lev data build`.
-"""
+"""Offline: `load_source` takes an injected `load_dataset`, so nothing here checks that the
+real dataset ids resolve; a dead id surfaces on the next `lev data build`."""
 
 from __future__ import annotations
 
@@ -39,8 +36,6 @@ class FakeFeature:
 
 
 class FakeDataset:
-    """Enough of a `datasets.Dataset` for the loader: rows, features, shuffle."""
-
     def __init__(self, rows, features):
         self.rows, self.features = rows, features
 
@@ -74,8 +69,6 @@ def label_sorted_loader(n_labels: int, per_label: int, text_field="text", label_
 
 
 def fixed_loader(rows, features=None):
-    """A `load_dataset` stand-in that returns `rows` whatever it is asked for."""
-
     def loader(*args, **kwargs):
         return FakeDataset(rows, features or {})
 
@@ -190,9 +183,7 @@ class TestSplits:
         assert not states[Split.CALIBRATION] & states[Split.TEST]
 
     def test_assignment_is_stable_across_processes(self):
-        """`hash()` is salted per process, so a split built on it reshuffles on
-        every rebuild. Checked in two fresh interpreters with different hash
-        seeds, against assignments pinned when the split salt was fixed."""
+        """`hash()` is salted per process, so a split built on it reshuffles on every rebuild."""
         import os
         import subprocess
         import sys
@@ -698,8 +689,6 @@ class TestKeepFull:
 
 
 class TestBuildDataset:
-    """`build_dataset` end to end: two fake sources in, three split files out."""
-
     @staticmethod
     def loader(hf_id, config=None, split=None, cache_dir=None, **_):
         if hf_id == REGISTRY["ag_news"].hf_id:

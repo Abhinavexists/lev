@@ -24,7 +24,6 @@ def example(question, target, index, source="src", abstain=False):
 
 
 def write_test_split(directory, rows):
-    """Write `rows` as the test split of a built dataset at `directory`."""
     directory.mkdir(parents=True, exist_ok=True)
     write_jsonl(directory / SPLIT_FILES[Split.TEST], rows)
     return directory
@@ -37,9 +36,8 @@ NOUL = Noul(instructions="is it urgent?")
 
 class TestRoundTrip:
     def test_same_options_in_a_different_order_are_different_questions(self, tmp_path):
-        """The reader caches questions by payload. Sorting that key merged every
-        shuffled row into the first-seen order and silently moved its target
-        onto a wrong option -- the bug behind clinc_oos 0.055 (ADR-024)."""
+        """A question cache keyed on sorted payloads moved shuffled rows' targets onto wrong
+        options (ADR-024)."""
         forward = Choice(instructions="q", criteria={"a": None, "b": None, "c": None})
         backward = Choice(instructions="q", criteria={"c": None, "b": None, "a": None})
         rows = [an_example(forward, target=0, state="x"), an_example(backward, target=0, state="y")]
@@ -159,9 +157,8 @@ class TestExport:
 
 class TestVariableQuestions:
     def test_sources_whose_question_varies_per_row_are_skipped_and_listed(self, tmp_path):
-        """A task file has one question for all its items; per-row QA options
-        cannot be expressed in it, and must not be silently written under the
-        first row's option set."""
+        """A task file has one question for all its items, so per-row options must not be
+        silently written under the first row's option set."""
         rows = [example(CHOICE, i % 2, i, source="a") for i in range(MIN_USEFUL_ITEMS + 10)]
         rows += [
             example(

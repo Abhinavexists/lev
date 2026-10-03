@@ -34,7 +34,7 @@ class GatedEngine:
 
 
 async def submit_while_busy(batcher, engine, first, queued):
-    """Occupy the worker with `first`, queue `queued`, then let it run."""
+    """Occupy the worker with `first` and queue `queued` behind it."""
     head = asyncio.ensure_future(batcher.submit(first))
     while not engine.started.is_set():
         await asyncio.sleep(0.001)

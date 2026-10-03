@@ -1,7 +1,4 @@
-"""The training loop's control flow, with the backbone stubbed out.
-
-torch is in the `train` extra, so these skip on a bare `uv sync`.
-"""
+"""torch is in the `train` extra, so these skip on a bare `uv sync`."""
 
 from __future__ import annotations
 
@@ -13,8 +10,6 @@ from conftest import a_choice, an_example  # noqa: E402
 
 
 class StubModel:
-    """Just enough surface for the loop: parameters, train(), no real forward."""
-
     def __init__(self):
         self._p = torch.nn.Parameter(torch.zeros(1))
 
@@ -42,10 +37,7 @@ def make_batching_tokenizer():
 
 
 def stub_backbone(monkeypatch, loop):
-    """Replace data loading, the model and its forward pass on `loop`.
-
-    The 64 rows are 4-option Choices, so every batch takes Mode A.
-    """
+    """The 64 rows are 4-option Choices, so every batch takes Mode A."""
     rows = [an_example(a_choice(4), target=i % 4, state=f"row {i}") for i in range(64)]
     monkeypatch.setattr(loop, "prepare_data", lambda c, d: {"train": rows, "calibration": []})
     monkeypatch.setattr(
@@ -80,11 +72,8 @@ def smoke_config(tmp_path, *, epochs, checkpoint_every):
 def run_resumable(
     tmp_path, monkeypatch, *, max_steps, checkpoint_every=3, fresh=False, persist=True
 ):
-    """Run the real loop on a two-epoch smoke config, stopping at `max_steps`.
-
-    Checkpoints land on disk, so a second call in the same `tmp_path` resumes.
-    Returns (saved steps, batches seen, summary).
-    """
+    """Checkpoints land on disk, so a second call in the same `tmp_path` resumes.
+    Returns (saved steps, batches seen, summary)."""
     import lev.train.loop as loop
     from lev.train.checkpoints import TRAINING_STATE
     from lev.train.collate import DecisionCollator
@@ -116,12 +105,8 @@ def run_resumable(
 
 
 class TestCheckpointCadence:
-    """Drives the real `run_training` loop.
-
-    Only data loading, the backbone, the forward pass and the checkpoint write
-    are stubbed; the batching, the mode routing, the step counter and the
-    checkpoint decisions are the shipping code.
-    """
+    """Only data loading, the backbone, the forward pass and the checkpoint write are stubbed;
+    batching, routing, the step counter and checkpoint decisions are the shipping code."""
 
     def run(self, tmp_path, monkeypatch, *, max_steps, checkpoint_every, epochs=1):
         import lev.train.loop as loop
@@ -155,15 +140,13 @@ class TestCheckpointCadence:
 
 
 class TestResume:
-    """A preempted run continues at the step it stopped, through the batches it
-    had not seen, on the schedule it had reached. Stubbed as in
-    `TestCheckpointCadence`, plus weight loading."""
+    """A preempted run continues at the step it stopped, through the batches it had not seen,
+    on the schedule it had reached."""
 
     def test_resumes_at_the_saved_step_and_sees_only_the_remaining_batches(
         self, tmp_path, monkeypatch
     ):
         _, full, _ = run_resumable(tmp_path / "ref", monkeypatch, max_steps=10)
-        # The same run, stopped at 6 and restarted.
         saved_a, seen_a, _ = run_resumable(tmp_path, monkeypatch, max_steps=6)
         saved_b, seen_b, summary = run_resumable(tmp_path, monkeypatch, max_steps=10)
 
@@ -198,9 +181,8 @@ class TestResume:
         assert summary["history"][0]["step"] == 0
 
     def test_rerunning_a_finished_run_trains_nothing(self, tmp_path, monkeypatch):
-        """7 steps at checkpoint_every=3 ends between saves; the final checkpoint
-        must carry training state, or a rerun resumes it as weights-only and
-        trains again from step 0."""
+        """7 steps at checkpoint_every=3 ends between saves, so the final checkpoint must carry
+        training state or a rerun resumes it as weights-only and trains from step 0."""
         run_resumable(tmp_path, monkeypatch, max_steps=7)
         saved, seen, summary = run_resumable(tmp_path, monkeypatch, max_steps=7)
         assert seen == [], "a finished run must not train again"

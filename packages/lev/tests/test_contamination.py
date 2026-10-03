@@ -90,7 +90,6 @@ class TestResolution:
                 assert_clean([name])
 
     def test_the_block_list_covers_every_published_subset(self):
-        """Tripwire against the snapshot: if a subset appears there, block it."""
         snapshot = Path(__file__).resolve().parents[3] / "data" / "s1bench-snapshot.json"
         published = set(json.loads(snapshot.read_text())["published_jev"])
         assert published <= BLOCKED_SUBSETS, sorted(published - BLOCKED_SUBSETS)

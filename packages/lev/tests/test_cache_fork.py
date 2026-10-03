@@ -1,15 +1,4 @@
-"""Regression test for the hybrid cache fork (`prefix_mode="fork"`).
-
-`Cache.batch_repeat_interleave` exists only on full-attention layers, and 24 of
-Qwen3.5-4B's 32 layers are `LinearAttentionLayer` (conv/recurrent state, not
-keys/values), so a fork built on it died with
-
-    AttributeError: 'LinearAttentionLayer' object has no attribute
-                    'batch_repeat_interleave'
-
-These tests build a mixed cache from the real layer classes, with no GPU or
-model download.
-"""
+"""Qwen3.5's `LinearAttentionLayer` has no `batch_repeat_interleave`; a fork built on it raised."""
 
 from __future__ import annotations
 
@@ -40,7 +29,6 @@ def hybrid_cache():
 
 
 def test_fork_expands_both_layer_kinds():
-    """The whole bug: a linear-attention layer must survive the fork."""
     n = 4
     forked = _fork(hybrid_cache(), n)
 
@@ -52,7 +40,6 @@ def test_fork_expands_both_layer_kinds():
 
 
 def test_every_forked_row_is_a_copy_of_row_zero():
-    """Rows must be identical: each question sees the same prefix."""
     original = hybrid_cache()
     source_keys = original.layers[0].keys.clone()
     source_conv = original.layers[1].conv_states[0].clone()
@@ -77,12 +64,7 @@ def test_fork_does_not_mutate_the_source():
 
 
 def test_the_old_approach_still_fails():
-    """Pin the reason for the fix, so nobody 'simplifies' it back.
-
-    If a future transformers gives `LinearAttentionLayer` a
-    `batch_repeat_interleave`, this test fails and the `_fork` docstring can be
-    revisited deliberately rather than by accident.
-    """
+    """Pins why `_fork` avoids `batch_repeat_interleave`, so nobody 'simplifies' it back."""
     linear = cache_utils.LinearAttentionLayer()
     assert not hasattr(linear, "batch_repeat_interleave"), (
         "LinearAttentionLayer now implements batch_repeat_interleave; "
