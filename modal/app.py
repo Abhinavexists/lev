@@ -250,9 +250,7 @@ def smoke(steps: int = 40) -> dict:
     Builds a small mixture if the volume is empty, so a fresh workspace needs
     one command. Covers every part of `train` except its duration.
     """
-    from pathlib import Path as _Path
-
-    if not (_Path(DATA_DIR) / "train.jsonl").is_file():
+    if not (Path(DATA_DIR) / "train.jsonl").is_file():
         # On the GPU, which `build_data` avoids, but only for the small smoke
         # mixture (a couple of minutes). Run `build_data` before `train`.
         print("data volume is empty; building a small mixture first")
@@ -352,21 +350,14 @@ def serve():
     With no trained checkpoint for the preset it serves the base backbone
     uncalibrated, with a warning, rather than refusing to start.
     """
-    from pathlib import Path as _Path
-
     from lev.server import create_app
-    from lev.train.checkpoints import latest_checkpoint
+    from lev.train.checkpoints import ADAPTER_WEIGHTS, latest_checkpoint
     from lev.train.config import PRESETS
 
     preset = os.environ.get("LEV_SERVE_PRESET", SERVE_PRESET)
     if preset not in PRESETS:
         raise ValueError(f"LEV_SERVE_PRESET={preset!r} is not a preset; have {sorted(PRESETS)}")
     config = PRESETS[preset]
-    output = _Path(f"{CKPT_DIR}/{preset}")
-    # `latest_checkpoint` skips a step directory without weights (an interrupted save).
-    trained = (
-        latest_checkpoint(output) is not None or (output / "adapter_model.safetensors").is_file()
-    )
 
     # Off unless asked: measured slower than eager on this model (ADR-023).
     compile = os.environ.get("LEV_SERVE_COMPILE", "0") in ("1", "true", "yes")
@@ -380,23 +371,20 @@ def serve():
     frozen = os.environ.get("LEV_SERVE_MODEL")
     if frozen:
         print(f"serving {frozen} frozen: no adapter, binary Noul, raw softmax")
-        return create_app(
-            checkpoint_dir=None,
-            model_cache=MODELS_DIR,
-            model_id=frozen,
-            compile=compile,
-            max_label_options=max_label_options,
-            prompt_style=prompt_style,
-            skip_multi_token_codes=skip_codes,
-        )
-
-    if not trained:
-        print(f"WARNING: nothing trained at {output}; serving the base backbone uncalibrated")
+        checkpoint_dir, model_id = None, frozen
+    else:
+        output = Path(f"{CKPT_DIR}/{preset}")
+        # `latest_checkpoint` skips a step directory without weights (an interrupted save).
+        trained = latest_checkpoint(output) is not None or (output / ADAPTER_WEIGHTS).is_file()
+        if not trained:
+            print(f"WARNING: nothing trained at {output}; serving the base backbone uncalibrated")
+        checkpoint_dir = str(output) if trained else None
+        model_id = config.model_id
 
     return create_app(
-        checkpoint_dir=str(output) if trained else None,
+        checkpoint_dir=checkpoint_dir,
         model_cache=MODELS_DIR,
-        model_id=config.model_id,
+        model_id=model_id,
         compile=compile,
         max_label_options=max_label_options,
         prompt_style=prompt_style,
@@ -424,15 +412,15 @@ def export_checkpoint(preset: str = "4b", name: str | None = None) -> dict:
     from lev.release import build_release
     from lev.train.config import PRESETS
 
+    target = name or preset
     manifest = build_release(
         f"{CKPT_DIR}/{preset}",
-        f"{RELEASES_DIR}/{name or preset}",
+        f"{RELEASES_DIR}/{target}",
         preset=preset,
         name=name,
         prompt_style=PRESETS[preset].prompt_style,
     )
     checkpoints.commit()
-    target = name or preset
     print(
         f"release {manifest['name']} -> {RELEASES_DIR}/{target}  ({len(manifest['files'])} files)"
     )
@@ -485,9 +473,9 @@ def check_release(name: str = "4b") -> dict:
 
     with TestClient(create_app(release, model_cache=MODELS_DIR)) as client:
         health = client.get("/health").json()
-        served = client.post("/v1/systemone", json=request)
-    served.raise_for_status()
-    served = served.json()
+        response = client.post("/v1/systemone", json=request)
+    response.raise_for_status()
+    served = response.json()
     for question, answer in served["answers"].items():
         expected = direct["answers"][question]
         gaps = [abs(answer["probabilities"][k] - p) for k, p in expected["probabilities"].items()]
@@ -710,8 +698,7 @@ def profile_engine(preset: str = "4b", rounds: int = 20) -> dict:
     for label in shapes:
         for name, a in answers["fork"][label].items():
             b = answers["single"][label][name]
-            pa = a.probabilities or {1: a.noul}
-            pb = b.probabilities or {1: b.noul}
+            pa, pb = _probabilities(a), _probabilities(b)
             worst = max(worst, *(abs(pa[k] - pb[k]) for k in pa))
     report["fork_vs_single_max_prob_diff"] = round(worst, 5)
     print(f"fork vs single: max |dp| over all answers = {worst:.5f}", flush=True)
