@@ -106,8 +106,8 @@ def _hf_secrets() -> list:
 
 # Deploy-time knobs, read where `modal deploy` runs. Decorator arguments are
 # fixed at import, so these cannot travel as Secrets the way the preset does.
-#   LEV_SERVE_CONCURRENCY  requests one container handles at once (default 4);
-#                          GPU forwards serialise, parsing and network overlap.
+#   LEV_SERVE_CONCURRENCY  requests one container handles at once (default 32);
+#                          concurrent requests share batched forwards (lev.batcher).
 #   LEV_SERVE_WARM         containers kept running (default 0). One removes the
 #                          20-55 s cold start, at the cost of an idle GPU.
 #   LEV_SERVE_REGION       a Modal region near the client; the measured 280 ms
@@ -116,7 +116,7 @@ def _hf_secrets() -> list:
 #   LEV_SERVE_MAX          container ceiling (default unset: Modal's own limit).
 #                          Pin it for a benchmark sweep, where a parallel client
 #                          would otherwise open a GPU per burst of requests.
-SERVE_CONCURRENCY = int(os.environ.get("LEV_SERVE_CONCURRENCY", "4"))
+SERVE_CONCURRENCY = int(os.environ.get("LEV_SERVE_CONCURRENCY", "32"))
 SERVE_WARM = int(os.environ.get("LEV_SERVE_WARM", "0"))
 SERVE_REGION = os.environ.get("LEV_SERVE_REGION")
 SERVE_SCALEDOWN = int(os.environ.get("LEV_SERVE_SCALEDOWN", "300"))
