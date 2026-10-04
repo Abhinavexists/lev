@@ -1,39 +1,41 @@
-"""Presentation checks (ADR-029) and opt-in Score order averaging.
+"""Presentation checks (ADR-029), opt-in Score order averaging and the request row limit.
 
-The checks run against a fake `system_one` that validates every request with
-lev's own `SystemOneRequest` and answers with lev's answer types, so a probe lev
-would reject, or an answer shape the checks misread, fails here without weights.
+The checks run against `FakeEngine`: a real `DecisionEngine` without weights routes,
+renders and counts every request, as serving does, and only the logits are scripted.
+So a probe lev would reject, a row count that disagrees with the engine, or an answer
+shape the checks misread fails here without weights.
 """
 
 from __future__ import annotations
 
 import json
 import math
+from pathlib import Path
+from string import ascii_uppercase
 
 import pytest
-from lev import (
-    ChoiceAnswer,
-    Score,
-    ScoreAnswer,
-    SystemOneRequest,
-    SystemOneResponse,
-    Usage,
-)
-from lev.model import DecisionEngine, EngineConfig, average_orders
+from lev import ChoiceAnswer, Score, ScoreAnswer, SystemOneRequest, SystemOneResponse, Usage
+from lev.model import MAX_REQUEST_ROWS, DecisionEngine, EngineConfig, average_orders
 from lev.presentation import (
     IDENTICAL_KS,
+    KEYS,
     KINDS,
+    POST_LOAD,
+    PRE_LOAD,
     SLOT0_MIN,
     TEXT,
+    ask,
+    call_groups,
     drift,
     packed_consistency,
     probe_questions,
     read_states,
-    run,
+    report,
+    single_order,
     to_markdown,
 )
 from lev.router import route
-from lev.types import Choice
+from lev.types import Choice, Noul
 
 
 def softmax(z: list[float]) -> list[float]:
@@ -42,27 +44,59 @@ def softmax(z: list[float]) -> list[float]:
     return [v / sum(e) for v in e]
 
 
-class FakeEngine:
-    """logit = content[option text] + slot_bias[slot]. `packing` adds a term that
-    depends on how many questions share the call, which a packed readout must not."""
+class Tokenizer:
+    """Space-prefixed A-Z and 0-8 are single tokens, as `rich_tokenizer`."""
 
-    def __init__(self, slot0: float = 0.0, content: dict | None = None, packing: float = 0.0):
-        self.slot0, self.content, self.packing, self.calls = slot0, content or {}, packing, 0
-        self.checkpoint = None  # a DecisionEngine's resolved checkpoint; None for a frozen base
+    single = {f" {c}" for c in ascii_uppercase} | {f" {i}" for i in range(9)}
+
+    def encode(self, text: str, add_special_tokens: bool = True) -> list[int]:
+        return [1] if text in self.single else [1] * (len(text) + 1)
+
+
+class FakeEngine:
+    """logit = content[text] + key_pull[key] + slot0 (in slot 0) + a packing term that
+    grows with the questions per call, read in every order the engine renders and
+    averaged as lev does. Routing, orders, row counts and the row limit are the real
+    engine's."""
+
+    def __init__(self, slot0=0.0, content=None, packing=0.0, key_pull=None, **config):
+        self.real = DecisionEngine(model=None, tokenizer=Tokenizer(), config=EngineConfig(**config))
+        self.slot0, self.content, self.packing = slot0, content or {}, packing
+        self.key_pull = key_pull or {}
+        self.calls = 0
+        self.checkpoint = None
+
+    @property
+    def config(self) -> EngineConfig:
+        return self.real.config
+
+    @config.setter
+    def config(self, value: EngineConfig) -> None:
+        self.real.config = value
+
+    def question_rows(self, questions):
+        return self.real.question_rows(questions)
 
     def system_one(self, state, questions):
-        request = SystemOneRequest(state=state, questions=questions)
+        prepared = self.real.prepare(state, questions)
+        SystemOneRequest(state=state, questions=questions)
         self.calls += 1
-        answers = {}
-        for name, q in request.questions.items():
-            texts = list(q.criteria)
+        rows: dict[str, list] = {}
+        for variant in prepared.variants:
+            q = prepared.questions[variant.name]
+            items = list(q.criteria.items()) if q.type == "choice" else list(enumerate(q.criteria))
+            shown = items if variant.order is None else [items[i] for i in variant.order]
             z = [
-                self.content.get(t, 0.0)
-                + (self.slot0 if i == 0 else 0.0)
-                + self.packing * len(request.questions) * i
-                for i, t in enumerate(texts)
+                self.content.get(text, 0.0)
+                + self.key_pull.get(key, 0.0)
+                + (self.slot0 if j == 0 else 0.0)
+                + self.packing * len(questions) * j
+                for j, (key, text) in enumerate(shown)
             ]
-            p = softmax(z)
+            rows.setdefault(variant.name, []).append((softmax(z), variant.order))
+        answers = {}
+        for name, q in prepared.questions.items():
+            p = average_orders([r[0] for r in rows[name]], [r[1] for r in rows[name]])
             if q.type == "score":
                 answers[name] = ScoreAnswer(
                     score=0.0,
@@ -80,13 +114,18 @@ class FakeEngine:
         return SystemOneResponse(model="fake", answers=answers, usage=Usage(input_tokens=1))
 
 
+def run(engine, states, lang="en", kinds=KINDS, max_rows=MAX_REQUEST_ROWS, slot0_min=SLOT0_MIN):
+    return report(ask(engine, states, lang, kinds, max_rows), lang, kinds, slot0_min)
+
+
 class TestProbeQuestions:
     @pytest.mark.parametrize("lang", sorted(TEXT))
     def test_every_probe_is_a_valid_request(self, lang):
         questions = probe_questions(lang)
         assert SystemOneRequest(state="s", questions=questions)
-        per_kind = 2 * len(IDENTICAL_KS) + 6
-        assert len(questions) == per_kind * len(KINDS)
+        score = 2 * len(IDENTICAL_KS) + 6
+        choice = 2 * sum(math.factorial(k) for k in IDENTICAL_KS) + 6
+        assert len(questions) == score + choice
 
     @pytest.mark.parametrize("lang", sorted(TEXT))
     def test_identical_options_differ_only_by_position(self, lang):
@@ -96,7 +135,20 @@ class TestProbeQuestions:
             texts = q["criteria"] if q["type"] == "score" else list(q["criteria"].values())
             assert len(set(texts)) == 1
             if q["type"] == "choice":
-                assert list(q["criteria"]) == [str(i + 1) for i in range(len(q["criteria"]))]
+                assert set(q["criteria"]) <= set(KEYS)
+                assert not any(c.isdigit() for key in q["criteria"] for c in key)
+
+    def test_every_choice_key_sits_in_every_slot_equally_often(self):
+        for k in IDENTICAL_KS:
+            listings = [
+                list(q["criteria"])
+                for qid, q in probe_questions("en", ["choice"]).items()
+                if qid.startswith(f"choice|identical|a team|{k}|")
+            ]
+            assert len(listings) == math.factorial(k)
+            for slot in range(k):
+                counts = {key: sum(lst[slot] == key for lst in listings) for key in KEYS[:k]}
+                assert set(counts.values()) == {math.factorial(k - 1)}
 
     @pytest.mark.parametrize("lang", sorted(TEXT))
     def test_every_option_sits_in_every_slot_twice(self, lang):
@@ -113,46 +165,114 @@ class TestProbeQuestions:
 
 class TestChecks:
     def test_a_flat_readout_sits_at_zero_and_one_third(self):
-        content = {"Soon": 3.0, "Technical": 3.0}
-        report = run(FakeEngine(content=content).system_one, ["a", "b"])
+        content = {"Soon": 3.0, "payments, refunds, invoices": 3.0}
+        r = run(FakeEngine(content=content), ["a", "b"])
         for kind in KINDS:
-            assert report[kind]["identical"]["metric"] == pytest.approx(0.0)
-            assert report[kind]["identical"]["passed"]
-            assert report[kind]["first_slot"]["metric"] == pytest.approx(1 / 3)
+            assert r[kind]["identical"]["metric"] == pytest.approx(0.0)
+            assert r[kind]["identical"]["passed"]
+            assert r[kind]["first_slot"]["metric"] == pytest.approx(1 / 3)
+            assert r[kind]["first_slot"]["consistent"] == 1.0
 
     def test_a_planted_slot_zero_penalty_is_measured_exactly(self):
-        report = run(FakeEngine(slot0=-2.0).system_one, ["a", "b", "c"])
+        r = run(FakeEngine(slot0=-2.0, order_average=False), ["a", "b", "c"])
         # centred slot 0 = -2 - (-2/K), averaged over K = 3, 4, 5 and both texts
         expected = sum(-2.0 * (1 - 1 / k) for k in IDENTICAL_KS) / len(IDENTICAL_KS)
         for kind in KINDS:
-            assert report[kind]["identical"]["metric"] == pytest.approx(expected)
-            assert not report[kind]["identical"]["passed"]
-            assert report[kind]["first_slot"]["argmax_by_slot"][0] == 0
-            assert report[kind]["first_slot"]["decisions"] == 18
+            assert r[kind]["identical"]["metric"] == pytest.approx(expected)
+            assert not r[kind]["identical"]["passed"]
+            assert r[kind]["first_slot"]["argmax_by_slot"][0] == 0
+            assert r[kind]["first_slot"]["decisions"] == 18
 
-    def test_one_call_per_state(self):
-        engine = FakeEngine()
-        run(engine.system_one, ["a", "b", "c"])
-        assert engine.calls == 3
+    def test_ties_are_split_between_the_tied_slots(self):
+        """A flat readout ties all three slots; argmax would credit slot 0 every time."""
+        r = run(FakeEngine(), ["a", "b"])
+        for kind in KINDS:
+            assert r[kind]["first_slot"]["metric"] == pytest.approx(1 / 3)
+            assert r[kind]["first_slot"]["argmax_by_slot"] == pytest.approx([4.0, 4.0, 4.0])
+
+    def test_a_choice_key_pull_cancels_and_a_position_effect_does_not(self):
+        pulled = run(FakeEngine(key_pull={KEYS[0]: 2.0}), ["a"], kinds=["choice"])
+        assert pulled["choice"]["identical"]["metric"] == pytest.approx(0.0, abs=1e-12)
+        both = run(FakeEngine(key_pull={KEYS[0]: 2.0}, slot0=-1.0, order_average=False), ["a"])
+        alone = run(FakeEngine(slot0=-1.0, order_average=False), ["a"])
+        assert both["choice"]["identical"]["metric"] == pytest.approx(
+            alone["choice"]["identical"]["metric"]
+        )
+
+    @pytest.mark.parametrize("mode", ["reversed", "cyclic"])
+    def test_the_identical_check_reads_one_order_whatever_the_engine_averages(self, mode):
+        """Averaged, a pure slot bias cancels (cyclic) or hides the middle slots (reversed)."""
+        single = run(FakeEngine(slot0=-2.0, order_average=False), ["a"])
+        averaged = run(FakeEngine(slot0=-2.0, score_order_average=mode), ["a"])
+        for kind in KINDS:
+            assert averaged[kind]["identical"]["metric"] == pytest.approx(
+                single[kind]["identical"]["metric"]
+            )
+        engine = FakeEngine(score_order_average=mode)
+        with single_order(engine):
+            assert engine.config.order_average is False
+        assert engine.config.order_average and engine.config.score_order_average == mode
 
     def test_the_gate_is_the_proposal_and_can_be_moved(self):
-        engine = FakeEngine(slot0=-0.3)
-        assert not run(engine.system_one, ["a"])["score"]["identical"]["passed"]
-        assert run(engine.system_one, ["a"], slot0_min=-1.0)["score"]["identical"]["passed"]
+        engine = FakeEngine(slot0=-0.3, order_average=False)
+        assert not run(engine, ["a"])["score"]["identical"]["passed"]
+        assert run(engine, ["a"], slot0_min=-1.0)["score"]["identical"]["passed"]
         assert SLOT0_MIN == -0.20
+
+
+class TestCallGroups:
+    """Calls hold at most `max_rows` rows, counted by the engine for every question."""
+
+    @pytest.mark.parametrize("mode", ["off", "reversed", "cyclic"])
+    def test_every_call_fits_the_limit_and_asks_everything_once(self, mode):
+        engine = FakeEngine(score_order_average=mode)
+        questions = probe_questions("en")
+        groups = call_groups(engine, questions, 24)
+        rows = engine.question_rows(questions)
+        assert all(sum(rows[q] for q in g) <= 24 for g in groups)
+        assert sorted(q for g in groups for q in g) == sorted(questions)
+
+    def test_choice_rows_count(self):
+        engine = FakeEngine()
+        rows = engine.question_rows(probe_questions("en", ["choice"]))
+        assert set(rows.values()) == {2}
+        assert len(call_groups(engine, probe_questions("en", ["choice"]), 24)) > 1
+
+    def test_the_grouping_does_not_change_an_isolated_readout(self):
+        engine = FakeEngine(slot0=-1.0, content={"Soon": 1.0}, score_order_average="cyclic")
+        assert run(engine, ["a", "b"], max_rows=5) == run(engine, ["a", "b"])
+
+    def test_identical_and_permuted_questions_never_share_a_call(self):
+        engine = FakeEngine()
+        seen = []
+        real = engine.system_one
+        engine.system_one = lambda state, qs: seen.append(set(qs)) or real(state, qs)
+        ask(engine, ["a"])
+        for qids in seen:
+            assert len({q.split("|")[1] for q in qids}) == 1
 
 
 class TestPackedConsistency:
     def test_an_isolated_readout_agrees_with_itself_alone(self):
-        assert packed_consistency(FakeEngine(slot0=-1.0).system_one, ["a"]) == pytest.approx(0.0)
+        engine = FakeEngine(slot0=-1.0)
+        answers = ask(engine, ["a"])
+        assert packed_consistency(engine, ["a"], answers) == pytest.approx(0.0)
 
     def test_a_readout_that_depends_on_packing_is_caught(self):
-        assert packed_consistency(FakeEngine(packing=0.01).system_one, ["a"]) > 0.01
+        engine = FakeEngine(packing=0.01)
+        assert packed_consistency(engine, ["a"], ask(engine, ["a"])) > 0.01
+
+    def test_the_packed_answers_are_reused_not_asked_again(self):
+        engine = FakeEngine()
+        answers = ask(engine, ["a", "b"])
+        before = engine.calls
+        packed_consistency(engine, ["a"], answers)
+        assert engine.calls - before == len(probe_questions("en"))
 
 
 class TestReport:
     def test_drift_flags_only_what_moved_past_the_tolerance(self):
-        now = run(FakeEngine(slot0=-2.0).system_one, ["a"])
+        now = run(FakeEngine(slot0=-2.0), ["a"])
         committed = json.loads(json.dumps(now))
         assert drift(now, committed, 0.05) == []
         committed["score"]["identical"]["metric"] += 0.2
@@ -164,7 +284,7 @@ class TestReport:
         assert "choice.identical: missing from this run" in drift(now, committed, 0.05)
 
     def test_markdown_has_a_row_per_kind(self):
-        text = to_markdown(run(FakeEngine().system_one, ["a"]))
+        text = to_markdown(run(FakeEngine(), ["a"]))
         assert text.count("\n") == 1 + len(KINDS)
 
     def test_states_are_read_from_jsonl(self, tmp_path):
@@ -203,11 +323,17 @@ class TestScoreOrderAverage:
             [2, 0, 1],
         ]
 
-    def test_independent_of_the_choice_switch(self, rich_tokenizer):
-        q = Score(criteria=["low", "high"])
-        assert self.orders(
-            q, rich_tokenizer, score_order_average="reversed", order_average=False
-        ) == [None, [1, 0]]
+    @pytest.mark.parametrize("mode", ["off", "reversed", "cyclic"])
+    def test_order_average_off_reads_every_question_once(self, rich_tokenizer, mode):
+        for q in (
+            Score(criteria=["low", "mid", "high"]),
+            Choice(criteria={"a": None, "b": None, "c": None}),
+        ):
+            assert self.orders(
+                q, rich_tokenizer, score_order_average=mode, order_average=False
+            ) == [None]
+
+    def test_choice_does_not_follow_the_score_switch(self, rich_tokenizer):
         c = Choice(criteria={"a": None, "b": None, "c": None})
         for mode in ("off", "reversed", "cyclic"):
             assert self.orders(c, rich_tokenizer, score_order_average=mode) == [None, [2, 1, 0]]
@@ -224,67 +350,95 @@ class TestScoreOrderAverage:
         """Each level sits in each slot once, so a pure position bias averages out."""
         k = 4
         orders = [None] + [[(j + r) % k for j in range(k)] for r in range(1, k)]
-        biased = softmax([2.0, 0.0, 0.0, 0.0])  # slot 0 favoured, content equal
+        biased = softmax([2.0, 0.0, 0.0, 0.0])
         assert average_orders([biased] * k, orders) == pytest.approx([1 / k] * k)
 
 
-class TestCallGroups:
-    """How the probe is split into calls: one by default, bounded Score rows under cyclic."""
+QUESTIONS = {
+    "team": Choice(criteria={"a": None, "b": None, "c": None}),
+    "urgency": Score(criteria=["low", "mid", "high", "blocked"]),
+    "churn": Noul(instructions="leaving?"),
+    "many": Choice(criteria={f"o{i}": None for i in range(40)}),
+}
 
-    def rows(self, group, mode):
-        from lev.presentation import score_rows
 
-        return sum(score_rows(q, mode) for q in group.values() if q["type"] == "score")
+class TestQuestionRows:
+    """`question_rows` is what `prepare` renders, so callers never recount rows."""
 
-    def test_off_and_reversed_stay_one_call(self):
-        from lev.presentation import call_groups
-
-        questions = probe_questions("en", ["score"])
-        assert len(call_groups(questions)) == 1
-        assert self.rows(questions, "reversed") == 24
-        assert len(call_groups(questions, score_order_average="reversed")) == 1
-
-    def test_cyclic_is_cut_at_the_row_limit_and_asks_everything_once(self):
-        from lev.presentation import call_groups
-
-        questions = probe_questions("en")
-        assert self.rows(questions, "cyclic") == 42
-        groups = call_groups(questions, score_order_average="cyclic")
-        assert len(groups) > 1
-        assert all(self.rows(g, "cyclic") <= 24 for g in groups)
-        asked = [qid for g in groups for qid in g]
-        assert sorted(asked) == sorted(questions)
-
-    def test_split_checks_never_mixes_the_two_checks(self):
-        from lev.presentation import call_groups
-
-        for group in call_groups(probe_questions("ja"), split_checks=True):
-            assert len({qid.split("|")[1] for qid in group}) == 1
-
-    def test_the_split_does_not_change_an_isolated_readout(self):
-        engine = FakeEngine(slot0=-1.0, content={"Soon": 1.0})
-        one = run(engine.system_one, ["a", "b"])
-        split = run(
-            engine.system_one,
-            ["a", "b"],
-            split_checks=True,
-            max_score_rows=5,
-            score_order_average="cyclic",
+    @pytest.mark.parametrize("mode", ["off", "reversed", "cyclic"])
+    @pytest.mark.parametrize("order_average", [True, False])
+    @pytest.mark.parametrize("noul_readout", ["rating", "binary"])
+    def test_it_matches_prepare(self, poor_tokenizer, mode, order_average, noul_readout):
+        engine = DecisionEngine(
+            model=None,
+            tokenizer=poor_tokenizer,
+            config=EngineConfig(
+                score_order_average=mode,
+                order_average=order_average,
+                noul_readout=noul_readout,
+                max_request_rows=None,
+            ),
+            mode_b_head=object(),
         )
-        assert split == one
-        assert packed_consistency(engine.system_one, ["a"], split_checks=True) == pytest.approx(0.0)
+        rows = engine.question_rows(QUESTIONS)
+        assert sum(rows.values()) == engine.prepare("s", QUESTIONS).rows
+        assert rows["many"] == 1  # Mode B: one row whatever the averaging
+
+    def test_schema_first_is_one_row_per_question(self, rich_tokenizer):
+        from lev.prompt import Layout
+
+        engine = DecisionEngine(
+            model=None,
+            tokenizer=rich_tokenizer,
+            config=EngineConfig(layout=Layout.SCHEMA_FIRST, score_order_average="cyclic"),
+            mode_b_head=object(),
+        )
+        assert set(engine.question_rows(QUESTIONS).values()) == {1}
+        assert engine.prepare("s", QUESTIONS).rows == len(QUESTIONS)
+
+
+class TestRequestRowLimit:
+    def engine(self, tokenizer, **config) -> DecisionEngine:
+        return DecisionEngine(model=None, tokenizer=tokenizer, config=EngineConfig(**config))
+
+    def test_a_request_past_the_limit_is_refused_before_any_forward(self, rich_tokenizer):
+        questions = {f"q{i}": Score(criteria=["a", "b", "c"]) for i in range(4)}
+        engine = self.engine(rich_tokenizer, score_order_average="cyclic", max_request_rows=11)
+        with pytest.raises(ValueError, match="needs 12 batch rows, above max_request_rows=11"):
+            engine.prepare("s", questions)
+        assert self.engine(rich_tokenizer, max_request_rows=11).prepare("s", questions).rows == 4
+
+    def test_none_is_no_limit(self, rich_tokenizer):
+        questions = {f"q{i}": Score(criteria=["a", "b", "c"]) for i in range(30)}
+        engine = self.engine(rich_tokenizer, score_order_average="cyclic", max_request_rows=None)
+        assert engine.prepare("s", questions).rows == 90
+        assert EngineConfig().max_request_rows == MAX_REQUEST_ROWS
+
+    def test_the_server_answers_422(self, monkeypatch, rich_tokenizer):
+        pytest.importorskip("fastapi")
+        from fastapi.testclient import TestClient
+        from lev import server
+
+        engine = self.engine(rich_tokenizer, score_order_average="cyclic", max_request_rows=5)
+        monkeypatch.setattr(server, "load", lambda *a, **k: engine)
+        questions = {f"q{i}": {"type": "score", "criteria": ["a", "b", "c"]} for i in range(2)}
+        with TestClient(server.create_app()) as client:
+            response = client.post("/v1/systemone", json={"state": "s", "questions": questions})
+        assert response.status_code == 422
+        assert "max_request_rows=5" in response.json()["detail"]
 
 
 class TestCommittedReport:
     """`data/presentation-checks.json` is what `--compare` reads in CI."""
 
     def test_it_parses_and_carries_every_metric(self):
-        from pathlib import Path
 
         path = Path(__file__).resolve().parents[3] / "data" / "presentation-checks.json"
         committed = json.loads(path.read_text("utf-8"))
         assert committed["score_order_average"] == "off" and committed["n_states"] == 290
+        assert committed["max_rows"] == MAX_REQUEST_ROWS
         for kind in KINDS:
+            assert committed["checks"][kind]["identical"]["read"] == "single order"
             for check in ("identical", "first_slot"):
                 assert isinstance(committed["checks"][kind][check]["metric"], float)
         assert drift(committed["checks"], committed["checks"], 0.0) == []
@@ -302,34 +456,55 @@ class TestCompareGuardsItsSettings:
         states.write_text('{"state": "a"}\n{"state": "b"}\n', "utf-8")
         main(["presentation-checks", str(states), "--packed", "0", *extra])
 
-    def committed(self, monkeypatch, tmp_path, engine) -> dict:
+    def committed(self, monkeypatch, tmp_path, engine, **edit) -> str:
         out = tmp_path / "report.json"
         self.cli(monkeypatch, tmp_path, engine, "--out", str(out))
-        return json.loads(out.read_text("utf-8"))
+        saved = json.loads(out.read_text("utf-8")) | edit
+        path = tmp_path / "committed.json"
+        path.write_text(json.dumps(saved), "utf-8")
+        return str(path)
+
+    def test_the_settings_split_at_the_load(self):
+        assert set(PRE_LOAD).isdisjoint(POST_LOAD)
+        assert set(POST_LOAD) == {"checkpoint_revision", "dtype"}
 
     def test_matching_settings_are_compared_metric_by_metric(self, monkeypatch, tmp_path):
         engine = FakeEngine(slot0=-1.0)
-        saved = self.committed(monkeypatch, tmp_path, engine)
-        assert saved["score_order_average"] == "off" and saved["max_score_rows"] == 24
+        path = Path(self.committed(monkeypatch, tmp_path, engine))
+        saved = json.loads(path.read_text("utf-8"))
+        assert saved["score_order_average"] == "off" and saved["max_rows"] == MAX_REQUEST_ROWS
         saved["checks"]["score"]["identical"]["metric"] += 0.5
-        path = tmp_path / "committed.json"
         path.write_text(json.dumps(saved), "utf-8")
         with pytest.raises(SystemExit) as exc:
             self.cli(monkeypatch, tmp_path, engine, "--compare", str(path))
         assert "score.identical" in str(exc.value.code)
 
-    def test_different_settings_are_refused_before_any_run(self, monkeypatch, tmp_path, capsys):
-        engine = FakeEngine(slot0=-1.0)
-        saved = self.committed(monkeypatch, tmp_path, engine)
-        saved["score_order_average"] = "reversed"
-        path = tmp_path / "committed.json"
-        path.write_text(json.dumps(saved), "utf-8")
+    def test_a_model_free_setting_is_refused_before_the_load(self, monkeypatch, tmp_path, capsys):
+        path = self.committed(monkeypatch, tmp_path, FakeEngine(), score_order_average="reversed")
+
+        def no_load(*a, **k):
+            raise AssertionError("loaded a model for a run it had to refuse")
+
+        monkeypatch.setattr("lev.model.load", no_load)
+        from lev.cli import main
+
+        states = tmp_path / "states.jsonl"
+        with pytest.raises(SystemExit) as exc:
+            main(["presentation-checks", str(states), "--packed", "0", "--compare", path])
+        assert exc.value.code == 2
+        assert (
+            "presentation settings differ from the committed report: "
+            "score_order_average (report: 'reversed', run: 'off')"
+        ) in capsys.readouterr().err
+
+    def test_another_revision_is_refused_after_the_load_and_before_any_run(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        engine = FakeEngine()
+        path = self.committed(monkeypatch, tmp_path, engine, checkpoint_revision="abc123")
         calls = engine.calls
         with pytest.raises(SystemExit) as exc:
             self.cli(monkeypatch, tmp_path, engine, "--compare", str(path))
         assert exc.value.code == 2
         assert engine.calls == calls
-        assert (
-            "presentation settings differ from the committed report: "
-            "score_order_average (report: 'reversed', run: 'off')"
-        ) in capsys.readouterr().err
+        assert "checkpoint_revision (report: 'abc123', run: None)" in capsys.readouterr().err

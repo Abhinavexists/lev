@@ -217,6 +217,11 @@ def cmd_serve(args: argparse.Namespace) -> None:
             max_pending=args.max_pending,
             max_batch_tokens=args.max_batch_tokens,
             score_order_average=args.score_order_average,
+            **(
+                {"max_request_rows": args.max_request_rows}
+                if args.max_request_rows is not None
+                else {}
+            ),
         ),
         host=args.host,
         port=args.port,
@@ -254,54 +259,44 @@ def cmd_presentation_checks(args: argparse.Namespace) -> None:
 
     from . import presentation
     from .calibrate import CalibrationProfile
-    from .model import load
+    from .model import MAX_REQUEST_ROWS, load
 
     states = presentation.read_states(args.states)[: args.limit]
+    kinds = [k.strip() for k in args.kinds.split(",") if k.strip()]
+    max_rows = args.max_rows or MAX_REQUEST_ROWS
+    settings = {
+        "n_states": len(states),
+        "lang": args.lang,
+        "raw": args.raw,
+        "kinds": kinds,
+        "score_order_average": args.score_order_average,
+        "max_rows": max_rows,
+    }
+    saved = json.loads(Path(args.compare).read_text("utf-8")) if args.compare else None
+    _refuse_other_settings(saved, settings, presentation.PRE_LOAD)
     engine = load(
         args.checkpoint,
         model_id=args.model,
         cache_dir=args.model_cache,
         calibration=args.calibration,
         score_order_average=args.score_order_average,
+        max_request_rows=max(max_rows, MAX_REQUEST_ROWS),
     )
     if args.raw:
         engine.calibration = CalibrationProfile()
-    kinds = [k.strip() for k in args.kinds.split(",") if k.strip()]
-    grouping = {
-        "split_checks": args.split_checks,
-        "max_score_rows": args.max_score_rows,
-        "score_order_average": args.score_order_average,
-    }
-    settings = {
-        "n_states": len(states),
-        "lang": args.lang,
-        "raw": args.raw,
-        "kinds": kinds,
-        **grouping,
-        "checkpoint_revision": _snapshot_revision(engine.checkpoint),
-        "dtype": _weights_dtype(engine),
-    }
-    saved = json.loads(Path(args.compare).read_text("utf-8")) if args.compare else None
-    if saved is not None:
-        # Metrics move with the order mode, the batching and the weights; compare like with like.
-        differ = presentation.settings_mismatch(saved, settings)
-        if differ:
-            print(
-                "presentation settings differ from the committed report: " + "; ".join(differ),
-                file=sys.stderr,
-            )
-            sys.exit(2)
+    settings["checkpoint_revision"] = _snapshot_revision(engine.checkpoint)
+    settings["dtype"] = _weights_dtype(engine)
+    _refuse_other_settings(saved, settings, presentation.POST_LOAD)
     cuda = _cuda()
     if cuda:
         cuda.empty_cache()
         cuda.reset_peak_memory_stats()
     started = time.perf_counter()
-    report = presentation.run(
-        engine.system_one, states, args.lang, kinds, args.slot0_min, **grouping
-    )
+    answers = presentation.ask(engine, states, args.lang, kinds, max_rows)
     seconds = time.perf_counter() - started
+    report = presentation.report(answers, args.lang, kinds, args.slot0_min)
     packed = presentation.packed_consistency(
-        engine.system_one, states[: args.packed], args.lang, kinds, **grouping
+        engine, states[: args.packed], answers, args.lang, kinds
     )
     peak = (
         {
@@ -339,6 +334,19 @@ def cmd_presentation_checks(args: argparse.Namespace) -> None:
         ]
     if failures:
         sys.exit("presentation checks failed:\n  " + "\n  ".join(failures))
+
+
+def _refuse_other_settings(saved: dict | None, settings: dict, keys) -> None:
+    """Metrics move with the order mode, the batching and the weights; compare like with like."""
+    from .presentation import settings_mismatch
+
+    differ = settings_mismatch(saved, settings, keys) if saved is not None else []
+    if differ:
+        print(
+            "presentation settings differ from the committed report: " + "; ".join(differ),
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -416,6 +424,12 @@ def main(argv: list[str] | None = None) -> None:
         help="padded tokens per batched forward across requests (default 16384)",
     )
     serve_parser.add_argument(
+        "--max-request-rows",
+        type=int,
+        default=None,
+        help="batch rows one request may need before it gets 422 (default: the engine's)",
+    )
+    serve_parser.add_argument(
         "--score-order-average",
         choices=["off", "reversed", "cyclic"],
         default="off",
@@ -447,15 +461,10 @@ def main(argv: list[str] | None = None) -> None:
         "--packed", type=int, default=3, help="states for the packed-vs-alone check"
     )
     presentation_parser.add_argument(
-        "--split-checks",
-        action="store_true",
-        help="ask the identical and permuted questions in separate calls",
-    )
-    presentation_parser.add_argument(
-        "--max-score-rows",
+        "--max-rows",
         type=int,
-        default=24,
-        help="Score rows per call before the probe is split (cyclic reads a level K times)",
+        default=None,
+        help="batch rows per call, as the engine counts them (default: max_request_rows)",
     )
     presentation_parser.add_argument("--slot0-min", type=float, default=-0.20)
     presentation_parser.add_argument("--out", default=None, help="write the report JSON here")

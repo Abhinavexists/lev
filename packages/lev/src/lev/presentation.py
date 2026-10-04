@@ -3,18 +3,21 @@
 The design of NandhaKishorM/laya#259, over `system_one` (ADR-029). Per question type
 (Score and Choice), on any list of states, with no labels:
 
-- **identical**: every option carries the same text, so options differ only by
-  position and code. Metric: slot 0's log-probability minus the mean over the slots,
-  averaged over states and configurations. 0 is no position effect; below 0, slot 0
-  is disfavoured. Choice keys must be unique, so they are numbered (`1`, `2`, ...)
-  and share one description, as Score levels share one text.
-- **first_slot**: three real options in all 3! = 6 orders per state. Every option
-  sits in every slot exactly twice, so an order-free readout picks slot 0 in exactly
-  1/3 of the decisions.
-- **packed**: the probe asks its questions in as few `system_one` calls as fit
-  `MAX_SCORE_ROWS` (one, by default); this asks each question alone on a few states and
-  reports the largest probability difference, so what is measured is the presentation
-  and not the packing.
+- **identical**: the position bias of one read, before any order averaging. Every
+  option carries the same text, so options differ only by position and code. Metric:
+  slot 0's log-probability minus the mean over the slots, averaged over states and
+  configurations; 0 is no position effect. It is read with `order_average=False`,
+  because averaged orders cancel it by construction (cyclic) or hide the middle slots
+  (reversed): it measures the bias averaging has to remove, not what is left after it.
+  Choice keys must be unique, so they are shapes with no order (`KEYS`), and every
+  assignment of keys to slots is read, so a key's own pull cancels.
+- **first_slot**: three real options in all 3! = 6 orders per state, read as the engine
+  is configured. An order-free readout picks slot 0 in exactly 1/3 of the decisions; a
+  tie gives each of its m slots 1/m. `consistent` is the share of states whose six orders
+  all give one answer. In the chat style a Score line names its level by its place in
+  the request (`(level i of K)`), so a permuted listing renumbers the levels too.
+- **packed**: the largest probability difference between the probe's answers and each
+  question asked alone, so what is measured is the presentation and not the packing.
 
 Probabilities are whatever `system_one` returns: calibrated, unless the engine carries
 an empty `CalibrationProfile`. Within one question, calibrated log-probabilities are the
@@ -28,16 +31,16 @@ from __future__ import annotations
 import itertools
 import json
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from dataclasses import replace
 from typing import Any
 
 KINDS = ("score", "choice")
 IDENTICAL_KS = (3, 4, 5)
+KEYS = ("■", "●", "◆", "▲", "◎")
 SLOT0_MIN = -0.20
 FIRST_SLOT_MIN = 0.15
-# Score rows per `system_one` call. The default probe is 12 rows off and 24 reversed, one call
-# either way; cyclic reads a K-level question K times (42 rows), which filled a 32 GB GPU.
-MAX_SCORE_ROWS = 24
 
 # en follows Laya's presentation_checks.py; ja the same wording in Japanese.
 TEXT: dict[str, dict[str, Any]] = {
@@ -75,30 +78,36 @@ TEXT: dict[str, dict[str, Any]] = {
     },
 }
 
-SystemOne = Callable[[Any, Mapping[str, dict]], Any]
+# Settings a report records. The first group is known before the model loads.
+PRE_LOAD = ("n_states", "lang", "raw", "kinds", "score_order_average", "max_rows")
+POST_LOAD = ("checkpoint_revision", "dtype")
+SETTINGS = PRE_LOAD + POST_LOAD
 
 
-def identical_question(kind: str, text: str, k: int, instructions: str) -> dict:
+def identical_questions(kind: str, text: str, k: int, instructions: str) -> dict[str, dict]:
+    """The identical-option questions of one configuration, keyed by key assignment."""
     if kind == "score":
-        return {"type": "score", "instructions": instructions, "criteria": [text] * k}
+        return {"": {"type": "score", "instructions": instructions, "criteria": [text] * k}}
     return {
-        "type": "choice",
-        "instructions": instructions,
-        "criteria": {str(i + 1): text for i in range(k)},
+        "".join(map(str, keys)): {
+            "type": "choice",
+            "instructions": instructions,
+            "criteria": {KEYS[i]: text for i in keys},
+        }
+        for keys in itertools.permutations(range(k))
     }
 
 
 def probe_questions(lang: str = "en", kinds: Sequence[str] = KINDS) -> dict[str, dict]:
-    """Every probe question for one state, keyed `kind|identical|text|k` or
-    `kind|perm|012`. One `system_one` call answers them all."""
+    """Every probe question for one state, keyed `kind|identical|text|k|keys` or
+    `kind|perm|012`."""
     questions: dict[str, dict] = {}
     for kind in kinds:
         spec = TEXT[lang][kind]
         for text in spec["identical"]:
             for k in IDENTICAL_KS:
-                questions[f"{kind}|identical|{text}|{k}"] = identical_question(
-                    kind, text, k, spec["instructions"]
-                )
+                for keys, q in identical_questions(kind, text, k, spec["instructions"]).items():
+                    questions[f"{kind}|identical|{text}|{k}|{keys}"] = q
         options = list(spec["options"])
         for order in itertools.permutations(range(len(options))):
             shown = [options[i] for i in order]
@@ -111,6 +120,68 @@ def probe_questions(lang: str = "en", kinds: Sequence[str] = KINDS) -> dict[str,
     return questions
 
 
+def is_identical(qid: str) -> bool:
+    return qid.split("|")[1] == "identical"
+
+
+@contextmanager
+def single_order(engine) -> Iterator[None]:
+    """Read every question once, in the order given."""
+    config = engine.config
+    engine.config = replace(config, order_average=False)
+    try:
+        yield
+    finally:
+        engine.config = config
+
+
+def call_groups(engine, questions: dict[str, dict], max_rows: int) -> list[dict[str, dict]]:
+    """`questions` split into `system_one` calls of at most `max_rows` batch rows, as the
+    engine counts them under its current config."""
+    rows = engine.question_rows(questions)
+    groups: list[dict[str, dict]] = []
+    current: dict[str, dict] = {}
+    total = 0
+    for qid, question in questions.items():
+        if current and total + rows[qid] > max_rows:
+            groups.append(current)
+            current, total = {}, 0
+        current[qid] = question
+        total += rows[qid]
+    if current:
+        groups.append(current)
+    return groups
+
+
+def ask(
+    engine,
+    states: Sequence[Any],
+    lang: str = "en",
+    kinds: Sequence[str] = KINDS,
+    max_rows: int | None = None,
+) -> list[dict[str, Any]]:
+    """Every probe answer for every state: the identical questions in one order, the
+    permuted ones as the engine is configured. Calls hold at most `max_rows` batch rows,
+    the engine's `max_request_rows` by default."""
+    max_rows = max_rows or engine.config.max_request_rows
+    questions = probe_questions(lang, kinds)
+    identical = {q: v for q, v in questions.items() if is_identical(q)}
+    permuted = {q: v for q, v in questions.items() if not is_identical(q)}
+    with single_order(engine):
+        identical_groups = call_groups(engine, identical, max_rows)
+    permuted_groups = call_groups(engine, permuted, max_rows)
+    answers = []
+    for state in states:
+        got: dict[str, Any] = {}
+        with single_order(engine):
+            for group in identical_groups:
+                got.update(engine.system_one(state, group).answers)
+        for group in permuted_groups:
+            got.update(engine.system_one(state, group).answers)
+        answers.append(got)
+    return answers
+
+
 def slot_probs(answer: Any, question: dict) -> list[float]:
     """An answer's probabilities in the order the options were shown."""
     probs = answer.probabilities
@@ -119,126 +190,100 @@ def slot_probs(answer: Any, question: dict) -> list[float]:
     return [float(probs[key]) for key in question["criteria"]]
 
 
+def top_slots(p: Sequence[float]) -> list[int]:
+    best = max(p)
+    return [i for i, x in enumerate(p) if x == best]
+
+
 def leave_one_out(per_state: Sequence[float]) -> list[float]:
     n, total = len(per_state), sum(per_state)
     loo = [(total - x) / (n - 1) for x in per_state] if n > 1 else list(per_state)
     return [min(loo), max(loo)]
 
 
-def score_rows(question: dict, score_order_average: str) -> int:
-    """Batch rows a Score question adds: one per order it is read in (`_orders`)."""
-    k = len(question["criteria"])
-    return {"off": 1, "reversed": 2, "cyclic": k}[score_order_average] if k >= 2 else 1
+def mean(values: Sequence[float]) -> float:
+    return sum(values) / len(values)
 
 
-def call_groups(
-    questions: dict[str, dict],
-    split_checks: bool = False,
-    max_score_rows: int = MAX_SCORE_ROWS,
-    score_order_average: str = "off",
-) -> list[dict[str, dict]]:
-    """The probe split into `system_one` calls. By default one call, cut only where the
-    Score rows would pass `max_score_rows`, which bounds memory under `cyclic`; with
-    `split_checks` the identical and permuted questions never share a call."""
-    groups: list[dict[str, dict]] = []
-    for check in ("identical", "perm") if split_checks else (None,):
-        current: dict[str, dict] = {}
-        rows = 0
-        for qid, question in questions.items():
-            if check is not None and qid.split("|")[1] != check:
-                continue
-            added = score_rows(question, score_order_average) if question["type"] == "score" else 0
-            if current and rows + added > max_score_rows:
-                groups.append(current)
-                current, rows = {}, 0
-            current[qid] = question
-            rows += added
-        if current:
-            groups.append(current)
-    return groups
-
-
-def run(
-    system_one: SystemOne,
-    states: Sequence[Any],
+def report(
+    answers: Sequence[Mapping[str, Any]],
     lang: str = "en",
     kinds: Sequence[str] = KINDS,
     slot0_min: float = SLOT0_MIN,
-    split_checks: bool = False,
-    max_score_rows: int = MAX_SCORE_ROWS,
-    score_order_average: str = "off",
 ) -> dict[str, dict]:
-    """Both checks for each kind, from the `call_groups` calls per state (one by default)."""
+    """Both checks for each kind from `ask`'s answers."""
     questions = probe_questions(lang, kinds)
-    groups = call_groups(questions, split_checks, max_score_rows, score_order_average)
-    slot0: dict[str, list[float]] = {kind: [] for kind in kinds}
-    first: dict[str, list[float]] = {kind: [] for kind in kinds}
-    by_config: dict[str, dict[str, list[float]]] = {kind: {} for kind in kinds}
-    by_slot = {kind: [0] * len(TEXT[lang][kind]["options"]) for kind in kinds}
-    for state in states:
-        answers = {}
-        for group in groups:
-            answers.update(system_one(state, group).answers)
-        centred: dict[str, list[float]] = {kind: [] for kind in kinds}
-        firsts: dict[str, list[int]] = {kind: [] for kind in kinds}
-        for qid, question in questions.items():
-            kind, check, *rest = qid.split("|")
-            p = slot_probs(answers[qid], question)
-            if check == "identical":
-                logp = [math.log(max(x, 1e-12)) for x in p]
-                value = logp[0] - sum(logp) / len(logp)
-                centred[kind].append(value)
-                by_config[kind].setdefault("|".join(rest), []).append(value)
-            else:
-                slot = max(range(len(p)), key=p.__getitem__)
-                firsts[kind].append(int(slot == 0))
-                by_slot[kind][slot] += 1
-        for kind in kinds:
-            slot0[kind].append(sum(centred[kind]) / len(centred[kind]))
-            first[kind].append(sum(firsts[kind]) / len(firsts[kind]))
-    report: dict[str, dict] = {}
+    out: dict[str, dict] = {}
     for kind in kinds:
-        identical = sum(slot0[kind]) / len(slot0[kind])
-        rate = sum(first[kind]) / len(first[kind])
-        report[kind] = {
+        options = TEXT[lang][kind]["options"]
+        slot0, first, consistent = [], [], 0
+        by_config: dict[str, list[float]] = {}
+        by_slot = [0.0] * len(options)
+        for got in answers:
+            centred: dict[str, list[float]] = {}
+            firsts, picks = [], set()
+            for qid, question in questions.items():
+                if not qid.startswith(kind + "|"):
+                    continue
+                p = slot_probs(got[qid], question)
+                if is_identical(qid):
+                    logp = [math.log(max(x, 1e-12)) for x in p]
+                    config = "|".join(qid.split("|")[2:4])
+                    centred.setdefault(config, []).append(logp[0] - mean(logp))
+                    continue
+                order = [int(c) for c in qid.split("|")[2]]
+                top = top_slots(p)
+                for slot in top:
+                    by_slot[slot] += 1 / len(top)
+                firsts.append(1 / len(top) if 0 in top else 0.0)
+                picks.add(frozenset(order[slot] for slot in top))
+            per_config = {c: mean(v) for c, v in centred.items()}
+            for c, v in per_config.items():
+                by_config.setdefault(c, []).append(v)
+            slot0.append(mean(list(per_config.values())))
+            first.append(mean(firsts))
+            consistent += int(len(picks) == 1)
+        identical, rate = mean(slot0), mean(first)
+        out[kind] = {
             "identical": {
                 "metric": identical,
-                "leave_one_out": leave_one_out(slot0[kind]),
+                "leave_one_out": leave_one_out(slot0),
                 "gate": slot0_min,
                 "passed": identical >= slot0_min,
-                "by_config": {c: sum(v) / len(v) for c, v in by_config[kind].items()},
+                "read": "single order",
+                "by_config": {c: mean(v) for c, v in by_config.items()},
             },
             "first_slot": {
                 "metric": rate,
-                "leave_one_out": leave_one_out(first[kind]),
+                "leave_one_out": leave_one_out(first),
                 "gate": FIRST_SLOT_MIN,
                 "passed": rate >= FIRST_SLOT_MIN,
-                "decisions": len(states) * math.factorial(len(TEXT[lang][kind]["options"])),
-                "argmax_by_slot": by_slot[kind],
+                "decisions": len(answers) * math.factorial(len(options)),
+                "argmax_by_slot": by_slot,
+                "consistent": consistent / len(answers),
             },
         }
-    return report
+    return out
 
 
 def packed_consistency(
-    system_one: SystemOne,
+    engine,
     states: Sequence[Any],
+    answers: Sequence[Mapping[str, Any]],
     lang: str = "en",
     kinds: Sequence[str] = KINDS,
-    split_checks: bool = False,
-    max_score_rows: int = MAX_SCORE_ROWS,
-    score_order_average: str = "off",
 ) -> float:
-    """Largest |p| difference between the probe as `run` asks it and each question alone."""
+    """Largest |p| difference between `ask`'s answers for `states` and each question asked
+    alone, under the same order setting."""
     questions = probe_questions(lang, kinds)
-    groups = call_groups(questions, split_checks, max_score_rows, score_order_average)
     worst = 0.0
-    for state in states:
-        packed = {}
-        for group in groups:
-            packed.update(system_one(state, group).answers)
+    for state, packed in zip(states, answers, strict=False):
         for qid, question in questions.items():
-            alone = system_one(state, {qid: question}).answers[qid]
+            if is_identical(qid):
+                with single_order(engine):
+                    alone = engine.system_one(state, {qid: question}).answers[qid]
+            else:
+                alone = engine.system_one(state, {qid: question}).answers[qid]
             for a, b in zip(
                 slot_probs(packed[qid], question), slot_probs(alone, question), strict=True
             ):
@@ -246,25 +291,12 @@ def packed_consistency(
     return worst
 
 
-SETTINGS = (
-    "n_states",
-    "lang",
-    "raw",
-    "kinds",
-    "score_order_average",
-    "split_checks",
-    "max_score_rows",
-    "checkpoint_revision",
-    "dtype",
-)
-
-
-def settings_mismatch(saved: dict, run: dict) -> list[str]:
-    """Every recorded setting of `saved` that this run does not share, as
+def settings_mismatch(saved: dict, run: dict, keys: Sequence[str] = SETTINGS) -> list[str]:
+    """Every setting among `keys` that `saved` recorded and this run does not share, as
     `<name> (report: X, run: Y)`. A setting the report never recorded is not checked."""
     return [
         f"{key} (report: {saved[key]!r}, run: {run.get(key)!r})"
-        for key in SETTINGS
+        for key in keys
         if key in saved and saved[key] != run.get(key)
     ]
 
@@ -284,8 +316,9 @@ def drift(report: dict, snapshot: dict, tolerance: float) -> list[str]:
 
 def to_markdown(report: dict) -> str:
     lines = [
-        "| kind | identical (slot 0 - mean) | leave-one-out | first-slot rate | leave-one-out |",
-        "|---|---|---|---|---|",
+        "| kind | identical, one read (slot 0 - mean) | leave-one-out "
+        "| first-slot rate | leave-one-out | consistent |",
+        "|---|---|---|---|---|---|",
     ]
     for kind, r in report.items():
         ident, first = r["identical"], r["first_slot"]
@@ -293,7 +326,8 @@ def to_markdown(report: dict) -> str:
             f"| {kind} | {ident['metric']:+.3f} {'PASS' if ident['passed'] else 'FAIL'} "
             f"| {ident['leave_one_out'][0]:+.3f} .. {ident['leave_one_out'][1]:+.3f} "
             f"| {first['metric']:.3f} {'PASS' if first['passed'] else 'FAIL'} "
-            f"| {first['leave_one_out'][0]:.3f} .. {first['leave_one_out'][1]:.3f} |"
+            f"| {first['leave_one_out'][0]:.3f} .. {first['leave_one_out'][1]:.3f} "
+            f"| {first['consistent']:.3f} |"
         )
     return "\n".join(lines)
 

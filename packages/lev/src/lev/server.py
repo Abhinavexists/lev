@@ -13,7 +13,7 @@ from typing import Any, Literal
 from fastapi import Request
 
 from .batcher import Batcher, ClientGone, Overloaded, WorkerStopped
-from .model import load
+from .model import MAX_REQUEST_ROWS, load
 from .types import SystemOneRequest, SystemOneResponse
 
 
@@ -31,6 +31,7 @@ def create_app(
     max_batch_tokens: int = 16384,
     timeout: float = 30.0,
     score_order_average: Literal["off", "reversed", "cyclic"] = "off",
+    max_request_rows: int | None = MAX_REQUEST_ROWS,
 ) -> Any:
     from fastapi import FastAPI, HTTPException, Response
     from starlette.concurrency import run_in_threadpool
@@ -53,6 +54,7 @@ def create_app(
             max_label_options=max_label_options,
             skip_multi_token_codes=skip_multi_token_codes,
             score_order_average=score_order_average,
+            max_request_rows=max_request_rows,
         )
         state["batcher"] = Batcher(
             engine, max_pending=max_pending, max_batch_tokens=max_batch_tokens, timeout=timeout
@@ -76,6 +78,7 @@ def create_app(
             "max_label_options": config.max_label_options,
             "order_average": config.order_average,
             "score_order_average": config.score_order_average,
+            "max_request_rows": config.max_request_rows,
             "prefix_mode": config.prefix_mode,
             "compiled": config.compile,
             "prompt_style": config.prompt_style,

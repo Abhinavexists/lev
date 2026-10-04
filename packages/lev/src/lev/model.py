@@ -33,6 +33,9 @@ from .types import (
 
 _QUESTIONS = TypeAdapter(dict[str, Question])
 
+# Bench-length rows (~500 tokens) x 32 is about the batcher's 16384-token budget (ADR-029).
+MAX_REQUEST_ROWS = 32
+
 
 @dataclass
 class EngineConfig:
@@ -50,6 +53,9 @@ class EngineConfig:
     # adds the reversed order (2 rows per Score, as Choice), "cyclic" every rotation (K rows).
     # Both show the model level orders training never produces (ADR-020, FINDINGS §12).
     score_order_average: Literal["off", "reversed", "cyclic"] = "off"
+    # Rows one request may put into a forward (every question's every order); `prepare`
+    # refuses more with a ValueError (HTTP 422). None: no limit.
+    max_request_rows: int | None = MAX_REQUEST_ROWS
     # Serving can skip split codes; training keeps large sets for Mode B (ADR-028).
     skip_multi_token_codes: bool = True
     # Forking avoids repeated prefix work but adds a forward and cache copies (ADR-023).
@@ -213,8 +219,23 @@ class DecisionEngine:
         with self._tokenizer_lock:
             return self._route_and_tokenise(state, questions)
 
+    def question_rows(self, questions: Mapping[str, Question | dict]) -> dict[str, int]:
+        """Batch rows each question adds to a request under this engine's config:
+        the orders `prepare` renders it in. Depends on routing, not on the state."""
+        questions = _QUESTIONS.validate_python(questions)
+        with self._tokenizer_lock:
+            routes = serving_routes(questions, self.tokenizer, self.config)
+        return {name: len(self._orders(q, routes[name])) for name, q in questions.items()}
+
     def _route_and_tokenise(self, state, questions: dict[str, Question]) -> Prepared:
         routes = serving_routes(questions, self.tokenizer, self.config)
+        limit = self.config.max_request_rows
+        rows = sum(len(self._orders(q, routes[name])) for name, q in questions.items())
+        if limit is not None and rows > limit:
+            raise ValueError(
+                f"this request needs {rows} batch rows, above max_request_rows={limit}; "
+                "send fewer questions per request, or average fewer orders"
+            )
 
         unsupported = [
             name
@@ -285,8 +306,13 @@ class DecisionEngine:
         Choice and binary Noul in state-first layout are reversed (ordered scales
         keep training's low-to-high order; schema-first shares options), unless
         `score_order_average` opts a Score in: "reversed" adds one row, "cyclic"
-        K-1, both in orders training never shows (ADR-029)."""
-        if route.mode is not Mode.LABEL_TOKEN or self.config.layout is not Layout.STATE_FIRST:
+        K-1, both in orders training never shows (ADR-029). `order_average=False`
+        reads every question once."""
+        if (
+            not self.config.order_average
+            or route.mode is not Mode.LABEL_TOKEN
+            or self.config.layout is not Layout.STATE_FIRST
+        ):
             return [None]
         n = len(route.codes or [])
         if isinstance(question, Score):
@@ -295,9 +321,7 @@ class DecisionEngine:
             if self.config.score_order_average == "reversed":
                 return [None, list(reversed(range(n)))]
             return [None] + [[(j + r) % n for j in range(n)] for r in range(1, n)]
-        if not self.config.order_average or (
-            isinstance(question, Noul) and route.reason != BINARY_NOUL
-        ):
+        if isinstance(question, Noul) and route.reason != BINARY_NOUL:
             return [None]
         return [None, list(reversed(range(n)))] if n >= 2 else [None]
 
@@ -531,6 +555,7 @@ def load(
     max_label_options: int | None = None,
     skip_multi_token_codes: bool = True,
     score_order_average: Literal["off", "reversed", "cyclic"] = "off",
+    max_request_rows: int | None = MAX_REQUEST_ROWS,
 ) -> DecisionEngine:
     """Load a checkpoint -- a release directory, a training output or a Hub id --
     into a ready `DecisionEngine`. With no checkpoint, serves `model_id` frozen.
@@ -607,6 +632,7 @@ def load(
         max_label_options=max_label_options,
         skip_multi_token_codes=skip_multi_token_codes,
         score_order_average=score_order_average,
+        max_request_rows=max_request_rows,
     )
     engine = DecisionEngine(model, tokenizer, config, profile, mode_b_head=head)
     engine.checkpoint = resolved
