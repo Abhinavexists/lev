@@ -601,39 +601,69 @@ Serving now skips by default; training does not, so Mode B keeps its data. Mode 
 
 Every result is reported whichever way it goes, including accuracy that does not improve.
 
-**Evidence.** Run 2026-09-29 on `interfaze-ai/lev` (HF f8ef711), bf16, one RTX 5090. The numbers behind every table are in [`data/adr-029-summary.json`](../data/adr-029-summary.json), and the raw per-run reports are available on request. The committed report CI compares against is [`data/presentation-checks.json`](../data/presentation-checks.json). `bench_ja` is Japanese, outside Lev's target language, so its rows are a reference only; `bench_en` is the one that bears on the decision.
+**Revised after review (2026-10-02).** The first runs read the identical-option control after averaging, where `cyclic` makes it zero by construction and `reversed` cannot see the middle slots, so it was no evidence for averaging. The control now measures the bias of one read, before any averaging (`order_average=False`); what averaging changes is judged by labelled accuracy, RPS and calibration error, and by the first-slot rate on real options. Also changed: Choice keys are shapes with no order (■ ● ◆ ▲ ◎), read under every key-to-slot assignment so a key's own pull cancels; argmax ties split between the tied slots; calls are cut by the engine's own row count; and the engine bounds the rows one request may need.
 
-Issue #1 reproduced with averaging off (Score probe alone, 12 questions per call): identical control -0.332 calibrated / -0.931 raw, first-slot rate 0.270. With averaging off, every answer on 20 items of each bench, the probe included, is identical to the current code.
+**Evidence.** Run 2026-10-04/05 on `interfaze-ai/lev` (HF 7bdc748: the weights and calibration of f8ef711, only README.md changed), bf16, one RTX 5090, this branch rebased on main after #4. The numbers behind every table are in [`data/adr-029-summary.json`](../data/adr-029-summary.json); the committed report CI compares against is [`data/presentation-checks.json`](../data/presentation-checks.json). `bench_ja` is Japanese, outside Lev's target language, so its rows are a reference only; `bench_en` is the one that bears on the decision.
 
-Score, identical control (slot 0 minus the mean; gate -0.20 raw) and first-slot rate (1/3 is order-free):
-
-```text
-               bench_en (290)                      bench_ja (300, reference)
-            calibrated   raw     first slot    calibrated   raw     first slot
-  off         -0.332   -0.931      0.270         -0.518   -1.453      0.240
-  reversed    -0.010   +0.088      0.321         -0.059   +0.038      0.315
-  cyclic      -0.016   -0.037      0.312         -0.056   -0.131      0.301
-```
-
-Choice, which is already read in two orders, with Score averaging off: identical control -0.100 / -0.160 (en) and -0.055 / -0.036 (ja), first-slot rate 0.333 and 0.331.
-
-The benches' three questions per request (4-way Choice, 3-level Score, Noul), shipped calibration:
+The bias of one read: identical-option control, slot 0 minus the mean (gate -0.20 raw). Raw is calibrated x T, exact within one temperature bucket. The three runs per bench, one per mode, agree exactly, as they must.
 
 ```text
-                  Score acc   Score RPS   Choice acc   Noul acc   Noul AUROC   ms / request
-  en  off           0.583       0.150       0.917        0.938      0.9778       164.6
-      reversed      0.652       0.128       0.917        0.938      0.9780       184.0  (1.12x)
-      cyclic        0.641       0.125       0.917        0.938      0.9784       215.4  (1.31x)
-  ja  off (ref.)    0.643       0.138       0.887        0.817      0.8890       150.9
-      reversed      0.730       0.108       0.887        0.813      0.8877       171.4  (1.14x)
-      cyclic        0.717       0.108       0.887        0.813      0.8876       199.9  (1.32x)
+                 bench_en (290)          bench_ja (300, reference)
+              calibrated     raw       calibrated     raw
+  Score         -0.332     -0.932        -0.518     -1.452
+  Choice        -0.454     -0.813        -0.660     -1.182
 ```
 
-Choice does not move. Noul moves by one item on bench_ja, and asked alone it is identical under all three modes on all 300 items: the change comes from the batch the extra Score rows make (bf16), not from the Noul readout.
+Choice, read once, avoids slot 0 more than Score does; it is already read in two orders when served, and the first-slot rate below is what that leaves.
 
-Two caveats. Asking the probe's questions together or one at a time differs by up to |Δp| 0.18 (raw, bench_ja, off) on the three states checked per run, so a metric is tied to how many questions share a call; `lev presentation-checks` fixes that at one call of at most 24 Score rows. And `cyclic` needs that cap: 42 Score rows per call exhausted a 32 GB card. Even capped, PyTorch's reserved memory went past the card (44-49 GiB for `cyclic`, 62 GiB for the default probe of both kinds), which Windows backs with shared system memory.
+What averaging changes. The benches' three questions per request (4-way Choice, 3-level Score, Noul), shipped calibration; Score ECE over 15 equal-width bins. First-slot rate over all six orders of three real options, ties split (1/3 is order-free), and `consistent`, the share of states whose six orders give one answer:
 
-**Reading, for the decision.** `reversed` removes most of the slot-0 deficit and lifts Score accuracy by 6.9 points on bench_en (8.7 on the Japanese reference bench) at 1.12-1.14x the time. `cyclic` is no better than `reversed` on either bench and costs 1.31-1.32x. Neither was tested on helpsteer2, the case that kept Score out of averaging in ADR-020, and both benches are one family of synthetic support messages. The proposal keeps the default off and leaves the choice between (a) and (b) to the maintainer.
+```text
+                    Score                                   Choice                         Noul
+                 acc    RPS    ECE   first slot consistent    acc   first slot consistent    acc   AUROC   ms / request
+  en  off      0.583  0.150  0.124    0.265      0.714     0.917    0.331      0.986     0.938  0.9778  156.5
+      reversed 0.652  0.127  0.101    0.319      0.872     0.917    0.332      0.979     0.938  0.9780  179.3 (1.15x)
+      cyclic   0.641  0.125  0.060    0.310      0.893     0.917    0.332      0.983     0.938  0.9784  210.2 (1.34x)
+  ja  off      0.643  0.138  0.093    0.242      0.627     0.887    0.331      0.973     0.817  0.8890  149.2
+      reversed 0.730  0.108  0.059    0.314      0.870     0.887    0.331      0.977     0.813  0.8877  169.9 (1.14x)
+      cyclic   0.717  0.108  0.077    0.299      0.853     0.887    0.330      0.973     0.813  0.8876  197.3 (1.32x)
+```
+
+Accuracy, RPS, Choice and Noul are identical, to the last digit, to the runs before the rebase and the review fixes. In the chat style the release uses, a Score line names its level by its place in the request (`(level i of K)`), so the probe's permuted listings renumber the levels as well as move them, and Score's first-slot rate measures both; the engine's own averaging moves each level with its number.
+
+Calibration of the averaged modes. The shipped Score temperature (2.80) was fitted on single-order rows. Refit per mode on half of each bench (stratified by the gold level, seed 0), judged on the other half:
+
+```text
+                       T refit   held-out NLL       held-out ECE       held-out RPS
+                                 shipped  refit     shipped  refit     shipped  refit
+  en (144)  off          3.96     0.935   0.909      0.130   0.108      0.152   0.147
+            reversed     3.16     0.839   0.838      0.111   0.119      0.126   0.126
+            cyclic       2.92     0.828   0.828      0.077   0.077      0.124   0.124
+  ja (149)  off          3.60     0.781   0.779      0.090   0.077      0.132   0.130
+            reversed     2.39     0.641   0.627      0.089   0.061      0.102   0.101
+            cyclic       2.40     0.644   0.629      0.068   0.086      0.101   0.101
+```
+
+On bench_en a refit gains nothing for either averaged mode (held-out NLL within 0.001), and the shipped temperature is if anything a little sharp for `off`. On the Japanese reference the refit goes the other way for the averaged modes. A per-mode temperature is not proposed.
+
+The rows one request may need (`max_request_rows`, default 32). One `system_one` request of R single-order Score rows; peak CUDA memory on the RTX 5090, GiB (the bf16 weights alone are ~8.1). The benches' rows are at most 509 tokens (en) and 526 (ja):
+
+```text
+  row tokens   rows   reserved   seconds
+     474        32      14.2       1.6
+     474        64      20.3       3.3
+     474        96      26.4       5.3
+     474       128      32.5      60.0   past the card: Windows spills into system memory
+     824        48      27.5       4.3
+    1124        32      27.1       3.9
+    2124        16      30.1      12.3   spilling
+```
+
+Memory grows with rows times row length, and faster for long rows, so the limit is set for bench-length requests: 32 rows of ~510 tokens is about the batcher's 16384-token budget (ADR-030). A full presentation run with 64-row calls filled the card on bench_en (32 GB in use, 100% busy, no result after 22 minutes) and was stopped; with 32-row calls the six runs peaked at 22.5 GiB reserved, about 50 minutes each.
+
+With averaging off, every answer on 20 items of each bench (40 responses each, the probe included) is identical to main at 8ca94b7. Asking the probe's questions together or alone differs by up to |Δp| 0.038 (bench_en) and 0.041 (bench_ja), so the committed report records `max_rows`.
+
+**Reading, for the decision.** `reversed` lifts Score accuracy by 6.9 points on bench_en and lowers its RPS and ECE at 1.15x the time, with the shipped temperature. `cyclic` calibrates best on bench_en (ECE 0.060) but is no more accurate than `reversed` and costs 1.34x. Neither was tested on helpsteer2, the case that kept Score out of averaging in ADR-020, and both benches are one family of synthetic support messages. The proposal keeps the default off and leaves the choice between (a) and (b) to the maintainer.
 
 ---
 
