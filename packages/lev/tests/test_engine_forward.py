@@ -47,3 +47,32 @@ def test_single_forward_matches_the_full_logits_at_each_last_token(tiny_model, w
             torch.testing.assert_close(hidden[i], full.hidden_states[-1][0, -1])
     assert logits.shape == (len(rows), 512), "one vocabulary row per variant, not per position"
     assert (hidden is not None) == want_hidden
+
+
+class TinyTokenizer:
+    """Ids inside the tiny vocabulary; space-prefixed A-Z are single tokens, as label codes need."""
+
+    pad_token_id = 0
+    single = {f" {c}": 400 + i for i, c in enumerate("ABCDEFGHIJKLMNOPQRSTUVWXYZ")}
+
+    def encode(self, text, add_special_tokens=True):
+        return (
+            [self.single[text]] if text in self.single else [ord(c) % 300 + 2 for c in text] or [1]
+        )
+
+
+def test_without_score_averaging_a_large_request_answers_as_with_no_limit(tiny_model):
+    """The row limit never touches a request Score averaging did not grow (ADR-029)."""
+    from lev.types import Choice, Score
+
+    questions = {
+        **{
+            f"c{i}": Choice(criteria={"a": None, "b": None, "c": None, "d": None})
+            for i in range(20)
+        },
+        **{f"s{i}": Score(criteria=["low", "mid", "high"]) for i in range(40)},
+    }
+    limited = DecisionEngine(tiny_model, TinyTokenizer(), EngineConfig())
+    unlimited = DecisionEngine(tiny_model, TinyTokenizer(), EngineConfig(max_request_rows=None))
+    assert limited.prepare("state", questions).rows == 80 > limited.config.max_request_rows
+    assert limited.system_one("state", questions) == unlimited.system_one("state", questions)

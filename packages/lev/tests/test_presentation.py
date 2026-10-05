@@ -397,6 +397,12 @@ class TestQuestionRows:
         assert engine.prepare("s", QUESTIONS).rows == len(QUESTIONS)
 
 
+BIG = {
+    **{f"c{i}": Choice(criteria={"a": None, "b": None, "c": None, "d": None}) for i in range(20)},
+    **{f"s{i}": Score(criteria=["low", "mid", "high"]) for i in range(40)},
+}
+
+
 class TestRequestRowLimit:
     def engine(self, tokenizer, **config) -> DecisionEngine:
         return DecisionEngine(model=None, tokenizer=tokenizer, config=EngineConfig(**config))
@@ -404,9 +410,22 @@ class TestRequestRowLimit:
     def test_a_request_past_the_limit_is_refused_before_any_forward(self, rich_tokenizer):
         questions = {f"q{i}": Score(criteria=["a", "b", "c"]) for i in range(4)}
         engine = self.engine(rich_tokenizer, score_order_average="cyclic", max_request_rows=11)
-        with pytest.raises(ValueError, match="needs 12 batch rows, above max_request_rows=11"):
+        with pytest.raises(ValueError, match="needs 12 batch rows, 8 of them from"):
             engine.prepare("s", questions)
         assert self.engine(rich_tokenizer, max_request_rows=11).prepare("s", questions).rows == 4
+
+    def test_without_score_averaging_a_large_request_is_never_refused(self, rich_tokenizer):
+        """#4's batcher runs an oversized request alone and unsplit, so main accepts it."""
+        prepared = self.engine(rich_tokenizer).prepare("s", BIG)
+        assert prepared.rows == 80 > MAX_REQUEST_ROWS
+        assert [v.order for v in prepared.variants] == [None, [3, 2, 1, 0]] * 20 + [None] * 40
+
+    def test_only_rows_score_averaging_adds_can_refuse(self, rich_tokenizer):
+        engine = self.engine(rich_tokenizer, score_order_average="cyclic")
+        with pytest.raises(ValueError, match="needs 160 batch rows, 80 of them"):
+            engine.prepare("s", BIG)
+        choices = {k: q for k, q in BIG.items() if k.startswith("c")}
+        assert engine.prepare("s", choices).rows == 40
 
     def test_none_is_no_limit(self, rich_tokenizer):
         questions = {f"q{i}": Score(criteria=["a", "b", "c"]) for i in range(30)}

@@ -53,8 +53,8 @@ class EngineConfig:
     # adds the reversed order (2 rows per Score, as Choice), "cyclic" every rotation (K rows).
     # Both show the model level orders training never produces (ADR-020, FINDINGS §12).
     score_order_average: Literal["off", "reversed", "cyclic"] = "off"
-    # Rows one request may put into a forward (every question's every order); `prepare`
-    # refuses more with a ValueError (HTTP 422). None: no limit.
+    # Rows a request may need once Score averaging adds rows to it; `prepare` refuses
+    # more with a ValueError (HTTP 422). Requests without added rows are never refused.
     max_request_rows: int | None = MAX_REQUEST_ROWS
     # Serving can skip split codes; training keeps large sets for Mode B (ADR-028).
     skip_multi_token_codes: bool = True
@@ -229,12 +229,18 @@ class DecisionEngine:
 
     def _route_and_tokenise(self, state, questions: dict[str, Question]) -> Prepared:
         routes = serving_routes(questions, self.tokenizer, self.config)
+        orders = {name: self._orders(q, routes[name]) for name, q in questions.items()}
+        rows = sum(len(o) for o in orders.values())
+        added = sum(len(o) - 1 for name, o in orders.items() if isinstance(questions[name], Score))
         limit = self.config.max_request_rows
-        rows = sum(len(self._orders(q, routes[name])) for name, q in questions.items())
-        if limit is not None and rows > limit:
+        # The batcher runs an oversized request alone and unsplit; refuse only the rows
+        # Score averaging adds, so a request main accepts is never refused for its size.
+        if limit is not None and added and rows > limit:
             raise ValueError(
-                f"this request needs {rows} batch rows, above max_request_rows={limit}; "
-                "send fewer questions per request, or average fewer orders"
+                f"this request needs {rows} batch rows, {added} of them from "
+                f"score_order_average={self.config.score_order_average!r}, above "
+                f"max_request_rows={limit}; send fewer Score questions per request, "
+                "or average fewer orders"
             )
 
         unsupported = [

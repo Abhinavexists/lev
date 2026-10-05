@@ -528,6 +528,65 @@
    "identical": true
   }
  },
+ "large_request_without_averaging": {
+  "what": "20 Choice + 40 Score questions per request, default settings, through lev.batcher (max_batch_tokens 16384), first 3 bench_en states: every forward's rows and width",
+  "requests": [
+   {
+    "item_id": "bench_en-0000",
+    "rows": 80,
+    "padded_tokens": 26800,
+    "forwards_main": [
+     {
+      "rows": 80,
+      "width": 335
+     }
+    ],
+    "forwards_branch": [
+     {
+      "rows": 80,
+      "width": 335
+     }
+    ],
+    "answers_identical_to_main": true
+   },
+   {
+    "item_id": "bench_en-0001",
+    "rows": 80,
+    "padded_tokens": 15760,
+    "forwards_main": [
+     {
+      "rows": 80,
+      "width": 197
+     }
+    ],
+    "forwards_branch": [
+     {
+      "rows": 80,
+      "width": 197
+     }
+    ],
+    "answers_identical_to_main": true
+   },
+   {
+    "item_id": "bench_en-0002",
+    "rows": 80,
+    "padded_tokens": 35680,
+    "forwards_main": [
+     {
+      "rows": 80,
+      "width": 446
+     }
+    ],
+    "forwards_branch": [
+     {
+      "rows": 80,
+      "width": 446
+     }
+    ],
+    "answers_identical_to_main": true
+   }
+  ]
+ },
  "request_rows_rtx5090": {
   "what": "one system_one request of R single-order Score rows; peak CUDA memory in GiB (bf16 weights alone are ~8.1). Past ~31 GiB reserved, Windows spills into shared system memory instead of raising out-of-memory, and the request slows 5-10x.",
   "bench_row_tokens": {

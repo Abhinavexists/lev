@@ -427,7 +427,7 @@ def main(argv: list[str] | None = None) -> None:
         "--max-request-rows",
         type=int,
         default=None,
-        help="batch rows one request may need before it gets 422 (default: the engine's)",
+        help="refuse (422) a request Score averaging grows past this many batch rows (default 32)",
     )
     serve_parser.add_argument(
         "--score-order-average",

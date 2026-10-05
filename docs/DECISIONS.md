@@ -601,7 +601,7 @@ Serving now skips by default; training does not, so Mode B keeps its data. Mode 
 
 Every result is reported whichever way it goes, including accuracy that does not improve.
 
-**Revised after review (2026-10-02).** The first runs read the identical-option control after averaging, where `cyclic` makes it zero by construction and `reversed` cannot see the middle slots, so it was no evidence for averaging. The control now measures the bias of one read, before any averaging (`order_average=False`); what averaging changes is judged by labelled accuracy, RPS and calibration error, and by the first-slot rate on real options. Also changed: Choice keys are shapes with no order (■ ● ◆ ▲ ◎), read under every key-to-slot assignment so a key's own pull cancels; argmax ties split between the tied slots; calls are cut by the engine's own row count; and the engine bounds the rows one request may need.
+**Revised after review (2026-10-02).** The first runs read the identical-option control after averaging, where `cyclic` makes it zero by construction and `reversed` cannot see the middle slots, so it was no evidence for averaging. The control now measures the bias of one read, before any averaging (`order_average=False`); what averaging changes is judged by labelled accuracy, RPS and calibration error, and by the first-slot rate on real options. Also changed: Choice keys are shapes with no order (■ ● ◆ ▲ ◎), read under every key-to-slot assignment so a key's own pull cancels; argmax ties split between the tied slots; calls are cut by the engine's own row count; and the engine bounds the rows Score averaging may add to a request.
 
 **Evidence.** Run 2026-10-04/05 on `interfaze-ai/lev` (HF 7bdc748: the weights and calibration of f8ef711, only README.md changed), bf16, one RTX 5090, this branch rebased on main after #4. The numbers behind every table are in [`data/adr-029-summary.json`](../data/adr-029-summary.json); the committed report CI compares against is [`data/presentation-checks.json`](../data/presentation-checks.json). `bench_ja` is Japanese, outside Lev's target language, so its rows are a reference only; `bench_en` is the one that bears on the decision.
 
@@ -646,7 +646,7 @@ Calibration of the averaged modes. The shipped Score temperature (2.80) was fitt
 
 On bench_en a refit gains nothing for either averaged mode (held-out NLL within 0.001), and the shipped temperature is if anything a little sharp for `off`. On the Japanese reference the refit goes the other way for the averaged modes. A per-mode temperature is not proposed.
 
-The rows one request may need (`max_request_rows`, default 32). One `system_one` request of R single-order Score rows; peak CUDA memory on the RTX 5090, GiB (the bf16 weights alone are ~8.1). The benches' rows are at most 509 tokens (en) and 526 (ja):
+The rows Score averaging may add (`max_request_rows`, default 32). One `system_one` request of R single-order Score rows; peak CUDA memory on the RTX 5090, GiB (the bf16 weights alone are ~8.1). The benches' rows are at most 509 tokens (en) and 526 (ja):
 
 ```text
   row tokens   rows   reserved   seconds
@@ -659,7 +659,7 @@ The rows one request may need (`max_request_rows`, default 32). One `system_one`
     2124        16      30.1      12.3   spilling
 ```
 
-Memory grows with rows times row length, and faster for long rows, so the limit is set for bench-length requests: 32 rows of ~510 tokens is about the batcher's 16384-token budget (ADR-030). A full presentation run with 64-row calls filled the card on bench_en (32 GB in use, 100% busy, no result after 22 minutes) and was stopped; with 32-row calls the six runs peaked at 22.5 GiB reserved, about 50 minutes each.
+Memory grows with rows times row length, and faster for long rows, so the limit is set for bench-length requests: 32 rows of ~510 tokens is about the batcher's 16384-token budget (ADR-030). The batcher does not split a request: on main, 20 Choice and 40 Score questions with averaging off ran as one forward of 80 rows, up to 35,680 padded tokens. So the limit refuses only a request that Score averaging grows past it, and never one without averaged Score rows; that 80-row request gets answers identical to main's. A full presentation run with 64-row calls filled the card on bench_en (32 GB in use, 100% busy, no result after 22 minutes) and was stopped; with 32-row calls the six runs peaked at 22.5 GiB reserved, about 50 minutes each.
 
 With averaging off, every answer on 20 items of each bench (40 responses each, the probe included) is identical to main at 8ca94b7. Asking the probe's questions together or alone differs by up to |Δp| 0.038 (bench_en) and 0.041 (bench_ja), so the committed report records `max_rows`.
 
