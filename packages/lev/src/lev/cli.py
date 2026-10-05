@@ -244,7 +244,7 @@ def _snapshot_revision(checkpoint) -> str | None:
 
 
 def _weights_dtype(engine) -> str | None:
-    model = getattr(engine, "_eager_model", None) or getattr(engine, "model", None)
+    model = getattr(engine, "model", None)
     try:
         return str(next(model.parameters()).dtype)
     except (AttributeError, StopIteration, TypeError):

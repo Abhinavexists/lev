@@ -483,6 +483,16 @@ class TestCompareGuardsItsSettings:
         path.write_text(json.dumps(saved), "utf-8")
         return str(path)
 
+    def test_the_weights_dtype_comes_from_the_engine_model(self):
+        torch = pytest.importorskip("torch")
+        from types import SimpleNamespace
+
+        from lev.cli import _weights_dtype
+
+        model = torch.nn.Linear(2, 2).to(torch.bfloat16)
+        assert _weights_dtype(SimpleNamespace(model=model)) == "torch.bfloat16"
+        assert _weights_dtype(SimpleNamespace(model=None)) is None
+
     def test_the_settings_split_at_the_load(self):
         assert set(PRE_LOAD).isdisjoint(POST_LOAD)
         assert set(POST_LOAD) == {"checkpoint_revision", "dtype"}
