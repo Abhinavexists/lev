@@ -587,7 +587,126 @@
    }
   ]
  },
- "request_rows_rtx5090": {
+ "averaged_token_budget_rtx5090": {
+  "what": "the largest Score-averaged request max_batch_tokens (16384) admits, by row length: averaged Score questions topped up with one-row Noul; one question more is refused in every case. The value is the batcher's budget; this only checks it.",
+  "results": [
+   {
+    "state_tokens": 350,
+    "mode": "reversed",
+    "score_questions": 17,
+    "noul_questions": 0,
+    "rows": 34,
+    "width": 474,
+    "padded_tokens": 16116,
+    "one_more_refused": true,
+    "seconds": 1.686,
+    "peak_allocated_gib": 12.1,
+    "peak_reserved_gib": 14.62
+   },
+   {
+    "state_tokens": 350,
+    "mode": "cyclic",
+    "score_questions": 11,
+    "noul_questions": 1,
+    "rows": 34,
+    "width": 474,
+    "padded_tokens": 16116,
+    "one_more_refused": true,
+    "seconds": 1.653,
+    "peak_allocated_gib": 12.18,
+    "peak_reserved_gib": 14.63
+   },
+   {
+    "state_tokens": 2000,
+    "mode": "reversed",
+    "score_questions": 3,
+    "noul_questions": 1,
+    "rows": 7,
+    "width": 2124,
+    "padded_tokens": 14868,
+    "one_more_refused": true,
+    "seconds": 1.539,
+    "peak_allocated_gib": 11.7,
+    "peak_reserved_gib": 14.03
+   },
+   {
+    "state_tokens": 2000,
+    "mode": "cyclic",
+    "score_questions": 2,
+    "noul_questions": 1,
+    "rows": 7,
+    "width": 2124,
+    "padded_tokens": 14868,
+    "one_more_refused": true,
+    "seconds": 1.527,
+    "peak_allocated_gib": 11.7,
+    "peak_reserved_gib": 14.03
+   },
+   {
+    "state_tokens": 4000,
+    "mode": "reversed",
+    "score_questions": 1,
+    "noul_questions": 1,
+    "rows": 3,
+    "width": 4124,
+    "padded_tokens": 12372,
+    "one_more_refused": true,
+    "seconds": 1.387,
+    "peak_allocated_gib": 11.09,
+    "peak_reserved_gib": 13.06
+   },
+   {
+    "state_tokens": 4000,
+    "mode": "cyclic",
+    "score_questions": 1,
+    "noul_questions": 0,
+    "rows": 3,
+    "width": 4124,
+    "padded_tokens": 12372,
+    "one_more_refused": true,
+    "seconds": 1.998,
+    "peak_allocated_gib": 16.29,
+    "peak_reserved_gib": 19.84
+   },
+   {
+    "state_tokens": 5300,
+    "mode": "cyclic",
+    "score_questions": 1,
+    "noul_questions": 0,
+    "rows": 3,
+    "width": 5423,
+    "padded_tokens": 16269,
+    "one_more_refused": true,
+    "seconds": 2.776,
+    "peak_allocated_gib": 21.72,
+    "peak_reserved_gib": 25.83
+   },
+   {
+    "state_tokens": 8000,
+    "mode": "reversed",
+    "score_questions": 1,
+    "noul_questions": 0,
+    "rows": 2,
+    "width": 8124,
+    "padded_tokens": 16248,
+    "one_more_refused": true,
+    "seconds": 18.927,
+    "peak_allocated_gib": 27.72,
+    "peak_reserved_gib": 31.68
+   }
+  ],
+  "averaging_off_one_choice_8000_tokens": {
+   "what": "averaging off (default), one Choice question read in two orders",
+   "state_tokens": 8000,
+   "rows": 2,
+   "width": 8109,
+   "padded_tokens": 16218,
+   "seconds": 30.932,
+   "peak_allocated_gib": 27.66,
+   "peak_reserved_gib": 31.63
+  }
+ },
+ "rows_without_a_limit_rtx5090": {
   "what": "one system_one request of R single-order Score rows; peak CUDA memory in GiB (bf16 weights alone are ~8.1). Past ~31 GiB reserved, Windows spills into shared system memory instead of raising out-of-memory, and the request slows 5-10x.",
   "bench_row_tokens": {
    "bench_en": {

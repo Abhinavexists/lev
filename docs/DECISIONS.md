@@ -601,7 +601,7 @@ Serving now skips by default; training does not, so Mode B keeps its data. Mode 
 
 Every result is reported whichever way it goes, including accuracy that does not improve.
 
-**Revised after review (2026-10-02).** The first runs read the identical-option control after averaging, where `cyclic` makes it zero by construction and `reversed` cannot see the middle slots, so it was no evidence for averaging. The control now measures the bias of one read, before any averaging (`order_average=False`); what averaging changes is judged by labelled accuracy, RPS and calibration error. Score's first-slot rate on real options is kept as a reference only: in the chat style the release uses, the probe's permuted listings renumber the levels as well as move them. Also changed: Choice keys are shapes with no order (■ ● ◆ ▲ ◎), read under every key-to-slot assignment so a key's own pull cancels; argmax ties split between the tied slots; calls are cut by the engine's own row count; and the engine bounds the rows Score averaging may add to a request.
+**Revised after review (2026-10-02).** The first runs read the identical-option control after averaging, where `cyclic` makes it zero by construction and `reversed` cannot see the middle slots, so it was no evidence for averaging. The control now measures the bias of one read, before any averaging (`order_average=False`); what averaging changes is judged by labelled accuracy, RPS and calibration error. Score's first-slot rate on real options is kept as a reference only: in the chat style the release uses, the probe's permuted listings renumber the levels as well as move them. Also changed: Choice keys are shapes with no order (■ ● ◆ ▲ ◎), read under every key-to-slot assignment so a key's own pull cancels; argmax ties split between the tied slots; calls are cut by the engine's own row count; and the engine refuses a request Score averaging grew past the batcher's token budget.
 
 **Evidence.** Run 2026-10-04/05 on `interfaze-ai/lev` (HF 7bdc748: the weights and calibration of f8ef711, only README.md changed), bf16, one RTX 5090, this branch rebased on main after #4. The numbers behind every table are in [`data/adr-029-summary.json`](../data/adr-029-summary.json); the committed report CI compares against is [`data/presentation-checks.json`](../data/presentation-checks.json). `bench_ja` is Japanese, outside Lev's target language, so its rows are a reference only; `bench_en` is the one that bears on the decision.
 
@@ -646,20 +646,23 @@ Calibration of the averaged modes. The shipped Score temperature (2.80) was fitt
 
 On bench_en a refit gains nothing for either averaged mode (held-out NLL within 0.001), and the shipped temperature is if anything a little sharp for `off`. On the Japanese reference the refit goes the other way for the averaged modes. A per-mode temperature is not proposed.
 
-The rows Score averaging may add (`max_request_rows`, default 32). One `system_one` request of R single-order Score rows; peak CUDA memory on the RTX 5090, GiB (the bf16 weights alone are ~8.1). The benches' rows are at most 509 tokens (en) and 526 (ja):
+The batch budget for averaged requests (`max_batch_tokens`, 16384). The batcher does not split a request: on main, 20 Choice and 40 Score questions with averaging off ran as one forward of 80 rows, up to 35,680 padded tokens. So `prepare` refuses only a request that Score averaging grew, when its padded tokens (rows x widest row) pass the batcher's own budget; the server passes its `max_batch_tokens` to the engine, so the two always agree, and a request without averaged Score rows is never refused (the 80-row request above answers exactly as on main). The value is the batcher's; this run only checks it on the RTX 5090, with the largest averaged request the budget admits at each row length, averaged Score questions topped up with one-row Noul (one question more is refused in every case):
 
 ```text
-  row tokens   rows   reserved   seconds
-     474        32      14.2       1.6
-     474        64      20.3       3.3
-     474        96      26.4       5.3
-     474       128      32.5      60.0   past the card: Windows spills into system memory
-     824        48      27.5       4.3
-    1124        32      27.1       3.9
-    2124        16      30.1      12.3   spilling
+  row tokens   mode       rows   padded tokens   reserved GiB   seconds
+        474    reversed     34         16,116          14.6       1.7
+        474    cyclic       34         16,116          14.6       1.7
+      2,124    reversed      7         14,868          14.0       1.5
+      2,124    cyclic        7         14,868          14.0       1.5
+      4,124    reversed      3         12,372          13.1       1.4
+      4,124    cyclic        3         12,372          19.8       2.0
+      5,423    cyclic        3         16,269          25.8       2.8
+      8,124    reversed      2         16,248          31.7      18.9   at the card's edge, slow
 ```
 
-Memory grows with rows times row length, and faster for long rows, so the limit is set for bench-length requests: 32 rows of ~510 tokens is about the batcher's 16384-token budget (ADR-030). The batcher does not split a request: on main, 20 Choice and 40 Score questions with averaging off ran as one forward of 80 rows, up to 35,680 padded tokens. So the limit refuses only a request that Score averaging grows past it, and never one without averaged Score rows; that 80-row request gets answers identical to main's. A full presentation run with 64-row calls filled the card on bench_en (32 GB in use, 100% busy, no result after 22 minutes) and was stopped; with 32-row calls the six runs peaked at 22.5 GiB reserved, about 50 minutes each.
+Rows of ~5,400 tokens fit with room to spare. At ~8,100-token rows attention outgrows the token count: the admitted request reached the edge of the 32 GB card and took 18.9 s. Averaging is not the cause there: one Choice question on the same state with averaging off, read in two orders as always, needs the same (31.6 GiB reserved, 30.9 s). A row count could not have bounded this either: in a first measurement without any limit, 16 single-order rows of 2,124 tokens already spilled (30.1 GiB reserved, 12.3 s).
+
+The probe's own calls hold at most 32 rows (`--max-rows`, a measurement setting): a full presentation run with 64-row calls filled the card on bench_en (32 GB in use, 100% busy, no result after 22 minutes) and was stopped; with 32-row calls the six runs peaked at 22.5 GiB reserved, about 50 minutes each.
 
 With averaging off, every answer on 20 items of each bench (40 responses each, the probe included) is identical to main at 8ca94b7. Asking the probe's questions together or alone differs by up to |Δp| 0.038 (bench_en) and 0.041 (bench_ja), so the committed report records `max_rows`.
 

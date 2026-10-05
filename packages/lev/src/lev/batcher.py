@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable
 from concurrent.futures import Future
 from dataclasses import dataclass
 
-from .model import DecisionEngine, Prepared
+from .model import MAX_BATCH_TOKENS, DecisionEngine, Prepared
 from .types import SystemOneResponse
 
 
@@ -42,7 +42,7 @@ class Batcher:
         self,
         engine: DecisionEngine,
         max_pending: int = 64,
-        max_batch_tokens: int = 16384,
+        max_batch_tokens: int = MAX_BATCH_TOKENS,
         timeout: float = 30.0,
     ):
         self.engine = engine

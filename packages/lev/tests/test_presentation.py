@@ -8,6 +8,7 @@ shape the checks misread fails here without weights.
 
 from __future__ import annotations
 
+import inspect
 import json
 import math
 from pathlib import Path
@@ -15,11 +16,12 @@ from string import ascii_uppercase
 
 import pytest
 from lev import ChoiceAnswer, Score, ScoreAnswer, SystemOneRequest, SystemOneResponse, Usage
-from lev.model import MAX_REQUEST_ROWS, DecisionEngine, EngineConfig, average_orders
+from lev.model import MAX_BATCH_TOKENS, DecisionEngine, EngineConfig, average_orders
 from lev.presentation import (
     IDENTICAL_KS,
     KEYS,
     KINDS,
+    MAX_ROWS,
     POST_LOAD,
     PRE_LOAD,
     SLOT0_MIN,
@@ -114,7 +116,7 @@ class FakeEngine:
         return SystemOneResponse(model="fake", answers=answers, usage=Usage(input_tokens=1))
 
 
-def run(engine, states, lang="en", kinds=KINDS, max_rows=MAX_REQUEST_ROWS, slot0_min=SLOT0_MIN):
+def run(engine, states, lang="en", kinds=KINDS, max_rows=MAX_ROWS, slot0_min=SLOT0_MIN):
     return report(ask(engine, states, lang, kinds, max_rows), lang, kinds, slot0_min)
 
 
@@ -376,7 +378,6 @@ class TestQuestionRows:
                 score_order_average=mode,
                 order_average=order_average,
                 noul_readout=noul_readout,
-                max_request_rows=None,
             ),
             mode_b_head=object(),
         )
@@ -403,48 +404,85 @@ BIG = {
 }
 
 
-class TestRequestRowLimit:
+LONG = "x" * 6000
+
+
+class TestAveragedTokenLimit:
+    """Only a request Score averaging grew can be refused, and only past the batch budget."""
+
     def engine(self, tokenizer, **config) -> DecisionEngine:
         return DecisionEngine(model=None, tokenizer=tokenizer, config=EngineConfig(**config))
 
-    def test_a_request_past_the_limit_is_refused_before_any_forward(self, rich_tokenizer):
-        questions = {f"q{i}": Score(criteria=["a", "b", "c"]) for i in range(4)}
-        engine = self.engine(rich_tokenizer, score_order_average="cyclic", max_request_rows=11)
-        with pytest.raises(ValueError, match="needs 12 batch rows, 8 of them from"):
-            engine.prepare("s", questions)
-        assert self.engine(rich_tokenizer, max_request_rows=11).prepare("s", questions).rows == 4
+    def test_a_long_state_with_few_averaged_rows_is_refused(self, rich_tokenizer):
+        question = {"urgency": Score(criteria=["low", "mid", "high"])}
+        engine = self.engine(rich_tokenizer, score_order_average="cyclic")
+        with pytest.raises(
+            ValueError, match="2 of the rows from score_order_average='cyclic', above"
+        ):
+            engine.prepare(LONG, question)
+        assert engine.prepare("short", question).rows == 3
+        assert self.engine(rich_tokenizer).prepare(LONG, question).rows == 1
 
     def test_without_score_averaging_a_large_request_is_never_refused(self, rich_tokenizer):
         """#4's batcher runs an oversized request alone and unsplit, so main accepts it."""
-        prepared = self.engine(rich_tokenizer).prepare("s", BIG)
-        assert prepared.rows == 80 > MAX_REQUEST_ROWS
+        prepared = self.engine(rich_tokenizer).prepare("x" * 400, BIG)
+        assert prepared.rows == 80 and prepared.rows * prepared.width > MAX_BATCH_TOKENS
         assert [v.order for v in prepared.variants] == [None, [3, 2, 1, 0]] * 20 + [None] * 40
 
-    def test_only_rows_score_averaging_adds_can_refuse(self, rich_tokenizer):
+    def test_only_a_request_score_averaging_grew_can_be_refused(self, rich_tokenizer):
         engine = self.engine(rich_tokenizer, score_order_average="cyclic")
-        with pytest.raises(ValueError, match="needs 160 batch rows, 80 of them"):
-            engine.prepare("s", BIG)
+        with pytest.raises(ValueError, match="80 of the rows from"):
+            engine.prepare("x" * 400, BIG)
         choices = {k: q for k, q in BIG.items() if k.startswith("c")}
-        assert engine.prepare("s", choices).rows == 40
+        assert engine.prepare("x" * 400, choices).rows == 40
 
-    def test_none_is_no_limit(self, rich_tokenizer):
-        questions = {f"q{i}": Score(criteria=["a", "b", "c"]) for i in range(30)}
-        engine = self.engine(rich_tokenizer, score_order_average="cyclic", max_request_rows=None)
-        assert engine.prepare("s", questions).rows == 90
-        assert EngineConfig().max_request_rows == MAX_REQUEST_ROWS
+    def test_none_is_no_limit_and_the_default_is_the_batchers(self, rich_tokenizer):
+        from lev.batcher import Batcher
 
-    def test_the_server_answers_422(self, monkeypatch, rich_tokenizer):
+        question = {"urgency": Score(criteria=["low", "mid", "high"])}
+        engine = self.engine(rich_tokenizer, score_order_average="cyclic", max_batch_tokens=None)
+        assert engine.prepare(LONG, question).rows == 3
+        default = inspect.signature(Batcher).parameters["max_batch_tokens"].default
+        assert EngineConfig().max_batch_tokens == MAX_BATCH_TOKENS == default == 16384
+
+    def serve(self, monkeypatch, tokenizer, **create):
         pytest.importorskip("fastapi")
         from fastapi.testclient import TestClient
         from lev import server
 
-        engine = self.engine(rich_tokenizer, score_order_average="cyclic", max_request_rows=5)
-        monkeypatch.setattr(server, "load", lambda *a, **k: engine)
+        seen = {}
+
+        def load(*a, **kwargs):
+            seen["engine"] = self.engine(
+                tokenizer, score_order_average="cyclic", max_batch_tokens=kwargs["max_batch_tokens"]
+            )
+            return seen["engine"]
+
+        def batcher(engine, **kwargs):
+            seen["batcher"] = kwargs["max_batch_tokens"]
+            return real_batcher(engine, **kwargs)
+
+        real_batcher = server.Batcher
+        monkeypatch.setattr(server, "load", load)
+        monkeypatch.setattr(server, "Batcher", batcher)
+        return TestClient(server.create_app(**create)), seen
+
+    def test_the_server_gives_its_budget_to_the_engine(self, monkeypatch, rich_tokenizer):
+        client, seen = self.serve(monkeypatch, rich_tokenizer, max_batch_tokens=1234)
+        with client:
+            health = client.get("/health").json()
+        assert seen["batcher"] == seen["engine"].config.max_batch_tokens == 1234
+        assert health["max_batch_tokens"] == 1234
+
+    def test_the_server_answers_422(self, monkeypatch, rich_tokenizer):
+        client, _ = self.serve(monkeypatch, rich_tokenizer, max_batch_tokens=500)
         questions = {f"q{i}": {"type": "score", "criteria": ["a", "b", "c"]} for i in range(2)}
-        with TestClient(server.create_app()) as client:
-            response = client.post("/v1/systemone", json={"state": "s", "questions": questions})
+        with client:
+            response = client.post(
+                "/v1/systemone", json={"state": "x" * 200, "questions": questions}
+            )
         assert response.status_code == 422
-        assert "max_request_rows=5" in response.json()["detail"]
+        assert "max_batch_tokens=500" in response.json()["detail"]
 
 
 class TestCommittedReport:
@@ -455,7 +493,7 @@ class TestCommittedReport:
         path = Path(__file__).resolve().parents[3] / "data" / "presentation-checks.json"
         committed = json.loads(path.read_text("utf-8"))
         assert committed["score_order_average"] == "off" and committed["n_states"] == 290
-        assert committed["max_rows"] == MAX_REQUEST_ROWS
+        assert committed["max_rows"] == MAX_ROWS
         for kind in KINDS:
             assert committed["checks"][kind]["identical"]["read"] == "single order"
             for check in ("identical", "first_slot"):
@@ -501,7 +539,7 @@ class TestCompareGuardsItsSettings:
         engine = FakeEngine(slot0=-1.0)
         path = Path(self.committed(monkeypatch, tmp_path, engine))
         saved = json.loads(path.read_text("utf-8"))
-        assert saved["score_order_average"] == "off" and saved["max_rows"] == MAX_REQUEST_ROWS
+        assert saved["score_order_average"] == "off" and saved["max_rows"] == MAX_ROWS
         saved["checks"]["score"]["identical"]["metric"] += 0.5
         path.write_text(json.dumps(saved), "utf-8")
         with pytest.raises(SystemExit) as exc:

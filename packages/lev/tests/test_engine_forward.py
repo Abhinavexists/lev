@@ -62,7 +62,7 @@ class TinyTokenizer:
 
 
 def test_without_score_averaging_a_large_request_answers_as_with_no_limit(tiny_model):
-    """The row limit never touches a request Score averaging did not grow (ADR-029)."""
+    """The token limit never touches a request Score averaging did not grow (ADR-029)."""
     from lev.types import Choice, Score
 
     questions = {
@@ -73,6 +73,8 @@ def test_without_score_averaging_a_large_request_answers_as_with_no_limit(tiny_m
         **{f"s{i}": Score(criteria=["low", "mid", "high"]) for i in range(40)},
     }
     limited = DecisionEngine(tiny_model, TinyTokenizer(), EngineConfig())
-    unlimited = DecisionEngine(tiny_model, TinyTokenizer(), EngineConfig(max_request_rows=None))
-    assert limited.prepare("state", questions).rows == 80 > limited.config.max_request_rows
-    assert limited.system_one("state", questions) == unlimited.system_one("state", questions)
+    unlimited = DecisionEngine(tiny_model, TinyTokenizer(), EngineConfig(max_batch_tokens=None))
+    state = "a long support message " * 16
+    prepared = limited.prepare(state, questions)
+    assert prepared.rows == 80 and prepared.rows * prepared.width > limited.config.max_batch_tokens
+    assert limited.system_one(state, questions) == unlimited.system_one(state, questions)

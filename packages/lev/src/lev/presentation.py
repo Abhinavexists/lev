@@ -41,6 +41,8 @@ IDENTICAL_KS = (3, 4, 5)
 KEYS = ("■", "●", "◆", "▲", "◎")
 SLOT0_MIN = -0.20
 FIRST_SLOT_MIN = 0.15
+# Batch rows per probe call: a full bench_en run peaked at 22.5 GiB reserved on a 32 GB card.
+MAX_ROWS = 32
 
 # en follows Laya's presentation_checks.py; ja the same wording in Japanese.
 TEXT: dict[str, dict[str, Any]] = {
@@ -125,14 +127,19 @@ def is_identical(qid: str) -> bool:
 
 
 @contextmanager
-def single_order(engine) -> Iterator[None]:
-    """Read every question once, in the order given."""
+def configured(engine, **changes) -> Iterator[None]:
+    """Run the block with `engine.config` changed as given, then restore it."""
     config = engine.config
-    engine.config = replace(config, order_average=False)
+    engine.config = replace(config, **changes)
     try:
         yield
     finally:
         engine.config = config
+
+
+def single_order(engine):
+    """Read every question once, in the order given."""
+    return configured(engine, order_average=False)
 
 
 def call_groups(engine, questions: dict[str, dict], max_rows: int) -> list[dict[str, dict]]:
@@ -161,9 +168,8 @@ def ask(
     max_rows: int | None = None,
 ) -> list[dict[str, Any]]:
     """Every probe answer for every state: the identical questions in one order, the
-    permuted ones as the engine is configured. Calls hold at most `max_rows` batch rows,
-    the engine's `max_request_rows` by default."""
-    max_rows = max_rows or engine.config.max_request_rows
+    permuted ones as the engine is configured. Calls hold at most `max_rows` batch rows."""
+    max_rows = max_rows or MAX_ROWS
     questions = probe_questions(lang, kinds)
     identical = {q: v for q, v in questions.items() if is_identical(q)}
     permuted = {q: v for q, v in questions.items() if not is_identical(q)}
@@ -176,8 +182,11 @@ def ask(
         with single_order(engine):
             for group in identical_groups:
                 got.update(engine.system_one(state, group).answers)
-        for group in permuted_groups:
-            got.update(engine.system_one(state, group).answers)
+        # The probe sizes its own calls; the serving limit would refuse its averaged
+        # calls on long states.
+        with configured(engine, max_batch_tokens=None):
+            for group in permuted_groups:
+                got.update(engine.system_one(state, group).answers)
         answers.append(got)
     return answers
 
@@ -283,7 +292,8 @@ def packed_consistency(
                 with single_order(engine):
                     alone = engine.system_one(state, {qid: question}).answers[qid]
             else:
-                alone = engine.system_one(state, {qid: question}).answers[qid]
+                with configured(engine, max_batch_tokens=None):
+                    alone = engine.system_one(state, {qid: question}).answers[qid]
             for a, b in zip(
                 slot_probs(packed[qid], question), slot_probs(alone, question), strict=True
             ):

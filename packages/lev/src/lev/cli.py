@@ -217,11 +217,6 @@ def cmd_serve(args: argparse.Namespace) -> None:
             max_pending=args.max_pending,
             max_batch_tokens=args.max_batch_tokens,
             score_order_average=args.score_order_average,
-            **(
-                {"max_request_rows": args.max_request_rows}
-                if args.max_request_rows is not None
-                else {}
-            ),
         ),
         host=args.host,
         port=args.port,
@@ -259,11 +254,11 @@ def cmd_presentation_checks(args: argparse.Namespace) -> None:
 
     from . import presentation
     from .calibrate import CalibrationProfile
-    from .model import MAX_REQUEST_ROWS, load
+    from .model import load
 
     states = presentation.read_states(args.states)[: args.limit]
     kinds = [k.strip() for k in args.kinds.split(",") if k.strip()]
-    max_rows = args.max_rows or MAX_REQUEST_ROWS
+    max_rows = args.max_rows or presentation.MAX_ROWS
     settings = {
         "n_states": len(states),
         "lang": args.lang,
@@ -280,7 +275,6 @@ def cmd_presentation_checks(args: argparse.Namespace) -> None:
         cache_dir=args.model_cache,
         calibration=args.calibration,
         score_order_average=args.score_order_average,
-        max_request_rows=max(max_rows, MAX_REQUEST_ROWS),
     )
     if args.raw:
         engine.calibration = CalibrationProfile()
@@ -421,13 +415,8 @@ def main(argv: list[str] | None = None) -> None:
         "--max-batch-tokens",
         type=int,
         default=16384,
-        help="padded tokens per batched forward across requests (default 16384)",
-    )
-    serve_parser.add_argument(
-        "--max-request-rows",
-        type=int,
-        default=None,
-        help="refuse (422) a request Score averaging grows past this many batch rows (default 32)",
+        help="padded tokens per batched forward, and the most a request Score averaging grew "
+        "may need (default 16384)",
     )
     serve_parser.add_argument(
         "--score-order-average",
@@ -464,7 +453,7 @@ def main(argv: list[str] | None = None) -> None:
         "--max-rows",
         type=int,
         default=None,
-        help="batch rows per call, as the engine counts them (default: max_request_rows)",
+        help="batch rows per probe call, as the engine counts them (default 32)",
     )
     presentation_parser.add_argument("--slot0-min", type=float, default=-0.20)
     presentation_parser.add_argument("--out", default=None, help="write the report JSON here")
