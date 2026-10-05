@@ -601,7 +601,7 @@ Serving now skips by default; training does not, so Mode B keeps its data. Mode 
 
 Every result is reported whichever way it goes, including accuracy that does not improve.
 
-**Revised after review (2026-10-02).** The first runs read the identical-option control after averaging, where `cyclic` makes it zero by construction and `reversed` cannot see the middle slots, so it was no evidence for averaging. The control now measures the bias of one read, before any averaging (`order_average=False`); what averaging changes is judged by labelled accuracy, RPS and calibration error, and by the first-slot rate on real options. Also changed: Choice keys are shapes with no order (■ ● ◆ ▲ ◎), read under every key-to-slot assignment so a key's own pull cancels; argmax ties split between the tied slots; calls are cut by the engine's own row count; and the engine bounds the rows Score averaging may add to a request.
+**Revised after review (2026-10-02).** The first runs read the identical-option control after averaging, where `cyclic` makes it zero by construction and `reversed` cannot see the middle slots, so it was no evidence for averaging. The control now measures the bias of one read, before any averaging (`order_average=False`); what averaging changes is judged by labelled accuracy, RPS and calibration error. Score's first-slot rate on real options is kept as a reference only: in the chat style the release uses, the probe's permuted listings renumber the levels as well as move them. Also changed: Choice keys are shapes with no order (■ ● ◆ ▲ ◎), read under every key-to-slot assignment so a key's own pull cancels; argmax ties split between the tied slots; calls are cut by the engine's own row count; and the engine bounds the rows Score averaging may add to a request.
 
 **Evidence.** Run 2026-10-04/05 on `interfaze-ai/lev` (HF 7bdc748: the weights and calibration of f8ef711, only README.md changed), bf16, one RTX 5090, this branch rebased on main after #4. The numbers behind every table are in [`data/adr-029-summary.json`](../data/adr-029-summary.json); the committed report CI compares against is [`data/presentation-checks.json`](../data/presentation-checks.json). `bench_ja` is Japanese, outside Lev's target language, so its rows are a reference only; `bench_en` is the one that bears on the decision.
 
@@ -616,7 +616,7 @@ The bias of one read: identical-option control, slot 0 minus the mean (gate -0.2
 
 Choice, read once, avoids slot 0 more than Score does; it is already read in two orders when served, and the first-slot rate below is what that leaves.
 
-What averaging changes. The benches' three questions per request (4-way Choice, 3-level Score, Noul), shipped calibration; Score ECE over 15 equal-width bins. First-slot rate over all six orders of three real options, ties split (1/3 is order-free), and `consistent`, the share of states whose six orders give one answer:
+What averaging changes. The benches' three questions per request (4-way Choice, 3-level Score, Noul), shipped calibration; Score ECE over 15 equal-width bins. For reference, the first-slot rate over all six orders of three real options, ties split (1/3 is order-free), and `consistent`, the share of states whose six orders give one answer:
 
 ```text
                     Score                                   Choice                         Noul
