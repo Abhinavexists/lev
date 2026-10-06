@@ -33,6 +33,10 @@ from .types import (
 
 _QUESTIONS = TypeAdapter(dict[str, Question])
 
+# Padded tokens (rows x widest row) per forward: `lev.batcher`'s budget, and the most a
+# request Score averaging grew may need (ADR-029, ADR-030).
+MAX_BATCH_TOKENS = 16384
+
 
 @dataclass
 class EngineConfig:
@@ -46,6 +50,13 @@ class EngineConfig:
     noul_readout: Literal["rating", "binary"] = "rating"
     # A second option order reduces letter-position bias; costs one extra batch row.
     order_average: bool = True
+    # Score levels keep their low-to-high order unless this opts in (ADR-029): "reversed"
+    # adds the reversed order (2 rows per Score, as Choice), "cyclic" every rotation (K rows).
+    # Both show the model level orders training never produces (ADR-020, FINDINGS §12).
+    score_order_average: Literal["off", "reversed", "cyclic"] = "off"
+    # A request whose Score averaging added rows must fit this many padded tokens; `prepare`
+    # refuses it otherwise (HTTP 422). Requests without added Score rows are never refused.
+    max_batch_tokens: int | None = MAX_BATCH_TOKENS
     # Serving can skip split codes; training keeps large sets for Mode B (ADR-028).
     skip_multi_token_codes: bool = True
     # Forking avoids repeated prefix work but adds a forward and cache copies (ADR-023).
@@ -209,9 +220,16 @@ class DecisionEngine:
         with self._tokenizer_lock:
             return self._route_and_tokenise(state, questions)
 
+    def question_rows(self, questions: Mapping[str, Question | dict]) -> dict[str, int]:
+        """Batch rows each question adds to a request under this engine's config:
+        the orders `prepare` renders it in. Depends on routing, not on the state."""
+        questions = _QUESTIONS.validate_python(questions)
+        with self._tokenizer_lock:
+            routes = serving_routes(questions, self.tokenizer, self.config)
+        return {name: len(self._orders(q, routes[name])) for name, q in questions.items()}
+
     def _route_and_tokenise(self, state, questions: dict[str, Question]) -> Prepared:
         routes = serving_routes(questions, self.tokenizer, self.config)
-
         unsupported = [
             name
             for name, r in routes.items()
@@ -226,7 +244,22 @@ class DecisionEngine:
 
         prefix, variants = self._render(state, questions, routes)
         prefix_ids = self.tokenizer.encode(prefix, add_special_tokens=True)
-        return Prepared(questions, routes, prefix_ids, variants)
+        prepared = Prepared(questions, routes, prefix_ids, variants)
+        added = sum(
+            1 for v in variants if v.order is not None and isinstance(questions[v.name], Score)
+        )
+        limit = self.config.max_batch_tokens
+        # The batcher runs an oversized request alone and unsplit; refuse only one that
+        # Score averaging grew, so a request main accepts is never refused for its size.
+        if limit is not None and added and prepared.rows * prepared.width > limit:
+            raise ValueError(
+                f"this request needs {prepared.rows} rows x {prepared.width} tokens = "
+                f"{prepared.rows * prepared.width} padded tokens, {added} of the rows from "
+                f"score_order_average={self.config.score_order_average!r}, above "
+                f"max_batch_tokens={limit}; send fewer Score questions or a shorter state, "
+                "or average fewer orders"
+            )
+        return prepared
 
     def answer(self, requests: list[Prepared]) -> list[SystemOneResponse]:
         """Answer prepared requests, in single prefix mode all in one forward.
@@ -279,16 +312,25 @@ class DecisionEngine:
     def _orders(self, question: Question, route: Route) -> list[list[int] | None]:
         """Candidate orders to render; None means the original order. Only lettered
         Choice and binary Noul in state-first layout are reversed (ordered scales
-        keep training's low-to-high order; schema-first shares options)."""
+        keep training's low-to-high order; schema-first shares options), unless
+        `score_order_average` opts a Score in: "reversed" adds one row, "cyclic"
+        K-1, both in orders training never shows (ADR-029). `order_average=False`
+        reads every question once."""
         if (
             not self.config.order_average
             or route.mode is not Mode.LABEL_TOKEN
             or self.config.layout is not Layout.STATE_FIRST
-            or isinstance(question, Score)
-            or (isinstance(question, Noul) and route.reason != BINARY_NOUL)
         ):
             return [None]
         n = len(route.codes or [])
+        if isinstance(question, Score):
+            if self.config.score_order_average == "off" or n < 2:
+                return [None]
+            if self.config.score_order_average == "reversed":
+                return [None, list(reversed(range(n)))]
+            return [None] + [[(j + r) % n for j in range(n)] for r in range(1, n)]
+        if isinstance(question, Noul) and route.reason != BINARY_NOUL:
+            return [None]
         return [None, list(reversed(range(n)))] if n >= 2 else [None]
 
     def _render(
@@ -520,6 +562,8 @@ def load(
     compile: bool = False,
     max_label_options: int | None = None,
     skip_multi_token_codes: bool = True,
+    score_order_average: Literal["off", "reversed", "cyclic"] = "off",
+    max_batch_tokens: int | None = MAX_BATCH_TOKENS,
 ) -> DecisionEngine:
     """Load a checkpoint -- a release directory, a training output or a Hub id --
     into a ready `DecisionEngine`. With no checkpoint, serves `model_id` frozen.
@@ -595,6 +639,8 @@ def load(
         prompt_style=prompt_style or "plain",
         max_label_options=max_label_options,
         skip_multi_token_codes=skip_multi_token_codes,
+        score_order_average=score_order_average,
+        max_batch_tokens=max_batch_tokens,
     )
     engine = DecisionEngine(model, tokenizer, config, profile, mode_b_head=head)
     engine.checkpoint = resolved

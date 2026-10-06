@@ -581,6 +581,95 @@ Serving now skips by default; training does not, so Mode B keeps its data. Mode 
 
 ---
 
+## ADR-029 — Score is read in one order; measure the position effect, and offer averaging off by default
+
+**Open.** Proposed in [#1](https://github.com/Abhinavexists/lev/issues/1); the default is the maintainer's call.
+
+**Problem.** Choice and binary Noul are read in two orders and averaged, which cancels the preference for the first letter (ADR-020). Score is not: its levels keep the low-to-high order training uses, because reversing them measured -2.4 points on helpsteer2, inside sampling noise, on a prompt training never produces (FINDINGS §12). What that leaves was not measured. On `interfaze-ai/lev` with Score questions over the 290 states of sokudan's `bench_en`, an identical-option control (every level the same text, so levels differ only by position and code) put slot 0 at -0.332 below the mean in calibrated log-probability and -0.931 in raw scores, and the first slot won 0.270 of the decisions over all six orders of three levels, where an order-free readout is at 1/3 (#1). The check is the one NandhaKishorM/laya#259 added to Laya, whose gate is -0.20 on raw scores.
+
+**Options.**
+
+- (a) Average Score over orders by default: `reversed` (2 rows, as Choice) or `cyclic` (every rotation, K rows). Both show the model level orders training never produces; in the `chat` style each line still names its level (`(level i of K)`).
+- (b) Keep Score in one order by default, ship averaging as `EngineConfig.score_order_average` (off), and put the control in CI: `lev presentation-checks` against a committed report, failing on drift.
+
+**What is measured, fixed before the runs.** One checkpoint (`interfaze-ai/lev`, bf16, one RTX 5090), sokudan's `bench_en` (290) and `bench_ja` (300), `score_order_average` in {off, reversed, cyclic}:
+
+1. The identical-option control and the first-slot rate, for Score and Choice, with the shipped calibration and raw (an empty `CalibrationProfile`).
+2. Score RPS and accuracy on the benches' 3-level urgency question, with Choice and Noul on the same requests expected unchanged (Score rows are the only rows added).
+3. Milliseconds per three-question request, as the cost of each mode.
+4. With averaging off, every answer identical to the current code on the same items.
+
+Every result is reported whichever way it goes, including accuracy that does not improve.
+
+**Revised after review (2026-10-02).** The first runs read the identical-option control after averaging, where `cyclic` makes it zero by construction and `reversed` cannot see the middle slots, so it was no evidence for averaging. The control now measures the bias of one read, before any averaging (`order_average=False`); what averaging changes is judged by labelled accuracy, RPS and calibration error. Score's first-slot rate on real options is kept as a reference only: in the chat style the release uses, the probe's permuted listings renumber the levels as well as move them. Also changed: Choice keys are shapes with no order (■ ● ◆ ▲ ◎), read under every key-to-slot assignment so a key's own pull cancels; argmax ties split between the tied slots; calls are cut by the engine's own row count; and the engine refuses a request Score averaging grew past the batcher's token budget.
+
+**Evidence.** Run 2026-10-04/05 on `interfaze-ai/lev` (HF 7bdc748: the weights and calibration of f8ef711, only README.md changed), bf16, one RTX 5090, this branch rebased on main after #4. The numbers behind every table are in [`data/adr-029-summary.json`](../data/adr-029-summary.json); the committed report CI compares against is [`data/presentation-checks.json`](../data/presentation-checks.json). `bench_ja` is Japanese, outside Lev's target language, so its rows are a reference only; `bench_en` is the one that bears on the decision.
+
+The bias of one read: identical-option control, slot 0 minus the mean (gate -0.20 raw). Raw is calibrated x T, exact within one temperature bucket. The three runs per bench, one per mode, agree exactly, as they must.
+
+```text
+                 bench_en (290)          bench_ja (300, reference)
+              calibrated     raw       calibrated     raw
+  Score         -0.332     -0.932        -0.518     -1.452
+  Choice        -0.454     -0.813        -0.660     -1.182
+```
+
+Choice, read once, avoids slot 0 more than Score does; it is already read in two orders when served, and the first-slot rate below is what that leaves.
+
+What averaging changes. The benches' three questions per request (4-way Choice, 3-level Score, Noul), shipped calibration; Score ECE over 15 equal-width bins. For reference, the first-slot rate over all six orders of three real options, ties split (1/3 is order-free), and `consistent`, the share of states whose six orders give one answer:
+
+```text
+                    Score                                   Choice                         Noul
+                 acc    RPS    ECE   first slot consistent    acc   first slot consistent    acc   AUROC   ms / request
+  en  off      0.583  0.150  0.124    0.265      0.714     0.917    0.331      0.986     0.938  0.9778  156.5
+      reversed 0.652  0.127  0.101    0.319      0.872     0.917    0.332      0.979     0.938  0.9780  179.3 (1.15x)
+      cyclic   0.641  0.125  0.060    0.310      0.893     0.917    0.332      0.983     0.938  0.9784  210.2 (1.34x)
+  ja  off      0.643  0.138  0.093    0.242      0.627     0.887    0.331      0.973     0.817  0.8890  149.2
+      reversed 0.730  0.108  0.059    0.314      0.870     0.887    0.331      0.977     0.813  0.8877  169.9 (1.14x)
+      cyclic   0.717  0.108  0.077    0.299      0.853     0.887    0.330      0.973     0.813  0.8876  197.3 (1.32x)
+```
+
+Accuracy, RPS, Choice and Noul are identical, to the last digit, to the runs before the rebase and the review fixes. In the chat style the release uses, a Score line names its level by its place in the request (`(level i of K)`), so the probe's permuted listings renumber the levels as well as move them, and Score's first-slot rate measures both; the engine's own averaging moves each level with its number.
+
+Calibration of the averaged modes. The shipped Score temperature (2.80) was fitted on single-order rows. Refit per mode on half of each bench (stratified by the gold level, seed 0), judged on the other half:
+
+```text
+                       T refit   held-out NLL       held-out ECE       held-out RPS
+                                 shipped  refit     shipped  refit     shipped  refit
+  en (144)  off          3.96     0.935   0.909      0.130   0.108      0.152   0.147
+            reversed     3.16     0.839   0.838      0.111   0.119      0.126   0.126
+            cyclic       2.92     0.828   0.828      0.077   0.077      0.124   0.124
+  ja (149)  off          3.60     0.781   0.779      0.090   0.077      0.132   0.130
+            reversed     2.39     0.641   0.627      0.089   0.061      0.102   0.101
+            cyclic       2.40     0.644   0.629      0.068   0.086      0.101   0.101
+```
+
+On bench_en a refit gains nothing for either averaged mode (held-out NLL within 0.001), and the shipped temperature is if anything a little sharp for `off`. On the Japanese reference the refit goes the other way for the averaged modes. A per-mode temperature is not proposed.
+
+The batch budget for averaged requests (`max_batch_tokens`, 16384). The batcher does not split a request: on main, 20 Choice and 40 Score questions with averaging off ran as one forward of 80 rows, up to 35,680 padded tokens. So `prepare` refuses only a request that Score averaging grew, when its padded tokens (rows x widest row) pass the batcher's own budget; the server passes its `max_batch_tokens` to the engine, so the two always agree, and a request without averaged Score rows is never refused (the 80-row request above answers exactly as on main). The value is the batcher's; this run only checks it on the RTX 5090, with the largest averaged request the budget admits at each row length, averaged Score questions topped up with one-row Noul (one question more is refused in every case):
+
+```text
+  row tokens   mode       rows   padded tokens   reserved GiB   seconds
+        474    reversed     34         16,116          14.6       1.7
+        474    cyclic       34         16,116          14.6       1.7
+      2,124    reversed      7         14,868          14.0       1.5
+      2,124    cyclic        7         14,868          14.0       1.5
+      4,124    reversed      3         12,372          13.1       1.4
+      4,124    cyclic        3         12,372          19.8       2.0
+      5,423    cyclic        3         16,269          25.8       2.8
+      8,124    reversed      2         16,248          31.7      18.9   at the card's edge, slow
+```
+
+Rows of ~5,400 tokens fit with room to spare. At ~8,100-token rows attention outgrows the token count: the admitted request reached the edge of the 32 GB card and took 18.9 s. Averaging is not the cause there: one Choice question on the same state with averaging off, read in two orders as always, needs the same (31.6 GiB reserved, 30.9 s). A row count could not have bounded this either: in a first measurement without any limit, 16 single-order rows of 2,124 tokens already spilled (30.1 GiB reserved, 12.3 s).
+
+The probe's own calls hold at most 32 rows (`--max-rows`, a measurement setting): a full presentation run with 64-row calls filled the card on bench_en (32 GB in use, 100% busy, no result after 22 minutes) and was stopped; with 32-row calls the six runs peaked at 22.5 GiB reserved, about 50 minutes each.
+
+With averaging off, every answer on 20 items of each bench (40 responses each, the probe included) is identical to main at 8ca94b7. Asking the probe's questions together or alone differs by up to |Δp| 0.038 (bench_en) and 0.041 (bench_ja), so the committed report records `max_rows`.
+
+**Reading, for the decision.** `reversed` lifts Score accuracy by 6.9 points on bench_en and lowers its RPS and ECE at 1.15x the time, with the shipped temperature. `cyclic` calibrates best on bench_en (ECE 0.060) but is no more accurate than `reversed` and costs 1.34x. Neither was tested on helpsteer2, the case that kept Score out of averaging in ADR-020, and both benches are one family of synthetic support messages. The proposal keeps the default off and leaves the choice between (a) and (b) to the maintainer.
+
+---
+
 ## ADR-030 — The server batches across requests and refuses work it cannot do in time
 
 **Accepted.**

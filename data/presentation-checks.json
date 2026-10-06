@@ -1,0 +1,91 @@
+{
+ "about": "Committed report for `lev presentation-checks --compare` (ADR-029). One run: interfaze-ai/lev (HF 7bdc748), bf16, one RTX 5090, the shipped calibration, score_order_average off, kinds score and choice, lang en, 2026-10-05. The identical check reads one order.",
+ "checkpoint": "interfaze-ai/lev",
+ "states": "sokudan bench_en.jsonl (github.com/hiroki-abe-58/sokudan, data/bench_en.jsonl, CC BY 4.0), 290 states",
+ "n_states": 290,
+ "lang": "en",
+ "raw": false,
+ "kinds": [
+  "score",
+  "choice"
+ ],
+ "score_order_average": "off",
+ "max_rows": 32,
+ "checkpoint_revision": "7bdc748dffebd85b57ee0dbea8f994c6354fed31",
+ "dtype": "torch.bfloat16",
+ "packed_max_abs_diff": 0.0375,
+ "checks": {
+  "score": {
+   "identical": {
+    "metric": -0.3323,
+    "leave_one_out": [
+     -0.3364,
+     -0.3298
+    ],
+    "gate": -0.2,
+    "passed": false,
+    "read": "single order",
+    "by_config": {
+     "moderate|3": -0.1191,
+     "moderate|4": -0.2373,
+     "moderate|5": -0.3198,
+     "a request|3": -0.3249,
+     "a request|4": -0.4614,
+     "a request|5": -0.5315
+    }
+   },
+   "first_slot": {
+    "metric": 0.2646,
+    "leave_one_out": [
+     0.2641,
+     0.2655
+    ],
+    "gate": 0.15,
+    "passed": true,
+    "decisions": 1740,
+    "argmax_by_slot": [
+     460.3333,
+     595.8333,
+     683.8333
+    ],
+    "consistent": 0.7138
+   }
+  },
+  "choice": {
+   "identical": {
+    "metric": -0.454,
+    "leave_one_out": [
+     -0.4556,
+     -0.4515
+    ],
+    "gate": -0.2,
+    "passed": false,
+    "read": "single order",
+    "by_config": {
+     "a team|3": -0.5365,
+     "a team|4": -0.534,
+     "a team|5": -0.5335,
+     "a request|3": -0.323,
+     "a request|4": -0.3803,
+     "a request|5": -0.4165
+    }
+   },
+   "first_slot": {
+    "metric": 0.331,
+    "leave_one_out": [
+     0.331,
+     0.3319
+    ],
+    "gate": 0.15,
+    "passed": true,
+    "decisions": 1740,
+    "argmax_by_slot": [
+     576.0,
+     588.0,
+     576.0
+    ],
+    "consistent": 0.9862
+   }
+  }
+ }
+}
