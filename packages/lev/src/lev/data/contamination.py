@@ -1,7 +1,4 @@
-"""Reject training sources that resolve to any of the 13 S1Bench subsets.
-
-`assert_eval_only` is the inverse gate, for the S1Bench evaluation loader.
-"""
+"""Block S1Bench training sources and restrict evaluation to S1Bench subsets."""
 
 from __future__ import annotations
 
@@ -26,8 +23,7 @@ BLOCKED_SUBSETS: frozenset[str] = frozenset(
     }
 )
 
-# Aliases and parent datasets that resolve to a blocked subset. A mixture that lists
-# `google-research-datasets/paws` is contaminated even though the string differs.
+# Block aliases and parent datasets, not just exact subset names.
 _ALIASES: dict[str, str] = {
     "vitaminc": "vitaminc-dev",
     "tals/vitaminc": "vitaminc-dev",
@@ -37,8 +33,7 @@ _ALIASES: dict[str, str] = {
     "mteb/amazon_massive_scenario": "massive-en-US",
     "setfit/amazon_massive_intent_en-us": "massive-en-US",
     "setfit/amazon_massive_scenario_en-us": "massive-en-US",
-    # Different rows, same 64-intent schema MASSIVE inherited via SLURP: it would
-    # make massive-en-US a seen taxonomy (ADR-020).
+    # SLURP shares MASSIVE's intent taxonomy (ADR-020).
     "hwu64": "massive-en-US",
     "deeppavlov/hwu64": "massive-en-US",
     "super_glue/boolq": "boolq",
@@ -70,7 +65,7 @@ _ALIASES: dict[str, str] = {
 
 
 class ContaminationError(RuntimeError):
-    """Raised when a training mixture touches an evaluation subset."""
+    pass
 
 
 def normalise(name: str) -> str:
@@ -82,8 +77,7 @@ def normalise(name: str) -> str:
 
 _BLOCKED_BY_NORMALISED: dict[str, str] = {normalise(s): s for s in BLOCKED_SUBSETS}
 _ALIASES_BY_NORMALISED: dict[str, str] = {normalise(a): t for a, t in _ALIASES.items()}
-# Bare aliases match as segment sets, so an unlisted re-host (`someorg/squad_v2_dedup`)
-# is caught (ADR-020); org-qualified aliases stay exact-match only.
+# Match bare aliases by segments to catch re-hosts; qualified aliases stay exact.
 _ALIAS_SEGMENTS: tuple[tuple[frozenset[str], str], ...] = tuple(
     (frozenset(alias.split("-")), target)
     for alias, target in _ALIASES_BY_NORMALISED.items()
@@ -106,8 +100,7 @@ def resolve(name: str) -> str | None:
     for normalised_subset, subset in _BLOCKED_BY_NORMALISED.items():
         if normalised_subset in segments:
             return subset
-    # Likewise for a bare alias: every segment of `squad-v2` present, in any order.
-    # Conservative on purpose: a false block costs one dataset, a miss the result.
+    # Conservative segment matching prevents renamed evaluation data from entering training.
     for alias_segments, subset in _ALIAS_SEGMENTS:
         if alias_segments <= segments:
             return subset
@@ -115,7 +108,7 @@ def resolve(name: str) -> str | None:
 
 
 def check_mixture(dataset_names: Iterable[str]) -> dict[str, str]:
-    """Return `{offending name: blocked subset}` for everything that collides."""
+    """Return the blocked subset for each offending source."""
     hits: dict[str, str] = {}
     for name in dataset_names:
         if (subset := resolve(name)) is not None:
@@ -124,7 +117,7 @@ def check_mixture(dataset_names: Iterable[str]) -> dict[str, str]:
 
 
 def assert_eval_only(dataset_name: str) -> str:
-    """Return the blocked subset `dataset_name` resolves to; raise `ContaminationError` if none."""
+    """Resolve an evaluation subset or raise ContaminationError."""
     subset = resolve(dataset_name)
     if subset is None:
         raise ContaminationError(
@@ -137,7 +130,7 @@ def assert_eval_only(dataset_name: str) -> str:
 
 
 def assert_clean(dataset_names: Iterable[str]) -> None:
-    """Raise `ContaminationError` if any dataset resolves to a blocked evaluation subset."""
+    """Reject sources that resolve to blocked evaluation subsets."""
     if hits := check_mixture(dataset_names):
         listed = "\n".join(f"  {src!r} -> blocked subset {dst!r}" for src, dst in hits.items())
         raise ContaminationError(

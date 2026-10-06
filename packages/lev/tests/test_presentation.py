@@ -1,10 +1,4 @@
-"""Presentation checks (ADR-029), opt-in Score order averaging and the request row limit.
-
-The checks run against `FakeEngine`: a real `DecisionEngine` without weights routes,
-renders and counts every request, as serving does, and only the logits are scripted.
-So a probe lev would reject, a row count that disagrees with the engine, or an answer
-shape the checks misread fails here without weights.
-"""
+"""Test presentation probes using real routing and rendering with scripted logits."""
 
 from __future__ import annotations
 
@@ -56,10 +50,7 @@ class Tokenizer:
 
 
 class FakeEngine:
-    """logit = content[text] + key_pull[key] + slot0 (in slot 0) + a packing term that
-    grows with the questions per call, read in every order the engine renders and
-    averaged as lev does. Routing, orders, row counts and the row limit are the real
-    engine's."""
+    """Use real routing and orders with scripted content, key, slot, and packing effects."""
 
     def __init__(self, slot0=0.0, content=None, packing=0.0, key_pull=None, **config):
         self.real = DecisionEngine(model=None, tokenizer=Tokenizer(), config=EngineConfig(**config))
@@ -86,6 +77,7 @@ class FakeEngine:
         rows: dict[str, list] = {}
         for variant in prepared.variants:
             q = prepared.questions[variant.name]
+            assert isinstance(q, Choice | Score)
             items = list(q.criteria.items()) if q.type == "choice" else list(enumerate(q.criteria))
             shown = items if variant.order is None else [items[i] for i in variant.order]
             z = [
@@ -98,6 +90,7 @@ class FakeEngine:
             rows.setdefault(variant.name, []).append((softmax(z), variant.order))
         answers = {}
         for name, q in prepared.questions.items():
+            assert isinstance(q, Choice | Score)
             p = average_orders([r[0] for r in rows[name]], [r[1] for r in rows[name]])
             if q.type == "score":
                 answers[name] = ScoreAnswer(
@@ -186,7 +179,7 @@ class TestChecks:
             assert r[kind]["first_slot"]["decisions"] == 18
 
     def test_ties_are_split_between_the_tied_slots(self):
-        """A flat readout ties all three slots; argmax would credit slot 0 every time."""
+        """Argmax would incorrectly credit slot zero for every flat distribution."""
         r = run(FakeEngine(), ["a", "b"])
         for kind in KINDS:
             assert r[kind]["first_slot"]["metric"] == pytest.approx(1 / 3)
@@ -203,7 +196,7 @@ class TestChecks:
 
     @pytest.mark.parametrize("mode", ["reversed", "cyclic"])
     def test_the_identical_check_reads_one_order_whatever_the_engine_averages(self, mode):
-        """Averaged, a pure slot bias cancels (cyclic) or hides the middle slots (reversed)."""
+        """Order averaging hides the raw position bias this probe measures."""
         single = run(FakeEngine(slot0=-2.0, order_average=False), ["a"])
         averaged = run(FakeEngine(slot0=-2.0, score_order_average=mode), ["a"])
         for kind in KINDS:
@@ -223,8 +216,6 @@ class TestChecks:
 
 
 class TestCallGroups:
-    """Calls hold at most `max_rows` rows, counted by the engine for every question."""
-
     @pytest.mark.parametrize("mode", ["off", "reversed", "cyclic"])
     def test_every_call_fits_the_limit_and_asks_everything_once(self, mode):
         engine = FakeEngine(score_order_average=mode)
@@ -244,11 +235,13 @@ class TestCallGroups:
         engine = FakeEngine(slot0=-1.0, content={"Soon": 1.0}, score_order_average="cyclic")
         assert run(engine, ["a", "b"], max_rows=5) == run(engine, ["a", "b"])
 
-    def test_identical_and_permuted_questions_never_share_a_call(self):
+    def test_identical_and_permuted_questions_never_share_a_call(self, monkeypatch):
         engine = FakeEngine()
         seen = []
         real = engine.system_one
-        engine.system_one = lambda state, qs: seen.append(set(qs)) or real(state, qs)
+        monkeypatch.setattr(
+            engine, "system_one", lambda state, qs: seen.append(set(qs)) or real(state, qs)
+        )
         ask(engine, ["a"])
         for qids in seen:
             assert len({q.split("|")[1] for q in qids}) == 1
@@ -303,8 +296,6 @@ class TestReport:
 
 
 class TestScoreOrderAverage:
-    """Off by default: a Score keeps its level order unless the config opts in."""
-
     def orders(self, question, tokenizer, **config):
         engine = DecisionEngine(model=None, tokenizer=tokenizer, config=EngineConfig(**config))
         return engine._orders(question, route(question, tokenizer))
@@ -349,7 +340,6 @@ class TestScoreOrderAverage:
         ) == [None]
 
     def test_cyclic_averaging_cancels_a_slot_bias_on_equal_content(self):
-        """Each level sits in each slot once, so a pure position bias averages out."""
         k = 4
         orders = [None] + [[(j + r) % k for j in range(k)] for r in range(1, k)]
         biased = softmax([2.0, 0.0, 0.0, 0.0])
@@ -365,8 +355,6 @@ QUESTIONS = {
 
 
 class TestQuestionRows:
-    """`question_rows` is what `prepare` renders, so callers never recount rows."""
-
     @pytest.mark.parametrize("mode", ["off", "reversed", "cyclic"])
     @pytest.mark.parametrize("order_average", [True, False])
     @pytest.mark.parametrize("noul_readout", ["rating", "binary"])
@@ -408,8 +396,6 @@ LONG = "x" * 6000
 
 
 class TestAveragedTokenLimit:
-    """Only a request Score averaging grew can be refused, and only past the batch budget."""
-
     def engine(self, tokenizer, **config) -> DecisionEngine:
         return DecisionEngine(model=None, tokenizer=tokenizer, config=EngineConfig(**config))
 
@@ -424,7 +410,7 @@ class TestAveragedTokenLimit:
         assert self.engine(rich_tokenizer).prepare(LONG, question).rows == 1
 
     def test_without_score_averaging_a_large_request_is_never_refused(self, rich_tokenizer):
-        """#4's batcher runs an oversized request alone and unsplit, so main accepts it."""
+        """The batcher runs oversized requests alone."""
         prepared = self.engine(rich_tokenizer).prepare("x" * 400, BIG)
         assert prepared.rows == 80 and prepared.rows * prepared.width > MAX_BATCH_TOKENS
         assert [v.order for v in prepared.variants] == [None, [3, 2, 1, 0]] * 20 + [None] * 40
@@ -486,8 +472,6 @@ class TestAveragedTokenLimit:
 
 
 class TestCommittedReport:
-    """`data/presentation-checks.json` is what `--compare` reads in CI."""
-
     def test_it_parses_and_carries_every_metric(self):
 
         path = Path(__file__).resolve().parents[3] / "data" / "presentation-checks.json"
@@ -502,7 +486,7 @@ class TestCommittedReport:
 
 
 class TestCompareGuardsItsSettings:
-    """`--compare` compares like with like: settings first (exit 2), then metrics (exit 1)."""
+    """Settings mismatches exit 2; metric failures exit 1."""
 
     def cli(self, monkeypatch, tmp_path, engine, *extra):
         from lev.cli import main

@@ -1,16 +1,5 @@
 # ruff: noqa: E501 -- SVG and HTML markup, one element per line
-"""Render docs/charts/lev-vs-jev.html from measured logs and recorded history.
-
-    uv run python docs/charts/build.py
-
-Inputs, all checked in:
-  logs/jev-s1bench-*.txt, logs/lev-s1bench-*.txt  both on the 13 S1Bench task files, same laptop
-  logs/pre-nimble/                  earlier six-subset definitions, the scale of history.json
-  history.json                      lev iterations and speed measurements, with FINDINGS sections
-  ../../data/s1bench-snapshot.json  the public S1Bench board: every other model
-
-lev blue and Jev orange (CVD-checked in both modes); every other model is context gray.
-"""
+"""Render docs/charts/lev-vs-jev.html from checked-in logs, history, and the S1Bench snapshot."""
 
 from __future__ import annotations
 
@@ -25,7 +14,6 @@ from levbench_log import parse
 
 HERE = Path(__file__).parent
 SNAPSHOT = HERE.parent.parent / "data" / "s1bench-snapshot.json"
-# The six subsets every model on the board completed; the leaderboard is over these.
 SUBSETS = ["aegis2", "boolq", "helpsteer2", "massive-en-US", "paws", "vitaminc-dev"]
 ALL_SUBSETS = list(EVAL_SUBSETS)
 W = 760
@@ -142,7 +130,6 @@ def grouped_bars(cats, series, vmax, fmt, ticks, label_w=118) -> str:
 def scatter(
     points, xr, yr, xfmt, yfmt, xticks, yticks, xlabel, ylabel, xlog=False, hline=None
 ) -> str:
-    """Points: dicts with x, y, name, var, and label (direct-label it)."""
     h, left, right, top, bottom = 380, 58, 24, 14, 44
     pw, ph = W - left - right, h - top - bottom
     tx = math.log10 if xlog else (lambda v: v)
@@ -169,7 +156,7 @@ def scatter(
             f'<line x1="{left}" x2="{left + pw}" y1="{y:.1f}" y2="{y:.1f}" class="ref" stroke="var({hline["var"]})"/>'
             f'<text x="{left + 6}" y="{y - 6:.1f}" class="reflab">{esc(hline["name"])}</text>'
         )
-    for p in sorted(points, key=lambda p: p["var"] != CTX):  # context underneath
+    for p in sorted(points, key=lambda p: p["var"] != CTX):
         cx, cy = px(p["x"]), py(p["y"])
         r = 6 if p["var"] != CTX else 4.5
         tip = f"{p['name']}|{xfmt(p['x'])} · {yfmt(p['y'])}"
@@ -294,8 +281,6 @@ def majority_rate(subset: str) -> float:
 
 
 def completed_targets(board: dict) -> list[dict]:
-    """Board models that completed all six subsets; a model stopped after one
-    subset reports a one-subset macro and is not comparable."""
     return [
         t
         for t in board["targets"]
@@ -316,7 +301,6 @@ def leaderboard_row(name: str, value: float, var: str, size: str, ece: float, bo
 
 
 def leaderboard_rows(done: list[dict], data: Inputs) -> list[dict]:
-    """Board models plus lev and Jev as measured here, best first."""
     rows = []
     for t in done:
         is_jev = t["target"] == "jev"
@@ -526,7 +510,6 @@ def size_section(points: list[dict], jev_board: dict) -> str:
 
 
 def per_subset_series(data: Inputs, value) -> list[dict]:
-    """lev and Jev as grouped-bar series, `value(scores)` per subset."""
     return [
         {"name": "lev", "var": LEV, "values": [value(data.lev[s]) for s in ALL_SUBSETS]},
         {"name": "Jev", "var": JEV, "values": [value(data.jev[s]) for s in ALL_SUBSETS]},

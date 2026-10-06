@@ -4,17 +4,18 @@ from __future__ import annotations
 
 from itertools import islice, product
 from string import ascii_uppercase
+from typing import Protocol
 
-# Above this the source registry trains a label set's full taxonomy on the Mode B
-# head; routing follows the tokenizer, not this cap (ADR-025/026).
+
+class TokenEncoder(Protocol):
+    def encode(self, text: str, *, add_special_tokens: bool = True) -> list[int]: ...
+
+
+# Training taxonomy cap; serving routes by tokenizer support (ADR-025/026).
 LABEL_OPTION_CAP = len(ascii_uppercase)
 
 
 def label_codes(n: int) -> list[str]:
-    """First `n` codes: A..Z, then AA..ZZ, then AAA..ZZZ.
-
-    Raises for n > 18,278 (past ZZZ).
-    """
     if n < 1:
         raise ValueError("need at least one code")
     codes = list(islice(_all_codes(), n))
@@ -26,19 +27,13 @@ def label_codes(n: int) -> list[str]:
 def single_token_codes(
     tokenizer, n: int, prefix: str = " ", skip_multi_token: bool = False
 ) -> list[str] | None:
-    """Return `n` single-token codes, or None to request Mode B.
-
-    The prefix must match the answer boundary: a space in plain prompts,
-    no space in chat prompts. By default, all first `n` codes must pass.
-    Serving may skip split codes; training retains contiguous codes (ADR-028).
-    """
+    """Find n single-token codes using the prompt boundary prefix; optionally skip split codes."""
     if not skip_multi_token:
         try:
             codes = label_codes(n)
         except ValueError:
             return None
-        verified = [c for c in codes if _is_single_token(tokenizer, prefix + c)]
-        return verified[:n] if len(verified) >= n else None
+        return codes if all(_is_single_token(tokenizer, prefix + c) for c in codes) else None
 
     picked: list[str] = []
     for code in _all_codes():
@@ -50,7 +45,6 @@ def single_token_codes(
 
 
 def _all_codes():
-    """A..Z, AA..ZZ, AAA..ZZZ, lazily -- the same order as `label_codes`."""
     yield from ascii_uppercase
     for width in (2, 3):
         for t in product(ascii_uppercase, repeat=width):
@@ -61,8 +55,7 @@ def _is_single_token(tokenizer, text: str) -> bool:
     return len(tokenizer.encode(text, add_special_tokens=False)) == 1
 
 
-# A rating scale, not yes/no, so a Noul answer carries a calibratable
-# distribution (docs/ARCHITECTURE.md §3.4).
+# Rating probabilities allow Noul calibration (ARCHITECTURE §3.4).
 NOUL_RATING_TOKENS = [str(i) for i in range(9)]
 
 

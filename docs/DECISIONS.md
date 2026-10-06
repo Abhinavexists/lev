@@ -634,7 +634,7 @@ Accuracy, RPS, Choice and Noul are identical, to the last digit, to the runs bef
 Calibration of the averaged modes. The shipped Score temperature (2.80) was fitted on single-order rows. Refit per mode on half of each bench (stratified by the gold level, seed 0), judged on the other half:
 
 ```text
-                       T refit   held-out NLL       held-out ECE       held-out RPS
+                       T refit   held-out negative_log_likelihood       held-out ECE       held-out RPS
                                  shipped  refit     shipped  refit     shipped  refit
   en (144)  off          3.96     0.935   0.909      0.130   0.108      0.152   0.147
             reversed     3.16     0.839   0.838      0.111   0.119      0.126   0.126
@@ -644,7 +644,7 @@ Calibration of the averaged modes. The shipped Score temperature (2.80) was fitt
             cyclic       2.40     0.644   0.629      0.068   0.086      0.101   0.101
 ```
 
-On bench_en a refit gains nothing for either averaged mode (held-out NLL within 0.001), and the shipped temperature is if anything a little sharp for `off`. On the Japanese reference the refit goes the other way for the averaged modes. A per-mode temperature is not proposed.
+On bench_en a refit gains nothing for either averaged mode (held-out negative_log_likelihood within 0.001), and the shipped temperature is if anything a little sharp for `off`. On the Japanese reference the refit goes the other way for the averaged modes. A per-mode temperature is not proposed.
 
 The batch budget for averaged requests (`max_batch_tokens`, 16384). The batcher does not split a request: on main, 20 Choice and 40 Score questions with averaging off ran as one forward of 80 rows, up to 35,680 padded tokens. So `prepare` refuses only a request that Score averaging grew, when its padded tokens (rows x widest row) pass the batcher's own budget; the server passes its `max_batch_tokens` to the engine, so the two always agree, and a request without averaged Score rows is never refused (the 80-row request above answers exactly as on main). The value is the batcher's; this run only checks it on the RTX 5090, with the largest averaged request the budget admits at each row length, averaged Score questions topped up with one-row Noul (one question more is refused in every case):
 

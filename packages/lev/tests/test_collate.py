@@ -1,4 +1,4 @@
-"""torch is in the `train` extra, so these skip on a bare `uv sync`."""
+"""Tensor collation tests; skip when Torch is unavailable."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ class TestCollator:
         return DecisionCollator(batching_tokenizer, max_seq_len=512)
 
     def test_last_position_is_the_final_real_token_not_seq_minus_one(self, collator):
-        """Rows are right-padded, so `seq - 1` reads a pad token's logits: noise, and no error."""
+        """Right padding makes seq - 1 point to a pad token."""
         batch = collator(
             [an_example(a_choice(), state="short"), an_example(a_choice(), state="x" * 200)]
         )
@@ -77,7 +77,6 @@ class TestCollator:
         assert batch.candidate_input_ids.shape[0] == 40
 
     def test_the_candidate_pool_is_shared_across_rows(self, collator):
-        """A 77-option question in a batch of 8 must not cost 8x77 encodes."""
         rows = [an_example(a_choice(40), target=i) for i in range(4)]
         batch = collator(rows)
         assert batch.candidate_input_ids.shape[0] == 40, "pool grew with batch size"
@@ -102,8 +101,6 @@ class TestModeBatcher:
         assert sum(len(g) for g in groups) == 12
 
     def test_routes_are_resolved_once_per_question_not_per_row(self, batching_tokenizer):
-        """Re-tokenising an option set for each of 200k rows is the slowest
-        thing in the pipeline, and it produces the same answer every time."""
         batcher = ModeBatcher(batching_tokenizer, batch_size=2)
         rows = [an_example(a_choice(4), source="same") for _ in range(50)]
         resolved = {id(batcher.route_for(row)) for row in rows}
@@ -120,8 +117,7 @@ class TestModeBatcher:
 
 
 class TestLengthBucketing:
-    """A batch pads to its longest row; on the real mixture random batching wasted 4.43x
-    on padding and bucketing 1.43x (ADR-017)."""
+    """Test padding savings without global length ordering."""
 
     def rows(self, n=512):
         rng = random.Random(0)
@@ -143,8 +139,7 @@ class TestLengthBucketing:
         before = self.waste(list(unbucketed(rows)))
         after = self.waste(list(bucketed(rows)))
         assert before > 2.0, f"fixture is not bimodal enough to show the effect ({before:.2f})"
-        # Relative, not absolute: the absolute floor depends on where the window
-        # boundary falls, and the multiple of compute saved is what matters.
+        # Compare relative padding because window boundaries affect the absolute count.
         assert after < before / 2, f"bucketing only got {before:.2f}x -> {after:.2f}x"
         assert after < 1.5, f"bucketing left {after:.2f}x waste"
 
@@ -155,14 +150,12 @@ class TestLengthBucketing:
         assert {id(e) for e in batched} == {id(e) for e in rows}
 
     def test_batches_stay_mode_homogeneous(self, batching_tokenizer):
-        """Bucketing must not undo the mode grouping the collator relies on."""
         rows = self.rows(100) + [an_example(a_choice(40), target=0) for _ in range(60)]
         batcher = ModeBatcher(batching_tokenizer, 16, bucket_window=4)
         for group in batcher(rows):
             assert len({batcher.route_for(e).mode for e in group}) == 1
 
     def test_batch_order_differs_between_epochs(self, batching_tokenizer):
-        """Length must not track step number, or the schedule correlates with it."""
         rows = self.rows(256)
         batcher = ModeBatcher(batching_tokenizer, 32, bucket_window=4)
         first = [len(str(b[0].state)) for b in batcher(rows, epoch=0)]

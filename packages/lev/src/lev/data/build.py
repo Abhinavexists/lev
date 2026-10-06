@@ -1,7 +1,4 @@
-"""Write train, calibration and test JSONL files and a manifest for offline training.
-
-Source rows are split before sampling or augmentation, so no row leaks across splits (ADR-014).
-"""
+"""Write offline training splits and a manifest; split before augmentation (ADR-014)."""
 
 from __future__ import annotations
 
@@ -77,10 +74,7 @@ def read_jsonl(path: Path) -> list[Example]:
 
 
 def verify_round_trip(path: Path, sample: int = 1000) -> int:
-    """Check sampled rows of a written split read back exactly; return the number checked.
-
-    Order-sensitive, since `target` indexes option order (ADR-024). Raises `ValueError` on drift.
-    """
+    """Check sampled rows round-trip exactly, including option order; return the count."""
     rows = read_jsonl(path)
     step = max(1, len(rows) // sample)
     with path.open(encoding="utf-8") as handle:
@@ -89,7 +83,7 @@ def verify_round_trip(path: Path, sample: int = 1000) -> int:
                 continue
             written = json.loads(line)
             reread = to_json(rows[i])
-            # As text: dict equality ignores key order, which a merged question loses.
+            # Compare serialized text because dict equality ignores option order.
             if json.dumps(reread, ensure_ascii=False) != json.dumps(written, ensure_ascii=False):
                 raise ValueError(
                     f"{path} row {i} did not survive the round trip: written "
@@ -156,8 +150,7 @@ def build_dataset(
             # A different stream per split, so layouts do not repeat in lockstep.
             seed=seed + split_index,
             adjacent=adjacent,
-            # Test keeps canonical questions (one per eval file); calibration varies
-            # option sets, not wording, so each option-count band has rows (ADR-026).
+            # Keep test questions canonical; vary calibration option sets to cover count bands.
             augment=augment if split is not Split.TEST else {},
             **held_out_overrides,
         )
@@ -171,7 +164,6 @@ def build_dataset(
     unique_train = sum(len(rows) for rows in by_source[Split.TRAIN].values())
     manifest = {
         "sources": {name: REGISTRY[name].hf_id for name in weights},
-        # Sampling with replacement can expose each unique row more than once per epoch.
         "unique_train_rows": unique_train,
         "oversample_ratio": round(n_examples / max(1, unique_train), 2),
         "weights": weights,

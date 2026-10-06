@@ -1,8 +1,6 @@
-"""Build data, train, calibrate, evaluate and serve lev on Modal. See docs/SETUP.md.
+"""Build, train, calibrate, evaluate, and serve lev on Modal (SETUP.md).
 
-Use `modal deploy` for a stable URL: other ephemeral runs can take over `modal serve`'s
-`-dev` label.
-"""
+Use modal deploy for a stable URL; modal serve uses a shared development label."""
 
 from __future__ import annotations
 
@@ -25,14 +23,10 @@ except ModuleNotFoundError:
 
 APP_NAME = "lev"
 
-# From this file, not the cwd: `modal run` may start anywhere, and a relative path mounts nothing.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# Pinned for reproducibility. `transformers` must be 5.x: the prefix-cache fork
-# calls `reorder_cache` on a hybrid cache, which 4.x cannot do.
+# Pin dependencies; hybrid-cache reordering requires Transformers 5.x.
 image = (
-    # Devel base for the `nvcc` that `causal-conv1d` builds with (served compute 81 -> 69 ms,
-    # ADR-023). The CUDA major must match torch's build (2.14.0+cu130).
     modal.Image.from_registry("nvidia/cuda:13.0.3-devel-ubuntu24.04", add_python="3.12")
     .pip_install(
         "torch==2.14.0",
@@ -45,14 +39,10 @@ image = (
         "fastapi==0.141.1",
         "huggingface-hub==1.32.0",
     )
-    # Speed, not correctness: if the conv build breaks on a pin change, delete it.
     .pip_install("flash-linear-attention", "ninja", "packaging")
-    # The devel image has nvcc but no host C++ compiler, which torch's extension
-    # builder requires ("clang++ 0.0.0"). Arch 9.0 only: this image runs on H100s.
     .apt_install("build-essential")
     .env({"CC": "gcc", "CXX": "g++", "TORCH_CUDA_ARCH_LIST": "9.0", "MAX_JOBS": "8"})
-    # Length-bucketed batches vary widely in shape; without this the caching
-    # allocator fragments (the OOM at step 6,075 had 29 GiB reserved-but-free).
+    # Expandable segments reduce fragmentation from varying batch shapes.
     .env({"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
     .pip_install("causal-conv1d", extra_options="--no-build-isolation")
     .add_local_dir(
@@ -78,17 +68,11 @@ VOLUMES: dict[str | PurePosixPath, modal.Volume | modal.CloudBucketMount] = {
     DATA_DIR: datasets_vol,
 }
 
-# The preset `serve` exposes when `LEV_SERVE_PRESET` is unset. Not a function
-# argument: Modal requires `@modal.asgi_app` functions to take none.
+# Use an environment preset because Modal ASGI functions accept no arguments.
 SERVE_PRESET = "4b"
 
 
 def _hf_secrets() -> list:
-    """The Secret named by `LEV_HF_SECRET`, else the local `HF_TOKEN`, else none.
-
-    Never an unconditional `Secret.from_name`: it fails at function creation when the
-    Secret is missing, and the backbones are public.
-    """
     named = os.environ.get("LEV_HF_SECRET")
     if named:
         return [modal.Secret.from_name(named, required_keys=[])]
@@ -96,13 +80,6 @@ def _hf_secrets() -> list:
     return [modal.Secret.from_dict({"HF_TOKEN": token})] if token else []
 
 
-# Deploy knobs (docs/SETUP.md), read where `modal deploy` runs: decorator arguments are
-# fixed at import, so these cannot travel as Secrets.
-#   LEV_SERVE_CONCURRENCY  per-container inputs, also the server's max_pending (32; ADR-030)
-#   LEV_SERVE_WARM         containers kept running (0); one removes the 20-55 s cold start
-#   LEV_SERVE_REGION       Modal region near the client (unset); the measured 280 ms RTT is distance
-#   LEV_SERVE_SCALEDOWN    idle seconds before a container stops (300)
-#   LEV_SERVE_MAX          container ceiling (unset: Modal's limit); pin it for benchmark sweeps
 SERVE_CONCURRENCY = int(os.environ.get("LEV_SERVE_CONCURRENCY", "32"))
 SERVE_WARM = int(os.environ.get("LEV_SERVE_WARM", "0"))
 SERVE_REGION = os.environ.get("LEV_SERVE_REGION")
@@ -119,7 +96,6 @@ def _prompt_style(value: str | None) -> Literal["plain", "chat"] | None:
 
 
 def _serve_overrides() -> list:
-    """The set `LEV_SERVE_*` overrides as a Secret: local env does not reach the container."""
     overrides: dict[str, str | None] = {
         key: value
         for key in (
@@ -141,10 +117,6 @@ SECRETS = _hf_secrets() + _serve_overrides()
 
 @app.function(volumes={MODELS_DIR: models}, secrets=SECRETS, timeout=60 * 60)
 def download(model_id: str = "Qwen/Qwen3.5-4B-Base") -> str:
-    """Pre-fetch a checkpoint into the models Volume. Idempotent.
-
-    `cache_dir`, not `local_dir`: `from_pretrained(..., cache_dir=)` expects the HF cache layout.
-    """
     from huggingface_hub import snapshot_download
 
     path = snapshot_download(
@@ -161,7 +133,7 @@ def download(model_id: str = "Qwen/Qwen3.5-4B-Base") -> str:
     gpu="H100",
     volumes=VOLUMES,
     secrets=SECRETS,
-    timeout=24 * 60 * 60,  # the released run took 7.8 h; a truncated run costs everything
+    timeout=24 * 60 * 60,  # Allow the full training run to finish.
 )
 def train(
     preset: str = "4b",
@@ -170,11 +142,6 @@ def train(
     max_steps: int | None = None,
     fresh: bool = False,
 ) -> dict:
-    """Fine-tune on one H100. See `lev.train.config.PRESETS`.
-
-    Resumes from the newest checkpoint in the preset's directory unless
-    `--fresh`; `--resume <path>` names one explicitly.
-    """
     from lev.train.config import PRESETS
     from lev.train.loop import run_training
 
@@ -204,10 +171,6 @@ def train(
 
 @app.function(volumes={DATA_DIR: datasets_vol}, secrets=SECRETS, timeout=4 * 60 * 60)
 def build_data(limit_per_source: int = 20_000, n_examples: int = 200_000) -> dict:
-    """Download every source and write the three splits to the data volume. CPU only.
-
-    Run it once, before `train`.
-    """
     from lev.data.build import build_dataset
 
     # The HF download cache lives on the volume, so rebuilds reuse the corpora.
@@ -223,10 +186,6 @@ def build_data(limit_per_source: int = 20_000, n_examples: int = 200_000) -> dic
 
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=2 * 60 * 60)
 def smoke(steps: int = 40) -> dict:
-    """Exercise every part of `train` but its duration, on the 0.8B preset. Run this first.
-
-    Builds a small mixture if the data volume is empty.
-    """
     if not (Path(DATA_DIR) / "train.jsonl").is_file():
         # Builds on the GPU, acceptable only for this small mixture (a couple of minutes).
         print("data volume is empty; building a small mixture first")
@@ -247,21 +206,16 @@ def smoke(steps: int = 40) -> dict:
 
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=60 * 60)
 def calibrate(preset: str = "4b", split: str = "calibration", method: str = "transfer") -> dict:
-    """Fit per-bucket temperatures on a split that is neither train nor test.
-
-    Separate from `train` so re-fitting needs no fine-tune.
-    """
     from lev.train.calibration_run import fit_profile
     from lev.train.config import PRESETS
 
     config = replace(PRESETS[preset], output_dir=f"{CKPT_DIR}/{preset}")
     return fit_profile(
-        # `fit_profile` resolves the newest checkpoint inside this directory.
         checkpoint_dir=config.output_dir,
         data_dir=DATA_DIR,
         split=split,
         on_complete=lambda: checkpoints.commit(),
-        # Otherwise the head is built at the 4B hidden size whatever the preset.
+        # Use the preset's hidden size when building the head.
         config=config,
         method=method,
     )
@@ -273,9 +227,6 @@ def evaluate(
     split: str = "test",
     limit_per_source: int | None = None,
 ) -> dict:
-    """Score the newest checkpoint on a held-out split, with and without the
-    fitted temperature.
-    """
     from lev.calibrate import CalibrationProfile
     from lev.train.checkpoints import CALIBRATION
     from lev.train.config import PRESETS
@@ -316,14 +267,6 @@ def evaluate(
 @modal.concurrent(max_inputs=SERVE_CONCURRENCY)
 @modal.asgi_app()
 def serve():
-    """Serve `/v1/systemone`, wire-compatible with the TypeSafe API.
-
-        levbench eval --backend lev --base-url <the URL Modal prints> \
-                      --tasks data/eval
-
-    With no trained checkpoint for the preset it serves the base backbone
-    uncalibrated, with a warning, rather than refusing to start.
-    """
     from lev.server import create_app
     from lev.train.checkpoints import ADAPTER_WEIGHTS, latest_checkpoint
     from lev.train.config import PRESETS
@@ -335,13 +278,12 @@ def serve():
 
     # Off unless asked: measured slower than eager on this model (ADR-023).
     compile = os.environ.get("LEV_SERVE_COMPILE", "0") in ("1", "true", "yes")
-    # Default None: Mode A up to the tokenizer limit (ADR-025). Set to force a
-    # lower cap, e.g. 26 to reproduce the ADR-020 policy.
+    # Default to the tokenizer limit; allow an explicit lower label cap.
     cap_env = os.environ.get("LEV_SERVE_MAX_LABEL_OPTIONS")
     max_label_options = int(cap_env) if cap_env else None
     prompt_style = _prompt_style(os.environ.get("LEV_SERVE_PROMPT")) or config.prompt_style
     skip_codes = os.environ.get("LEV_SERVE_SKIP_CODES", "1") not in ("0", "false", "no")
-    # A frozen model is a different backbone from the adapter's, so no checkpoint.
+    # A frozen-model override must bypass the adapter checkpoint.
     frozen = os.environ.get("LEV_SERVE_MODEL")
     if frozen:
         print(f"serving {frozen} frozen: no adapter, binary Noul, raw softmax")
@@ -379,11 +321,6 @@ RELEASES_DIR = f"{CKPT_DIR}/releases"
 
 @app.function(volumes={CKPT_DIR: checkpoints}, secrets=SECRETS, timeout=30 * 60)
 def export_checkpoint(preset: str = "4b", name: str | None = None) -> dict:
-    """Package the newest checkpoint of a preset into `/checkpoints/releases/<name>`.
-
-    No GPU: it copies files (adapter, head, tokenizer, calibration, manifest)
-    for `make weights` to pull and `lev release publish` to upload.
-    """
     from lev.release import build_release
     from lev.train.config import PRESETS
 
@@ -406,11 +343,6 @@ def export_checkpoint(preset: str = "4b", name: str | None = None) -> dict:
 
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=30 * 60)
 def check_release(name: str = "4b") -> dict:
-    """Load a packaged release the way a user will -- `lev.load` on the flat
-    directory, then the HTTP server over it -- and answer one request of every
-    question type through each. Raises if the release loads without its
-    calibration or head, or if the two paths disagree.
-    """
     import json
 
     from fastapi.testclient import TestClient
@@ -468,14 +400,7 @@ def diagnose_ordinal(
     scales: str = "0,0.25,0.5,0.75,1.0",
     subsets: str = "summeval-consistency,summeval-relevance,helpsteer2",
 ) -> dict:
-    """Score the rating subsets at several adapter scales, keeping the adapter unmerged.
-
-    summeval-consistency is 0.271 against the frozen backbone's 0.826, so the
-    regression may be recoverable by scaling the adapter rather than retraining
-    (WiSE-FT, arXiv 2109.01903, which for a LoRA is just the adapter scale).
-    Scale 0 must reproduce the frozen backbone; that is the run's own control.
-    Also reports the argmax histogram, which levbench aggregates away.
-    """
+    """Sweep adapter scales on rating tasks; use scale zero as the frozen-backbone control."""
     import collections
     import json
 
@@ -520,14 +445,11 @@ def diagnose_ordinal(
 
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=30 * 60)
 def diagnose_candidates(model_id: str = "Qwen/Qwen3.5-4B-Base") -> dict:
-    """Compare candidate representations alone, batched, reversed and left-padded.
-
-    Tests whether Mode B's padded batch leaks across rows. Result: bit-identical (FINDINGS §12).
-    """
+    """Compare candidate embeddings alone, batched, reversed, and left-padded."""
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    tok = AutoTokenizer.from_pretrained(model_id, cache_dir=MODELS_DIR)
+    tok: Any = AutoTokenizer.from_pretrained(model_id, cache_dir=MODELS_DIR)
     # `from_pretrained` is typed as returning the class, not an instance.
     loaded: Any = AutoModelForCausalLM.from_pretrained(
         model_id, dtype=torch.bfloat16, cache_dir=MODELS_DIR
@@ -618,10 +540,6 @@ def diagnose_candidates(model_id: str = "Qwen/Qwen3.5-4B-Base") -> dict:
 
 
 def _probabilities(answer: Answer) -> dict[Any, float]:
-    """An answer's probability map; a Noul without one stands in its single probability.
-
-    Choice keys are strings and Score keys ints, so compare a map only with the same answer's.
-    """
     from lev.types import NoulAnswer  # noqa: PLC0415
 
     if isinstance(answer, NoulAnswer):
@@ -631,10 +549,7 @@ def _probabilities(answer: Answer) -> dict[Any, float]:
 
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=30 * 60)
 def profile_engine(preset: str = "4b", rounds: int = 20) -> dict:
-    """Time each engine stage of a `/v1/systemone` call in the container, CUDA-synchronised.
-
-    Both prefix modes and the compiled path; medians over `rounds` after warmup. Excludes network.
-    """
+    """Time CUDA-synchronized engine stages after warmup, excluding network time."""
     import statistics
     import time
 
@@ -724,8 +639,7 @@ def profile_engine(preset: str = "4b", rounds: int = 20) -> dict:
             worst = max(worst, *(abs(pa[k] - pb[k]) for k in pa))
     report["fork_vs_single_max_prob_diff"] = round(worst, 5)
     print(f"fork vs single: max |dp| over all answers = {worst:.5f}", flush=True)
-    # Fork wins when the forward is FLOP-bound, single when launch-bound; then the
-    # compiled single path, with its warmup reported separately.
+    # Compare forked, single, and compiled forwards; report warmup separately.
     variants: list[tuple[Literal["fork", "single"], bool]] = [
         ("fork", False),
         ("single", False),
@@ -795,13 +709,10 @@ def profile_engine(preset: str = "4b", rounds: int = 20) -> dict:
 
 @app.function(secrets=SECRETS, timeout=10 * 60)
 def env_info() -> dict:
-    """What the image actually runs: torch, its CUDA build, and which kernels import."""
     import platform
 
     import torch
 
-    # Plain strings: `torch.__version__` is a TorchVersion, which the local
-    # `modal run` process cannot unpickle without torch installed.
     info = {
         "python": platform.python_version(),
         "torch": str(torch.__version__),

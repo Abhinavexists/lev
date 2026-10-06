@@ -13,8 +13,7 @@ class CandidatePathReadout(nn.Module):
         super().__init__()
         self.question_proj = nn.Linear(hidden_size, proj_dim, bias=False)
         self.candidate_proj = nn.Linear(hidden_size, proj_dim, bias=False)
-        # Candidates attend to each other: "is this the best of these", not "is
-        # this good in isolation".
+        # Compare candidates jointly through set attention.
         self.set_attention = nn.MultiheadAttention(proj_dim, n_heads, batch_first=True, dropout=0.0)
         self.norm = nn.LayerNorm(proj_dim)
         self.score = nn.Linear(proj_dim, 1, bias=False)
@@ -25,16 +24,9 @@ class CandidatePathReadout(nn.Module):
         candidate_reprs: torch.Tensor,
         candidate_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """
-        Args:
-            question_repr: `(batch, hidden)`.
-            candidate_reprs: `(batch, n_candidates, hidden)`.
-            candidate_mask: `(batch, n_candidates)`, True where padded.
+        """Score candidates (B, K); input shapes are (B, H) and (B, K, H).
 
-        Returns:
-            `(batch, n_candidates)` raw scores. Masked slots are -inf so they
-            vanish under softmax regardless of the temperature applied later.
-        """
+        candidate_mask is (B, K), True for padding; masked scores are -inf."""
         q = self.question_proj(question_repr).unsqueeze(1)
         c = self.candidate_proj(candidate_reprs)
 

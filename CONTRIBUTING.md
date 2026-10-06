@@ -6,7 +6,7 @@
 make check     # ruff + the full test suite
 ```
 
-Both must be clean. Tests run without a GPU, network or API keys. A basic `uv sync` skips tests that need optional model dependencies; use `uv sync --extra train` to include the CPU tensor, cache and training-loop tests.
+Both must be clean. Tests run without a GPU, network or API keys. use `uv sync --extra train` to include the CPU tensor, cache and training-loop tests.
 
 ## Finding the code
 

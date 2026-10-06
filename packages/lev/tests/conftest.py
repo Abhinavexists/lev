@@ -1,5 +1,4 @@
-"""torch is imported only inside `BatchingTokenizer.__call__`, so the torch-free half of
-the suite still collects on a bare `uv sync`."""
+"""Shared fixtures; import Torch only when tensor batching is needed."""
 
 from __future__ import annotations
 
@@ -11,8 +10,7 @@ from lev.types import Choice
 
 
 class FakeTokenizer:
-    """Strings in `single_tokens` encode to one id -- exactly what `labels.single_token_codes`
-    checks, so a fake tests the routing decision faithfully."""
+    """Control which strings encode as a single token."""
 
     def __init__(self, single_tokens: set[str]):
         self.single_tokens = single_tokens
@@ -20,8 +18,7 @@ class FakeTokenizer:
     def encode(self, text: str, add_special_tokens: bool = True) -> list[int]:
         if text in self.single_tokens:
             return [1]
-        # Even a single character must encode to >1 token, or it looks single-token by
-        # accident and the router test proves nothing.
+        # Encode unlisted characters as multiple tokens to avoid accidental routing matches.
         return [1] * (len(text) + 1)
 
 
@@ -50,8 +47,7 @@ def poor_tokenizer() -> FakeTokenizer:
 
 
 class BatchingTokenizer(FakeTokenizer):
-    """One id per character so prompts get different lengths; equal lengths would hide the
-    bug `last_positions` exists to prevent."""
+    """Encode one id per character to expose padding and last-token errors."""
 
     pad_token_id = 0
     padding_side = "right"

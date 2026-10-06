@@ -1,7 +1,4 @@
-"""A fake Jev endpoint: real request parsing, wire-shaped responses, no API key.
-
-It tests plumbing only: answers are deterministic pseudo-random, so its accuracy is meaningless.
-"""
+"""Fake Jev transport with deterministic pseudo-random answers; tests plumbing, not accuracy."""
 
 from __future__ import annotations
 
@@ -16,33 +13,34 @@ def _rand(*parts: str) -> float:
     return int.from_bytes(digest[:8], "big") / 2**64
 
 
+def _probabilities(key: str, options: list[str] | range, state_sig: str) -> dict:
+    weights = [_rand(state_sig, key, str(option)) + 1e-6 for option in options]
+    total = sum(weights)
+    return {o: round(w / total, 4) for o, w in zip(options, weights, strict=True)}
+
+
 def _answer(key: str, question: dict, state_sig: str) -> dict:
     kind = question["type"]
     if kind == "noul":
         return {"type": "noul", "noul": round(_rand(state_sig, key, "noul"), 4)}
 
     if kind == "choice":
-        options = list(question["criteria"])
-        weights = [_rand(state_sig, key, o) + 1e-6 for o in options]
-        total = sum(weights)
-        probs = {o: round(w / total, 4) for o, w in zip(options, weights, strict=True)}
+        probs = _probabilities(key, list(question["criteria"]), state_sig)
         return {
             "type": "choice",
-            "choice": max(probs, key=probs.get),
+            "choice": max(probs, key=probs.__getitem__),
             "probabilities": probs,
-            "confidence": round(max(probs.values()), 4),
+            "confidence": max(probs.values()),
         }
 
     if kind == "score":
         levels = question["criteria"]
-        weights = [_rand(state_sig, key, str(i)) + 1e-6 for i in range(len(levels))]
-        total = sum(weights)
-        probs = {i: round(w / total, 4) for i, w in enumerate(weights)}
+        probs = _probabilities(key, range(len(levels)), state_sig)
         return {
             "type": "score",
             "score": round(sum(i * p for i, p in probs.items()), 4),
             "probabilities": probs,
-            "confidence": round(max(probs.values()), 4),
+            "confidence": max(probs.values()),
             "legend": {i: lv for i, lv in enumerate(levels)},
         }
 
@@ -58,8 +56,7 @@ def handler(request: httpx2.Request) -> httpx2.Response:
     questions = body["questions"]
     answers = {k: _answer(k, q, state_sig) for k, q in questions.items()}
 
-    # Input scales with the state (billed once per request), output with the
-    # question count: the shape the batching sweep must find from responses.
+    # Bill state tokens once per request and output tokens per question.
     input_tokens = max(1, len(state_text) // 4)
     output_tokens = 4 * len(questions)
 

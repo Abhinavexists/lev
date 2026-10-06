@@ -1,7 +1,4 @@
-"""Package adapters, head, tokenizer and calibration into a flat Hub release.
-
-The manifest pins the base model and prompt format required to load it.
-"""
+"""Package adapter, head, tokenizer, and calibration with a base-model and prompt manifest."""
 
 from __future__ import annotations
 
@@ -26,20 +23,14 @@ def build_release(
     metrics: dict | None = None,
     prompt_style: str = "plain",
 ) -> dict:
-    """Copy a `step-N` checkpoint into a self-describing release directory.
-
-    `calibration` defaults to the `calibration.json` beside the checkpoint's
-    parent, where `calibrate` writes it. An uncalibrated release is recorded as
-    such and serves raw softmax.
-    """
+    """Package a checkpoint; default to parent calibration, otherwise serve raw softmax."""
     step_dir = resolve_checkpoint(checkpoint)
     target = Path(out)
     target.mkdir(parents=True, exist_ok=True)
 
     copied: list[str] = []
     for file in sorted(step_dir.iterdir()):
-        # Training state is for resuming, not serving; PEFT's README is replaced
-        # by the model card.
+        # Exclude resume state and replace PEFT's README with the release card.
         if file.is_file() and file.name not in (TRAINING_STATE, MODEL_CARD):
             shutil.copy2(file, target / file.name)
             copied.append(file.name)
@@ -59,8 +50,7 @@ def build_release(
         "lora_rank": adapter_config.get("r"),
         "mode_b_head": MODE_B_HEAD in copied,
         "calibrated": calibrated,
-        # `lev.load` reads `prompt_style` (and `base_model`); `noul_readout`
-        # records the readout the temperatures were fitted on.
+        # Record the model, prompt format, and readout required by these weights and temperatures.
         "noul_readout": "rating",
         "prompt_style": prompt_style,
         "files": copied,
@@ -73,7 +63,7 @@ def build_release(
 
 
 def model_card(manifest: dict) -> str:
-    """A Hub model card: front matter the Hub indexes, then what a user needs."""
+    """Build Hub metadata and usage instructions for a release."""
     metrics = manifest.get("metrics") or {}
     metric_lines = "\n".join(f"| {k} | {v} |" for k, v in metrics.items()) or "| — | not recorded |"
     calibration = (
@@ -137,11 +127,7 @@ Numbers on S1Bench, the harness and the decision log are in the repository.
 
 
 def publish(release_dir: str | Path, repo_id: str, *, private: bool = False) -> str:
-    """Upload a release directory to the Hub. Returns the repo URL.
-
-    Needs `HF_TOKEN` or `hf auth login`. Creates the repo if it does not exist;
-    re-running uploads only the changed files.
-    """
+    """Upload a release using HF authentication; create the repo if needed and return its URL."""
     from huggingface_hub import HfApi
 
     folder = Path(release_dir)

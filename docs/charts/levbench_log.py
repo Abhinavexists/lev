@@ -20,8 +20,6 @@ _SCORES = re.compile(r"accuracy ([0-9.]+)\s+log-loss ([0-9.]+)\s+brier ([0-9.]+)
 
 
 def parse(text: str) -> dict:
-    """`{"subsets": {subset: {n, accuracy, log_loss, brier, ece, p50_s, ...}}}`, plus
-    `served_by` when the log names the serving model."""
     out: dict = {"subsets": {}}
     marks = list(_HEADER.finditer(text))
     for i, mark in enumerate(marks):
@@ -29,7 +27,7 @@ def parse(text: str) -> dict:
         scores = _SCORES.search(body)
         if not scores:
             continue
-        row = {"n": int(mark.group(2))}
+        row: dict[str, float | int] = {"n": int(mark.group(2))}
         row.update(
             zip(("accuracy", "log_loss", "brier", "ece"), map(float, scores.groups()), strict=True)
         )

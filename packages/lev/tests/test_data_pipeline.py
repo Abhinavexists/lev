@@ -1,5 +1,4 @@
-"""Offline: `load_source` takes an injected `load_dataset`, so nothing here checks that the
-real dataset ids resolve; a dead id surfaces on the next `lev data build`."""
+"""Test data assembly with fake loaders; upstream dataset availability is not checked."""
 
 from __future__ import annotations
 
@@ -90,8 +89,7 @@ class TestRegistry:
     def test_mode_b_gets_a_material_share_of_the_mixture(self):
         weights = default_weights()
         share = sum(weights[n] for n in MODE_B_SOURCES)
-        # Size-proportional weighting would starve Mode B; this pins the
-        # deliberate over-weighting.
+        # Reserve enough weight to train Mode B.
         assert share >= 0.2, f"Mode B is only {share:.1%} of the mixture"
 
     def test_weights_are_a_distribution_over_known_sources(self):
@@ -111,18 +109,19 @@ class TestQuestions:
 
     def test_score_keeps_level_order(self):
         spec = REGISTRY["sst5"]
+        assert spec.label_names is not None
         question = build_question(spec, list(spec.label_names))
         assert question.criteria == list(spec.label_names)
 
     def test_choice_options_are_humanised(self):
         question = build_question(REGISTRY["banking77"], ["card_arrival", "age_limit"])
+        assert isinstance(question, Choice)
         assert set(question.criteria) == {"card arrival", "age limit"}
 
 
 class TestSampling:
     def test_limit_samples_rather_than_truncates(self):
-        """A head slice of a label-sorted corpus yields one class (`imdb[:400]` is
-        400 negative reviews)."""
+        """A head slice of a label-sorted corpus may contain only one class."""
         spec = REGISTRY["dbpedia_14"]
         loader = label_sorted_loader(14, 100, text_field="content")
         rows = list(load_source(spec, limit=140, load_dataset=loader))
@@ -135,8 +134,7 @@ class TestSampling:
         assert a == b
 
     def test_noul_labels_land_on_the_ends_of_the_rating_scale(self):
-        """The raw class would supervise "yes" as rating 1, which
-        `noul_probability` reads back as P(yes) = 0.125."""
+        """A binary label of 1 must become rating 8, not P(yes) = 0.125."""
         loader = label_sorted_loader(2, 20)
         rows = list(load_source(REGISTRY["imdb"], load_dataset=loader))
         assert {e.target for e in rows} == {0, len(NOUL_RATING_TOKENS) - 1}
@@ -183,7 +181,7 @@ class TestSplits:
         assert not states[Split.CALIBRATION] & states[Split.TEST]
 
     def test_assignment_is_stable_across_processes(self):
-        """`hash()` is salted per process, so a split built on it reshuffles on every rebuild."""
+        """Python hash() is salted per process."""
         import os
         import subprocess
         import sys
@@ -215,7 +213,7 @@ class TestSplits:
             check_coverage(splits)
 
     def test_option_never_observed_at_all_raises(self):
-        """A sample holding 2 of 4 options passes the in-train check but not this."""
+        """Train coverage alone misses offered labels absent from every split."""
         splits = {
             Split.TRAIN: [traceable_example("s", 0, 1), traceable_example("s", 1, 2)],
             Split.CALIBRATION: [],
@@ -225,7 +223,7 @@ class TestSplits:
             check_coverage(splits)
 
     def test_noul_is_exempt_from_the_offered_option_check(self):
-        """Nine rating levels, two classes in the data. Not an error."""
+        """Binary data observes only the endpoints of the nine-level scale."""
         rows = [
             Example("t", "n", Noul(instructions="q"), t, Layout.STATE_FIRST, "imdb")
             for t in (0, 8, 0, 8)
@@ -247,8 +245,6 @@ class TestAbstain:
         return list(build_mixture(spec, loaders))
 
     def test_abstain_examples_carry_a_foreign_state(self, mixture):
-        """An abstain row must be unanswerable, so its state is replaced, not just
-        its label."""
         abstained = [e for e in mixture if e.abstain]
         assert abstained
         assert all(not str(e.state).startswith(e.source) for e in abstained)
@@ -274,8 +270,7 @@ class TestLargeTaxonomyThreshold:
 
 
 class TestAbstainDonors:
-    """Adjacent sources cannot supply an abstain state: an imdb question is still
-    answerable from a rotten_tomatoes review."""
+    """Adjacent sources may still answer the question and are unsuitable abstain donors."""
 
     def test_adjacency_is_symmetric_and_excludes_self(self):
         mapping = adjacency_map()
@@ -316,7 +311,6 @@ class TestAbstainDonors:
             )
 
     def test_a_source_adjacent_to_everything_still_yields_an_example(self):
-        """Degrading to "any other source" beats emitting nothing."""
         sources = ["a", "b"]
         loaders = {
             s: (lambda s=s: [traceable_example(s, 0, i) for i in range(10)]) for s in sources
@@ -333,7 +327,6 @@ class TestAbstainDonors:
 
 class TestModeBPrompt:
     def test_mode_b_does_not_emit_an_empty_option_header(self):
-        """`Options:` with nothing under it costs a header and informs nothing."""
         choice = build_prompt(
             "s", "q", Choice(instructions="pick", criteria={"a": None, "b": None}), None
         ).full
@@ -354,13 +347,13 @@ class TestModeBPrompt:
 
 
 class TestReaders:
-    """Per-row readers are pure functions; drive them with the real column shapes."""
-
     def test_race_maps_the_answer_letter_to_an_index(self):
         from lev.data.sources import _read_race
 
         row = {"article": "A.", "question": "Q?", "options": ["w", "x", "y", "z"], "answer": "C"}
-        state, options, target = _read_race(row, random.Random(0))
+        result = _read_race(row, random.Random(0))
+        assert result is not None
+        state, options, target = result
         assert options[target] == "y"
         assert state == {"passage": "A.", "question": "Q?"}
 
@@ -372,7 +365,9 @@ class TestReaders:
             "choices": {"label": ["1", "2", "3"], "text": ["a", "b", "c"]},
             "answerKey": "3",
         }
-        _, options, target = _read_keyed_choices("question")(row, random.Random(0))
+        result = _read_keyed_choices("question")(row, random.Random(0))
+        assert result is not None
+        _, options, target = result
         assert options[target] == "c"
 
     def test_keyed_choices_attach_context_when_present(self):
@@ -384,7 +379,9 @@ class TestReaders:
             "choices": {"label": ["A", "B"], "text": ["a", "b"]},
             "answerKey": "B",
         }
-        state, _, _ = _read_keyed_choices("question_stem", "fact1")(row, random.Random(0))
+        result = _read_keyed_choices("question_stem", "fact1")(row, random.Random(0))
+        assert result is not None
+        state, _, _ = result
         assert state == {"question": "Q?", "context": "F."}
 
     def test_sciq_shuffles_but_keeps_the_gold_index_right(self):
@@ -400,7 +397,9 @@ class TestReaders:
         }
         seen_first = set()
         for seed in range(20):
-            _, options, target = _read_sciq(row, random.Random(seed))
+            result = _read_sciq(row, random.Random(seed))
+            assert result is not None
+            _, options, target = result
             assert options[target] == "gold"
             seen_first.add(options[0])
         assert len(seen_first) > 1, "the gold answer must not always sit first"
@@ -422,16 +421,18 @@ class TestReaders:
         from lev.data.sources import _read_nli
 
         assert _read_nli({"premise": "p", "hypothesis": "h", "label": -1}, random.Random(0)) is None
-        _, options, target = _read_nli(
-            {"premise": "p", "hypothesis": "h", "label": 2}, random.Random(0)
-        )
+        result = _read_nli({"premise": "p", "hypothesis": "h", "label": 2}, random.Random(0))
+        assert result is not None
+        _, options, target = result
         assert options is None and target == 2
 
     def test_toxigen_uses_the_dataset_threshold(self):
         from lev.data.sources import _read_toxigen
 
-        assert _read_toxigen({"text": "t", "toxicity_human": 2.9}, random.Random(0))[2] == 0
-        assert _read_toxigen({"text": "t", "toxicity_human": 3.0}, random.Random(0))[2] == 1
+        for toxicity, expected in [(2.9, 0), (3.0, 1)]:
+            result = _read_toxigen({"text": "t", "toxicity_human": toxicity}, random.Random(0))
+            assert result is not None
+            assert result[2] == expected
         assert _read_toxigen({"text": "t", "toxicity_human": None}, random.Random(0)) is None
 
     def test_beavertails_yes_means_safe(self):
@@ -453,15 +454,16 @@ class TestReaders:
             ],
         }
         rows = _read_ultrafeedback(row, random.Random(0))
+        assert rows is not None
         assert [(r[0]["response"], r[2]) for r in rows] == [("a", 4), ("c", 0)]
 
     def test_snips_unknown_category_is_skipped(self):
         from lev.data.sources import SNIPS_INTENTS, _read_snips
 
         assert _read_snips({"text": "t", "category": "Nope"}, random.Random(0)) is None
-        assert _read_snips({"text": "t", "category": "GetWeather"}, random.Random(0))[2] == (
-            SNIPS_INTENTS.index("GetWeather")
-        )
+        result = _read_snips({"text": "t", "category": "GetWeather"}, random.Random(0))
+        assert result is not None
+        assert result[2] == SNIPS_INTENTS.index("GetWeather")
 
     def test_humanise_splits_camel_case(self):
         assert humanise("SearchScreeningEvent") == "Search Screening Event"
@@ -481,10 +483,12 @@ class TestReaderSources:
         ]
         examples = list(load_source(REGISTRY["race"], load_dataset=fixed_loader(rows)))
         assert len(examples) == 8
-        assert all(
-            isinstance(e.question, Choice) and len(e.question.criteria) == 4 for e in examples
-        )
-        assert [list(e.question.criteria)[e.target] for e in examples] == ["w", "x", "y", "z"] * 2
+        answers = []
+        for e in examples:
+            assert isinstance(e.question, Choice)
+            assert len(e.question.criteria) == 4
+            answers.append(list(e.question.criteria)[e.target])
+        assert answers == ["w", "x", "y", "z"] * 2
 
     def test_noul_reader_targets_land_on_the_rating_ends(self):
         rows = [{"text1": "a", "text2": "b", "label": 1}, {"text1": "c", "text2": "d", "label": 0}]
@@ -493,8 +497,7 @@ class TestReaderSources:
         assert examples[0].state == {"sentence1": "a", "sentence2": "b"}
 
     def test_every_noul_source_carries_a_negation(self):
-        """The aegis2 failure: Noul learned yes = good because no training
-        question ever made yes the bad outcome."""
+        """Both polarities prevent yes from always meaning a good outcome."""
         for name, spec in REGISTRY.items():
             if spec.primitive == "noul":
                 assert spec.negations, f"{name} has no negated question"
@@ -617,7 +620,9 @@ class TestPairAndEvidenceReaders:
             "fever_gold_label": "REFUTES",
             "label": 2,
         }
-        state, options, target = _read_nli_fever(row, random.Random(0))
+        result = _read_nli_fever(row, random.Random(0))
+        assert result is not None
+        state, options, target = result
         assert state == {"claim": "claim", "evidence": "evidence"}
         assert options is None and FEVER_LABELS[target] == "REFUTES"
         assert _read_nli_fever({**row, "fever_gold_label": "weird"}, random.Random(0)) is None
@@ -665,6 +670,7 @@ class TestPairAndEvidenceReaders:
 
         row = {"article": "A.", "question": "Q?", "options": ["w", "x", "y", "z"], "answer": "C"}
         rows = yes_no_from_choices(_read_race)(row, random.Random(0))
+        assert rows is not None
         assert [r[2] for r in rows] == [1, 0]
         assert rows[0][0]["proposed_answer"] == "y" and rows[1][0]["proposed_answer"] != "y"
         assert rows[0][0]["passage"] == "A." and rows[0][1] is None
@@ -680,7 +686,10 @@ class TestKeepFull:
             subsample_fraction=1.0,
             augment={"big": Augment(min_options=15, keep_full_fraction=0.5)},
         )
-        sizes = [len(e.question.criteria) for e in build_mixture(spec, {"big": lambda: pool})]
+        sizes = []
+        for e in build_mixture(spec, {"big": lambda: pool}):
+            assert isinstance(e.question, Choice)
+            sizes.append(len(e.question.criteria))
         full = sum(s == 40 for s in sizes)
         assert 120 < full < 280, f"about half should keep the full set, got {full}/400"
         assert min(sizes) >= 15, "a cut set fell below min_options"
@@ -713,8 +722,7 @@ class TestBuildDataset:
         )
 
     def test_every_split_draws_from_every_source(self, tmp_path):
-        """The loaders are built in a loop; a late-bound closure would make every
-        split draw from the last source while coverage and round-trip checks pass."""
+        """Late-bound loader closures can cross source contents while preserving source labels."""
         from lev.data.build import SPLIT_FILES, read_jsonl
 
         manifest = self.build(tmp_path)
@@ -722,10 +730,9 @@ class TestBuildDataset:
         for split, filename in SPLIT_FILES.items():
             rows = read_jsonl(tmp_path / filename)
             assert {e.source for e in rows} == {"ag_news", "imdb"}, split.value
-            # A row is labelled with the pool it was drawn from, so a crossed
-            # loader leaves the labels right and the content wrong. Check both.
             for e in rows:
                 if not e.abstain:
+                    assert isinstance(e.state, str)
                     assert e.state.startswith(prefix[e.source]), (
                         f"{split.value}: {e.source} row holds {e.state!r}"
                     )
@@ -733,8 +740,6 @@ class TestBuildDataset:
         assert set(manifest["sources"]) == {"ag_news", "imdb"}
 
     def test_held_out_splits_keep_the_canonical_question(self, tmp_path):
-        """The test split keeps each source's canonical wording, since an exported
-        eval needs one question per source."""
         from lev.data.build import SPLIT_FILES, read_jsonl
 
         self.build(tmp_path)

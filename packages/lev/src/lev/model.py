@@ -33,8 +33,7 @@ from .types import (
 
 _QUESTIONS = TypeAdapter(dict[str, Question])
 
-# Padded tokens (rows x widest row) per forward: `lev.batcher`'s budget, and the most a
-# request Score averaging grew may need (ADR-029, ADR-030).
+# Padded-token budget shared by batching and Score-order averaging.
 MAX_BATCH_TOKENS = 16384
 
 
@@ -50,19 +49,15 @@ class EngineConfig:
     noul_readout: Literal["rating", "binary"] = "rating"
     # A second option order reduces letter-position bias; costs one extra batch row.
     order_average: bool = True
-    # Score levels keep their low-to-high order unless this opts in (ADR-029): "reversed"
-    # adds the reversed order (2 rows per Score, as Choice), "cyclic" every rotation (K rows).
-    # Both show the model level orders training never produces (ADR-020, FINDINGS §12).
+    # Score averaging adds reversed (2 rows) or cyclic (K rows) orders absent from training.
     score_order_average: Literal["off", "reversed", "cyclic"] = "off"
-    # A request whose Score averaging added rows must fit this many padded tokens; `prepare`
-    # refuses it otherwise (HTTP 422). Requests without added Score rows are never refused.
+    # Reject over-budget requests only when Score averaging added rows.
     max_batch_tokens: int | None = MAX_BATCH_TOKENS
     # Serving can skip split codes; training keeps large sets for Mode B (ADR-028).
     skip_multi_token_codes: bool = True
     # Forking avoids repeated prefix work but adds a forward and cache copies (ADR-023).
     prefix_mode: Literal["fork", "single"] = "single"
-    # Off because it measured slower on this backbone (ADR-023). When enabled,
-    # inputs are padded to shape buckets and warmup captures graphs at startup.
+    # Opt-in compilation uses shape buckets; measured slower than eager (ADR-023).
     compile: bool = False
     pad_to: int = 32
 
@@ -108,11 +103,7 @@ class Prepared:
 
 
 def average_orders(prob_rows: list[list[float]], orders: list[list[int] | None]) -> list[float]:
-    """Map each rendered-order distribution back to canonical order and average.
-
-    `probs[j]` belongs to canonical slot `order[j]`; averaging probabilities, not
-    logits, keeps the result a distribution.
-    """
+    """Restore canonical candidate order and average probabilities, not logits."""
     if len(prob_rows) != len(orders):
         raise ValueError("one order per probability row")
     k = len(prob_rows[0])
@@ -138,8 +129,7 @@ def serving_routes(
 
 
 class DecisionEngine:
-    """Answers typed questions about a state in one forward pass; `answer` puts
-    several prepared requests in the same forward."""
+    """Answer typed questions, batching prepared requests into shared forwards."""
 
     def __init__(
         self,
@@ -157,17 +147,15 @@ class DecisionEngine:
         self.checkpoint: Path | None = None
         self._candidate_cache: dict[tuple[str, ...], Any] = {}
         self._device = getattr(model, "device", None)
-        # One forward at a time: CUDA-graph replay is not thread-safe. The server
-        # batches concurrent requests into one forward instead (`lev.batcher`).
+        # Serialize forwards because CUDA-graph replay is not thread-safe.
         self._lock = threading.Lock()
-        # A fast tokenizer's padding and truncation are shared state: concurrent
-        # calls raise "Already borrowed" or encode with another call's truncation.
+        # Serialize tokenizer access to protect shared padding and truncation settings.
         self._tokenizer_lock = threading.RLock()
-        # The decoder runs alone and `lm_head` projects only the scored
-        # positions: full (rows, width, vocab) logits are GBs at a 248k vocabulary.
         base = model.get_base_model() if hasattr(model, "get_base_model") else model
-        self._decoder = base.get_decoder() if model is not None else None
-        self._lm_head = base.get_output_embeddings() if model is not None else None
+        # Held apart so the head runs on scored positions only (`_project`), instead of
+        # allocating logits for the whole sequence. `Any`: the wrappers are dynamically typed.
+        self._decoder: Any = base.get_decoder() if model is not None else None
+        self._lm_head: Any = base.get_output_embeddings() if model is not None else None
         self._eager_decoder = self._decoder
         if self.config.compile:
             import torch
@@ -185,10 +173,7 @@ class DecisionEngine:
             (2, 512),
         ),
     ) -> float:
-        """Run one forward per shape bucket so compile and graph capture happen
-        before the first request. Returns seconds spent. Falls back to eager,
-        with a warning, if the compiled path fails.
-        """
+        """Warm compiled shape buckets; return elapsed seconds and fall back to eager on failure."""
         import torch
 
         started = time.perf_counter()
@@ -208,21 +193,17 @@ class DecisionEngine:
         return time.perf_counter() - started
 
     def system_one(self, state, questions: Mapping[str, Question | dict]) -> SystemOneResponse:
-        """Answer every question about `state` in one forward pass. Questions may
-        be `Noul`/`Choice`/`Score` objects or the same shapes as plain dicts."""
+        """Answer typed or JSON-shaped questions about a state."""
         return self.answer([self.prepare(state, questions)])[0]
 
     def prepare(self, state, questions: Mapping[str, Question | dict]) -> Prepared:
-        """Validate, route and tokenise one request. Raises `ValueError` or
-        `TypeError` for a malformed one, and `RuntimeError` for one that needs
-        Mode B with no head loaded, before any GPU work."""
+        """Validate and tokenize a request, rejecting malformed input or a missing Mode B head."""
         questions = _QUESTIONS.validate_python(questions)
         with self._tokenizer_lock:
             return self._route_and_tokenise(state, questions)
 
     def question_rows(self, questions: Mapping[str, Question | dict]) -> dict[str, int]:
-        """Batch rows each question adds to a request under this engine's config:
-        the orders `prepare` renders it in. Depends on routing, not on the state."""
+        """Count rendered orders per question under the current routing configuration."""
         questions = _QUESTIONS.validate_python(questions)
         with self._tokenizer_lock:
             routes = serving_routes(questions, self.tokenizer, self.config)
@@ -249,8 +230,7 @@ class DecisionEngine:
             1 for v in variants if v.order is not None and isinstance(questions[v.name], Score)
         )
         limit = self.config.max_batch_tokens
-        # The batcher runs an oversized request alone and unsplit; refuse only one that
-        # Score averaging grew, so a request main accepts is never refused for its size.
+        # Oversized requests run alone; reject only growth from Score averaging.
         if limit is not None and added and prepared.rows * prepared.width > limit:
             raise ValueError(
                 f"this request needs {prepared.rows} rows x {prepared.width} tokens = "
@@ -262,8 +242,7 @@ class DecisionEngine:
         return prepared
 
     def answer(self, requests: list[Prepared]) -> list[SystemOneResponse]:
-        """Answer prepared requests, in single prefix mode all in one forward.
-        Rows are independent, so batching requests changes no row's inputs."""
+        """Answer prepared requests; single-prefix mode batches them into one forward."""
         logits, hidden = self._forward(requests)
         responses, start = [], 0
         for request in requests:
@@ -310,12 +289,7 @@ class DecisionEngine:
         )
 
     def _orders(self, question: Question, route: Route) -> list[list[int] | None]:
-        """Candidate orders to render; None means the original order. Only lettered
-        Choice and binary Noul in state-first layout are reversed (ordered scales
-        keep training's low-to-high order; schema-first shares options), unless
-        `score_order_average` opts a Score in: "reversed" adds one row, "cyclic"
-        K-1, both in orders training never shows (ADR-029). `order_average=False`
-        reads every question once."""
+        """Choose candidate orders; keep scales canonical unless Score averaging is enabled."""
         if (
             not self.config.order_average
             or route.mode is not Mode.LABEL_TOKEN
@@ -361,8 +335,7 @@ class DecisionEngine:
             for name, question in questions.items()
             for order in self._orders(question, routes[name])
         ]
-        # Every variant shares one prefix by construction; a mismatch would make
-        # the cache wrong, not just slow.
+        # Variants must share a prefix for cache reuse to be valid.
         prefixes = {r.prefix for _, _, r in rendered}
         if len(prefixes) != 1:
             raise AssertionError(f"layout produced {len(prefixes)} prefixes, expected 1")
@@ -372,8 +345,7 @@ class DecisionEngine:
         ]
 
     def _forward(self, requests: list[Prepared]):
-        """Logits `(N, V)` and, for Mode B, hidden states `(N, H)` at every
-        variant's last token, rows in request order."""
+        """Return last-token logits (N, V) and optional hidden states (N, H) in request order."""
         import torch
 
         want_hidden = any(r.want_hidden for r in requests)
@@ -386,13 +358,13 @@ class DecisionEngine:
             for r in requests
         ]
         logits = torch.cat([logits for logits, _ in outs])
-        hidden = torch.cat([hidden for _, hidden in outs]) if want_hidden else None
+        hidden = (
+            torch.cat([hidden for _, hidden in outs if hidden is not None]) if want_hidden else None
+        )
         return logits, hidden
 
     def _forward_single(self, rows: list[list[int]], want_hidden: bool):
-        """One right-padded batch of prefix+suffix rows. Under `compile`, rows pad to
-        a power of two and width to `pad_to`, so few graphs are recorded; padding
-        changes no real row, since right padding is masked and rows are independent."""
+        """Run right-padded prefix/suffix rows, using shape buckets when compiled."""
         import torch
 
         device = self._device
@@ -465,6 +437,7 @@ class DecisionEngine:
             self.tokenizer, prefix=label_prefix(Style(self.config.prompt_style))
         )
         with self._tokenizer_lock:
+            assert route.codes is not None, "Mode A requires label codes"
             candidate_ids = readout.candidate_ids(route.codes)
         return logits[candidate_ids].float().tolist()
 
@@ -486,9 +459,7 @@ class DecisionEngine:
         return scores[0].float().tolist()
 
     def _candidate_reprs(self, texts: list[str]):
-        """One hidden vector per candidate string, cached per candidate set. The cache
-        is unbounded: fine for fixed schemas (151 candidates ~1.5 MB), not for
-        arbitrary caller-supplied option sets."""
+        """Cache candidate embeddings without a size bound; intended for fixed schemas."""
         import torch
 
         key = tuple(texts)
@@ -522,7 +493,7 @@ class DecisionEngine:
         if isinstance(question, Choice):
             distribution = dict(zip(question.criteria, probs, strict=True))
             return ChoiceAnswer(
-                choice=max(distribution, key=distribution.get),
+                choice=max(distribution, key=distribution.__getitem__),
                 probabilities=distribution,
                 confidence=confidence,
             )
@@ -538,8 +509,7 @@ class DecisionEngine:
 
         if isinstance(question, Noul):
             if route.reason == BINARY_NOUL:
-                # Two lettered options, yes first; no rating distribution exists,
-                # so `probabilities` stays absent.
+                # Binary Noul has no rating distribution.
                 return NoulAnswer(noul=probs[0], probabilities=None, confidence=confidence)
             by_rating = dict(enumerate(probs))
             return NoulAnswer(
@@ -566,24 +536,16 @@ def load(
     max_batch_tokens: int | None = MAX_BATCH_TOKENS,
     merge_adapter: bool = True,
 ) -> DecisionEngine:
-    """Load a checkpoint -- a release directory, a training output or a Hub id --
-    into a ready `DecisionEngine`. With no checkpoint, serves `model_id` frozen.
+    """Load an engine from a release, training output, or Hub id; otherwise use the frozen base.
 
-        engine = lev.load("interfaze-ai/lev")
-        engine.system_one(state, {"urgent": {"type": "noul", "instructions": "..."}})
-
-    A release's `lev_release.json` names the base model and prompt style its
-    weights were trained under and overrides `model_id` and `prompt_style`. The
-    Mode B head and `calibration.json` beside the adapter are picked up; a
-    missing calibration is warned about, not hidden.
-    """
+    Release metadata overrides the base model and prompt style. Load the checkpoint's
+    tokenizer, head, and calibration when present; warn if calibration is missing."""
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     from .train.checkpoints import CALIBRATION, resolve_checkpoint
 
-    # A checkpoint holds a LoRA adapter, not a full model: load the base from
-    # `model_id`, then apply the adapter.
+    # Load the base model before applying the checkpoint's adapter.
     resolved = resolve_checkpoint(checkpoint, cache_dir) if checkpoint else None
     manifest_file = resolved / "lev_release.json" if resolved else None
     if manifest_file and manifest_file.is_file():
@@ -596,8 +558,7 @@ def load(
             )
             model_id = manifest["base_model"]
 
-    # The checkpoint's own tokenizer when saved: Mode A reads specific token ids,
-    # so a mismatched tokenizer gives plausible wrong answers, not an error.
+    # Use the saved tokenizer to preserve Mode A label ids.
     tok_source = resolved if resolved and (resolved / "tokenizer.json").is_file() else model_id
     tokenizer = AutoTokenizer.from_pretrained(str(tok_source), cache_dir=cache_dir)
 
@@ -615,18 +576,14 @@ def load(
     if resolved:
         from peft import PeftModel
 
-        # Merged by default: the forward is launch-bound (ADR-023), so the per-layer
-        # lora_A/lora_B matmuls cost launches rather than arithmetic, and graph
-        # capture needs the weights fixed. `merge_adapter=False` keeps the adapter
-        # separate, which is what lets its scale be swept without retraining.
+        # Merge to reduce launches and fix graph weights; keep separate for adapter-scale sweeps.
         model = PeftModel.from_pretrained(model, str(resolved))
         if merge_adapter:
             model = model.merge_and_unload()
         head = _load_head(resolved / MODE_B_HEAD, model)
     model = model.eval()
 
-    # Default to the profile sitting beside the weights it was fitted for:
-    # inside a flat release directory, or one level up in a training tree.
+    # Use calibration beside release weights or above training checkpoints.
     if calibration is None and resolved:
         candidates = [resolved / CALIBRATION, resolved.parent / CALIBRATION]
         calibration = next((c for c in candidates if c.is_file()), candidates[-1])
@@ -639,8 +596,7 @@ def load(
 
     config = EngineConfig(
         model_id=model_id,
-        # A stock checkpoint pins the 0-8 rating scale at one end regardless of
-        # content (ADR-007), so untrained serving reads Noul as two options.
+        # Use binary Noul for untrained backbones with unreliable rating scales (ADR-007).
         noul_readout=noul_readout or ("rating" if resolved else "binary"),
         compile=compile,
         prompt_style=prompt_style or "plain",
@@ -679,12 +635,6 @@ def _bucket_type(question: Question, route: Route) -> str:
 
 
 def _fork(cache, n: int, device=None):
-    """Copy a batch-1 prefix cache and expand it to `n` rows.
-
-    `reorder_cache` supports both full- and linear-attention layers;
-    `batch_repeat_interleave` does not. Copy first because reordering mutates
-    the cache and the original must stay reusable.
-    """
     import torch
 
     forked = copy.deepcopy(cache)
@@ -694,7 +644,6 @@ def _fork(cache, n: int, device=None):
 
 
 def _gini(probs: list[float]) -> float:
-    """Normalised Gini concentration: uniform -> 0, point mass -> 1."""
     k = len(probs)
     if k <= 1:
         return 1.0

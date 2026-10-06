@@ -1,5 +1,4 @@
-"""Evaluate checkpoints through the training forward path, per source, before and after
-fitted temperatures."""
+"""Evaluate checkpoints per source before and after temperature scaling."""
 
 from __future__ import annotations
 
@@ -100,11 +99,7 @@ def evaluate_split(
     limit_per_source: int | None = None,
     batch_size: int = 16,
 ) -> tuple[EvalReport, EvalReport]:
-    """Return (uncalibrated, calibrated) reports over `split`.
-
-    Both come from one forward pass, with the temperature applied to stored raw
-    logits, so any difference is the temperature alone.
-    """
+    """Return raw and calibrated reports from the same stored logits."""
     import torch
 
     from ..data.build import load_split
@@ -157,8 +152,7 @@ def evaluate_split(
     resolved = str(resolve_checkpoint(checkpoint_dir))
     plain = EvalReport(split=split, checkpoint=resolved, calibrated=False)
     tuned = EvalReport(split=split, checkpoint=resolved, calibrated=bool(profile.temperatures))
-    # A source's rows may differ in option count, which sets the temperature, so
-    # each group is scored at its own temperature and then reported per source.
+    # Apply option-count temperatures per group before aggregating by source.
     per_source: dict[tuple[str, str, str], list[tuple[list[float], int, float]]] = {}
     for (source, qtype, mode, width), samples in collected.items():
         t = profile.temperature(qtype, mode, width)

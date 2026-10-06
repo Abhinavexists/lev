@@ -1,10 +1,6 @@
-"""A fixed-cell terminal composition, shared by the live display and replay.
+"""Live and replay terminal display adapted from laya-mlx (Apache-2.0).
 
-laya-mlx's layout (Apache-2.0), with the right-hand panel adapted to a client
-of a remote server: the backend and served model replace the local engine
-lines, and the planner's ground truth sits beside the model's two estimates.
-`rich` is optional: without it the loop prints one status line per step.
-"""
+Show server metadata and planner truth beside model estimates; Rich is optional."""
 
 from __future__ import annotations
 

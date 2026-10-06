@@ -403,14 +403,14 @@
      "rps": 0.152,
      "ece15": 0.1296,
      "ece15_equal_mass": 0.1683,
-     "nll": 0.9348
+     "negative_log_likelihood": 0.9348
     },
     "held_out_refit": {
      "acc": 0.5903,
      "rps": 0.1466,
      "ece15": 0.108,
      "ece15_equal_mass": 0.134,
-     "nll": 0.9087
+     "negative_log_likelihood": 0.9087
     }
    },
    "reversed": {
@@ -423,14 +423,14 @@
      "rps": 0.1264,
      "ece15": 0.1108,
      "ece15_equal_mass": 0.1453,
-     "nll": 0.8388
+     "negative_log_likelihood": 0.8388
     },
     "held_out_refit": {
      "acc": 0.6736,
      "rps": 0.1263,
      "ece15": 0.1193,
      "ece15_equal_mass": 0.1668,
-     "nll": 0.8381
+     "negative_log_likelihood": 0.8381
     }
    },
    "cyclic": {
@@ -443,14 +443,14 @@
      "rps": 0.1238,
      "ece15": 0.0775,
      "ece15_equal_mass": 0.1387,
-     "nll": 0.8279
+     "negative_log_likelihood": 0.8279
     },
     "held_out_refit": {
      "acc": 0.6597,
      "rps": 0.1238,
      "ece15": 0.0765,
      "ece15_equal_mass": 0.1382,
-     "nll": 0.8284
+     "negative_log_likelihood": 0.8284
     }
    }
   },
@@ -466,14 +466,14 @@
      "rps": 0.1321,
      "ece15": 0.0896,
      "ece15_equal_mass": 0.1275,
-     "nll": 0.7807
+     "negative_log_likelihood": 0.7807
     },
     "held_out_refit": {
      "acc": 0.6577,
      "rps": 0.13,
      "ece15": 0.0772,
      "ece15_equal_mass": 0.0914,
-     "nll": 0.7792
+     "negative_log_likelihood": 0.7792
     }
    },
    "reversed": {
@@ -486,14 +486,14 @@
      "rps": 0.1015,
      "ece15": 0.0888,
      "ece15_equal_mass": 0.1219,
-     "nll": 0.641
+     "negative_log_likelihood": 0.641
     },
     "held_out_refit": {
      "acc": 0.7584,
      "rps": 0.1008,
      "ece15": 0.0611,
      "ece15_equal_mass": 0.1142,
-     "nll": 0.6267
+     "negative_log_likelihood": 0.6267
     }
    },
    "cyclic": {
@@ -506,14 +506,14 @@
      "rps": 0.1013,
      "ece15": 0.0681,
      "ece15_equal_mass": 0.0959,
-     "nll": 0.6436
+     "negative_log_likelihood": 0.6436
     },
     "held_out_refit": {
      "acc": 0.7517,
      "rps": 0.1006,
      "ece15": 0.0865,
      "ece15_equal_mass": 0.0909,
-     "nll": 0.6286
+     "negative_log_likelihood": 0.6286
     }
    }
   }

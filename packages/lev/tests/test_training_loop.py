@@ -1,4 +1,4 @@
-"""torch is in the `train` extra, so these skip on a bare `uv sync`."""
+"""Training-loop tests; skip when Torch is unavailable."""
 
 from __future__ import annotations
 
@@ -72,8 +72,7 @@ def smoke_config(tmp_path, *, epochs, checkpoint_every):
 def run_resumable(
     tmp_path, monkeypatch, *, max_steps, checkpoint_every=3, fresh=False, persist=True
 ):
-    """Checkpoints land on disk, so a second call in the same `tmp_path` resumes.
-    Returns (saved steps, batches seen, summary)."""
+    """Run with on-disk checkpoints; return saved steps, observed batches, and summary."""
     import lev.train.loop as loop
     from lev.train.checkpoints import TRAINING_STATE
     from lev.train.collate import DecisionCollator
@@ -105,8 +104,7 @@ def run_resumable(
 
 
 class TestCheckpointCadence:
-    """Only data loading, the backbone, the forward pass and the checkpoint write are stubbed;
-    batching, routing, the step counter and checkpoint decisions are the shipping code."""
+    """Exercise real batching and checkpoint decisions with model and storage stubs."""
 
     def run(self, tmp_path, monkeypatch, *, max_steps, checkpoint_every, epochs=1):
         import lev.train.loop as loop
@@ -124,13 +122,10 @@ class TestCheckpointCadence:
         return saved
 
     def test_the_final_step_is_not_checkpointed_twice(self, tmp_path, monkeypatch):
-        """A total that is a multiple of `checkpoint_every` saves once; on Modal a
-        duplicate is a second multi-hundred-MB adapter write and Volume commit."""
         saved = self.run(tmp_path, monkeypatch, max_steps=12, checkpoint_every=6)
         assert saved == [6, 12], f"expected [6, 12], got {saved}"
 
     def test_an_uneven_total_still_saves_at_the_end(self, tmp_path, monkeypatch):
-        """Dedup must not swallow the final save when it is not on the interval."""
         saved = self.run(tmp_path, monkeypatch, max_steps=10, checkpoint_every=4)
         assert saved == [4, 8, 10], f"expected [4, 8, 10], got {saved}"
 
@@ -140,9 +135,6 @@ class TestCheckpointCadence:
 
 
 class TestResume:
-    """A preempted run continues at the step it stopped, through the batches it had not seen,
-    on the schedule it had reached."""
-
     def test_resumes_at_the_saved_step_and_sees_only_the_remaining_batches(
         self, tmp_path, monkeypatch
     ):
@@ -163,6 +155,7 @@ class TestResume:
 
         run_resumable(tmp_path, monkeypatch, max_steps=6)
         state = load_training_state(tmp_path / "out" / "step-6")
+        assert state is not None
         assert (state["step"], state["epoch"], state["step_in_epoch"]) == (6, 0, 6)
         assert state["scheduler"]["last_epoch"] == 6
 
@@ -173,16 +166,14 @@ class TestResume:
         assert summary["history"][0]["step"] == 0
 
     def test_weights_only_checkpoint_restarts_the_schedule(self, tmp_path, monkeypatch):
-        """A checkpoint without training state (pre-ADR-021) restarts the step count
-        from zero. `load_checkpoint` is stubbed, so weight restore is not checked."""
+        """Weight loading is stubbed; this checks schedule restart only."""
         run_resumable(tmp_path, monkeypatch, max_steps=6, persist=False)
         saved, _, summary = run_resumable(tmp_path, monkeypatch, max_steps=6)
         assert saved == [3, 6]
         assert summary["history"][0]["step"] == 0
 
     def test_rerunning_a_finished_run_trains_nothing(self, tmp_path, monkeypatch):
-        """7 steps at checkpoint_every=3 ends between saves, so the final checkpoint must carry
-        training state or a rerun resumes it as weights-only and trains from step 0."""
+        """An off-interval final checkpoint must carry resume state."""
         run_resumable(tmp_path, monkeypatch, max_steps=7)
         saved, seen, summary = run_resumable(tmp_path, monkeypatch, max_steps=7)
         assert seen == [], "a finished run must not train again"
@@ -198,8 +189,7 @@ class TestResume:
         assert [h["step"] for h in summary["history"]] == list(range(10))
 
     def test_resume_across_an_epoch_boundary(self, tmp_path, monkeypatch):
-        """64 rows at batch 2 is 32 steps per epoch; stopping at 33 is one step
-        into epoch 1, and the resumed run must skip exactly that one."""
+        """At batch size two, step 33 is the first step of the second 64-row epoch."""
         _, full, _ = run_resumable(tmp_path / "ref", monkeypatch, max_steps=36)
         run_resumable(tmp_path, monkeypatch, max_steps=33)
         _, seen, summary = run_resumable(tmp_path, monkeypatch, max_steps=36)
@@ -228,8 +218,7 @@ class TestFreshSetsAsideThePreviousRun:
         assert set_aside_previous_run(out) is None
 
     def test_fresh_run_does_not_resume_from_a_higher_stale_step(self, tmp_path, monkeypatch):
-        """The hazard: a fresh run writes step-3, step-6 beside a stale step-18750;
-        a preemption's auto-resume would take the stale one. `--fresh` moves it."""
+        """Stale higher-step checkpoints must not survive in the active run directory."""
         from lev.train.checkpoints import latest_checkpoint
 
         stale = tmp_path / "out" / "step-18750"
@@ -238,13 +227,13 @@ class TestFreshSetsAsideThePreviousRun:
         saved, _, summary = run_resumable(tmp_path, monkeypatch, max_steps=6, fresh=True)
         assert saved == [3, 6]
         assert summary["history"][0]["step"] == 0
-        assert latest_checkpoint(tmp_path / "out").name == "step-6"
+        latest = latest_checkpoint(tmp_path / "out")
+        assert latest is not None and latest.name == "step-6"
 
 
 class TestModeAProjectsOnlyTheAnswerPositions:
     def test_logits_to_keep_selects_distinct_positions_and_rows_read_their_own(self):
-        """Mode A must not materialise (B, seq, V): the model is asked for the
-        distinct answer positions only, and each row reads its own column."""
+        """Project only answer positions and select the correct output column per row."""
         from types import SimpleNamespace
 
         from lev.router import Mode
@@ -256,8 +245,7 @@ class TestModeAProjectsOnlyTheAnswerPositions:
             def __call__(self, input_ids, attention_mask, logits_to_keep):
                 seen["keep"] = logits_to_keep.tolist()
                 b, v = input_ids.shape[0], 10
-                # logits[row, j, tok] = 100*row + 10*keep[j] + tok, so the value
-                # read identifies which row and position it came from.
+                # Encode row and position in each logit to expose indexing errors.
                 keep = logits_to_keep.float()
                 rows = torch.arange(b).float()[:, None, None] * 100
                 pos = keep[None, :, None] * 10

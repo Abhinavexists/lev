@@ -4,21 +4,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..labels import TokenEncoder
+
 
 @dataclass
 class LabelTokenReadout:
-    """Maps label codes to the single token ids Mode A reads.
+    """Read label ids using the same tokenizer that verified the codes."""
 
-    `tokenizer` must be the one the router verified against; another tokenizer
-    silently changes which ids are read.
-    """
-
-    tokenizer: object
+    tokenizer: TokenEncoder
     prefix: str = " "
 
     def candidate_ids(self, codes: list[str]) -> list[int]:
-        """Token id for each label code as the model emits it at the answer boundary:
-        after `Answer:` in the plain style, opening the assistant turn in chat."""
+        """Encode each label code at the configured answer boundary."""
         ids = []
         for code in codes:
             encoded = self.tokenizer.encode(self.prefix + code, add_special_tokens=False)

@@ -1,4 +1,4 @@
-"""The eval door opens only onto blocked subsets and has no route into the training mixture."""
+"""Test that S1Bench evaluation loading remains isolated from training."""
 
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ class TestTrainingDoorStaysShut:
             assert_clean([subset])
 
     def test_adding_an_eval_door_did_not_unblock_the_hf_ids_it_reads(self) -> None:
-        """The loader reads `tals/vitaminc`; the mixture still must not."""
         for spec in EVAL_SUBSETS.values():
             with pytest.raises(ContaminationError):
                 assert_clean([spec.hf_id])
@@ -41,15 +40,13 @@ class TestEvalDoorOpensOnlyOnEvalData:
 
     @pytest.mark.parametrize("name", ["ag_news", "imdb", "banking77", "some/private-corpus"])
     def test_training_sources_are_refused(self, name: str) -> None:
-        """The door must not become a general-purpose dataset loader."""
         with pytest.raises(ContaminationError):
             get_subset(name)
 
 
 class TestStructuralSeparation:
     def test_s1bench_cannot_reach_the_mixture_builder(self) -> None:
-        """Importing `mixture` would give the eval loaders a type the training path consumes.
-        A fresh interpreter, since in-process the suite's own imports are visible."""
+        """Use a fresh interpreter so existing test-suite imports do not mask dependencies."""
         probe = (
             "import sys; import lev.data.s1bench; "
             "leaked = sorted(m for m in sys.modules "
@@ -103,15 +100,12 @@ class TestPinnedDefinitions:
 
     @pytest.mark.parametrize("name", sorted(EVAL_SUBSETS))
     def test_record_counts_match_the_board(self, name: str) -> None:
-        """helpsteer2 is one record short of the board's 250: the manifest's
-        token-length filter dropped rows."""
+        """The pinned helpsteer2 filter yields 249 records, one fewer than the board."""
         board = jev_board(snapshot())[name]
         expected = board["total"] - (1 if name == "helpsteer2" else 0)
         assert definition(name)["count"] == expected
 
     def test_jev_numbers_match_the_snapshot(self) -> None:
-        """Read from `data/s1bench-snapshot.json` rather than restated, so a
-        regenerated snapshot fails here."""
         data = snapshot()
         board = jev_board(data)
         for name, subset in EVAL_SUBSETS.items():

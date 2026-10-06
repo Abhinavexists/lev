@@ -1,21 +1,16 @@
-"""Training presets and approximate H100 compute and memory budgets.
-
-Estimate assumptions are documented in docs/ARCHITECTURE.md §5.
-"""
+"""Training presets and approximate H100 budgets (ARCHITECTURE §5)."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
 
-# Measured on the released 4b-instruct run (2.46e18 FLOPs in 7.8 h, padding and overhead
-# included); reads high for the plain-prompt 4B runs (4h50, 5h53). docs/TRAINING.md.
+# Effective throughput measured on the 4b-instruct run, including overhead (TRAINING.md).
 H100_EFFECTIVE_FLOPS = 8.75e13
 
 H100_VRAM_GB = 80.0
 
-# ~6*N FLOPs/token forward+backward, plus ~a third for checkpointing's recompute. Holds
-# under LoRA: backward still traverses the frozen weights to reach the adapters.
+# Include checkpoint recomputation; LoRA backward still traverses frozen weights.
 FLOPS_PER_PARAM_PER_TOKEN = 8.0
 
 
@@ -85,7 +80,7 @@ class TrainConfig:
 
     @property
     def tokens_per_step(self) -> int:
-        # The work per step is the padded batch, not `max_seq_len` (~16x larger).
+        # Estimate compute from padded batch length, not the truncation cap.
         return self.avg_tokens_per_example * self.per_device_batch * self.grad_accum
 
     @property

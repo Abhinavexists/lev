@@ -1,7 +1,4 @@
-"""Deterministic, disjoint train, calibration and test splits (ADR-014).
-
-The key includes row position: the same input order reproduces a split, reordering changes it.
-"""
+"""Deterministic splits keyed by source and row position; input order matters (ADR-014)."""
 
 from __future__ import annotations
 
@@ -24,8 +21,6 @@ class Split(StrEnum):
 # Changing this re-splits every row, making models before and after incomparable.
 SPLIT_SALT = "lev-split-v1"
 
-# A temperature needs far fewer rows than a model, and test only has to separate
-# two runs.
 DEFAULT_FRACTIONS: dict[Split, float] = {
     Split.TRAIN: 0.80,
     Split.CALIBRATION: 0.10,
@@ -38,7 +33,7 @@ def row_key(source: str, index: int, text: str) -> str:
 
 
 def hash_position(key: str, salt: str = SPLIT_SALT) -> float:
-    """Map a key to a uniform float in [0, 1), stable across processes, unlike salted `hash()`."""
+    """Map a key to a process-stable float in [0, 1)."""
     digest = hashlib.blake2b(f"{salt}|{key}".encode(), digest_size=8).digest()
     return int.from_bytes(digest, "big") / float(1 << 64)
 
@@ -89,19 +84,14 @@ def split_examples(
 
 
 def check_coverage(splits: dict[Split, list[Example]], strict: bool = True) -> SplitReport:
-    """Run two label-coverage checks (ADR-014); with `strict`, raise `ValueError` on either.
-
-    Every observed label must appear in train, and every label the question offers must be
-    observed at all, which catches a truncated or label-sorted corpus the first check passes.
-    """
+    """Check observed labels appear in train and offered labels appear in the data."""
     seen: dict[str, set[int]] = defaultdict(set)
     in_train: dict[str, set[int]] = defaultdict(set)
     offered: dict[str, int] = {}
     for split, items in splits.items():
         for example in items:
             seen[example.source].add(example.target)
-            # A Noul offers nine rating levels but its data supplies only the two
-            # ends, so "every offered label must be observed" does not apply.
+            # Binary Noul data only covers the rating scale's endpoints.
             if example.question.type != "noul":
                 offered.setdefault(example.source, candidate_count(example.question))
             if split is Split.TRAIN:

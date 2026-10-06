@@ -1,9 +1,6 @@
-"""Deterministic Snake rules and a Hamiltonian-cycle safety planner.
+"""Snake rules and cycle-order safety planning, following laya-mlx.
 
-A safe move preserves cycle order without crossing the tail or skipping food.
-The shield rejects moves outside that policy, including legal moves that do
-not cause an immediate collision. Rules follow laya-mlx so runs are comparable.
-"""
+Safe moves preserve cycle order without crossing the tail or skipping food."""
 
 from __future__ import annotations
 
@@ -61,7 +58,7 @@ class SnakeGame:
     def head(self) -> tuple[int, int]:
         return self.body[0]
 
-    def _spawn_food(self):
+    def _spawn_food(self) -> tuple[int, int] | None:
         occupied = set(self.body)
         empty = [cell for cell in self.cycle if cell not in occupied]
         return self.rng.choice(empty) if empty else None
@@ -84,6 +81,7 @@ class SnakeGame:
     def moves(self) -> list[MoveInfo]:
         if not self.alive or self.won:
             return []
+        assert self.food is not None, "an unfinished game must have food"
         head_index = self.indices[self.head]
         tail_distance = (self.indices[self.body[-1]] - head_index) % self.capacity
         food_distance = (self.indices[self.food] - head_index) % self.capacity

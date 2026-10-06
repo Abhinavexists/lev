@@ -1,7 +1,4 @@
-"""Write the held-out test split as levbench task files, one per source.
-
-levbench does not import `lev` (ADR-010). A combined file would ask every question of every item.
-"""
+"""Export held-out rows as levbench task files, one question per source."""
 
 from __future__ import annotations
 
@@ -13,13 +10,12 @@ from ..types import Noul, Question, Score, question_payload
 from .build import _group_by_source, load_split
 from .splits import Split
 
-# Below this an accuracy is not a measurement: at n=24 the 95% interval is
-# about +/-16 points.
+# Require enough rows for a useful accuracy estimate.
 MIN_USEFUL_ITEMS = 100
 
 
 def truth_for(question: Question, target: int) -> bool | int | str:
-    """The label levbench compares: a Choice option string, a Score level index, a Noul bool."""
+    """Convert a target to a Choice key, Score index, or Noul bool."""
     if isinstance(question, Noul):
         # The target is a rating index; collapse it as the readout does.
         return noul_probability({target: 1.0}) >= 0.5
@@ -48,8 +44,7 @@ def export(
         if limit_per_source:
             rows = rows[:limit_per_source]
         question = rows[0].question
-        # A task file has one question for all items, so QA sources with per-row
-        # options (race, sciq, ...) are skipped; `evaluate_split` still scores them.
+        # Skip per-row option sets: each task file has one shared question.
         payloads = {json.dumps(question_payload(r.question), sort_keys=True) for r in rows}
         if len(payloads) != 1:
             variable.append(source)

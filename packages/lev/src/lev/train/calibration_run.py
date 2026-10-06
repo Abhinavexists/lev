@@ -19,14 +19,9 @@ def fit_profile(
     config=None,
     method: str = "transfer",
 ) -> dict:
-    """Collect raw logits on `split`, fit one temperature per bucket.
+    """Fit bucket temperatures on calibration data; optionally select by family transfer.
 
-    `method="transfer"` fits each bucket both by rows and by task family and
-    keeps whichever has the lower leave-one-family-out ECE (ADR-028), writing
-    the comparison to `calibration.report.json`; a bucket with too few families
-    keeps the row fit. `method="rows"` fits pooled rows only, ignoring family.
-    An existing profile is kept as `calibration.previous.json`.
-    """
+    Save transfer comparisons and preserve the previous profile before replacing it."""
     rows = collect_logits(checkpoint_dir, data_dir, split, config=config)
     out = Path(checkpoint_dir) / CALIBRATION
     if out.is_file():
@@ -73,12 +68,7 @@ def collect_logits(
     batch_size: int = 16,
     limit: int | None = None,
 ) -> dict[str, list[tuple[list[float], int, str]]]:
-    """Raw candidate logits per `CalibrationProfile.key` bucket, from the trained
-    model under `no_grad`, before any temperature.
-
-    Abstain rows are skipped: a temperature is fitted against a gold index. Each
-    sample carries its task family (`sources.family_of`) for the transfer fit.
-    """
+    """Collect raw logits and task families by calibration bucket, skipping abstain rows."""
     import torch
 
     from ..data.build import load_split

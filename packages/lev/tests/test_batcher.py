@@ -15,8 +15,7 @@ def request(name: str, rows: int = 1, width: int = 10):
 
 
 class GatedEngine:
-    """Records each forward's requests; the first forward waits for `release`,
-    so requests submitted meanwhile queue up behind it."""
+    """Hold the first forward so later requests queue behind it."""
 
     def __init__(self):
         self.forwards: list[list[str]] = []
@@ -185,8 +184,6 @@ async def until(condition, timeout=2.0):
 
 
 def test_a_held_request_can_still_be_cancelled_before_it_runs():
-    """With a budget of one row, `c` is held back while `b` runs; its client
-    leaving then must keep it off the GPU."""
 
     async def run():
         engine = SteppedEngine()
@@ -232,7 +229,7 @@ def test_a_held_request_past_its_deadline_times_out_without_running():
 
 
 def test_an_abandoned_running_request_still_counts_as_pending():
-    """A client leaving does not free the GPU, so it must not free a slot."""
+    """Disconnecting does not release GPU capacity already in use."""
 
     async def run():
         engine = SteppedEngine()
@@ -252,8 +249,6 @@ def test_an_abandoned_running_request_still_counts_as_pending():
 
 
 def test_a_failing_disconnect_watch_still_returns_the_answer():
-    """A server whose `receive()` raises cannot report disconnects; the request
-    must be answered, not dropped as if its client had left."""
 
     async def broken_watch():
         raise RuntimeError("receive() is not available")
@@ -270,8 +265,7 @@ def test_a_failing_disconnect_watch_still_returns_the_answer():
 
 
 def test_an_error_outside_the_forward_fails_its_batch_and_the_worker_keeps_serving():
-    """One answer short trips the `zip(strict=True)` after the forward, outside
-    the forward's own error handling."""
+    """A short response list triggers zip(strict=True) outside forward error handling."""
 
     async def run():
         engine = SteppedEngine(short_by=1)
