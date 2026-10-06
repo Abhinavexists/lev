@@ -564,6 +564,7 @@ def load(
     skip_multi_token_codes: bool = True,
     score_order_average: Literal["off", "reversed", "cyclic"] = "off",
     max_batch_tokens: int | None = MAX_BATCH_TOKENS,
+    merge_adapter: bool = True,
 ) -> DecisionEngine:
     """Load a checkpoint -- a release directory, a training output or a Hub id --
     into a ready `DecisionEngine`. With no checkpoint, serves `model_id` frozen.
@@ -614,7 +615,13 @@ def load(
     if resolved:
         from peft import PeftModel
 
+        # Merged by default: the forward is launch-bound (ADR-023), so the per-layer
+        # lora_A/lora_B matmuls cost launches rather than arithmetic, and graph
+        # capture needs the weights fixed. `merge_adapter=False` keeps the adapter
+        # separate, which is what lets its scale be swept without retraining.
         model = PeftModel.from_pretrained(model, str(resolved))
+        if merge_adapter:
+            model = model.merge_and_unload()
         head = _load_head(resolved / MODE_B_HEAD, model)
     model = model.eval()
 
