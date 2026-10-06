@@ -462,6 +462,62 @@ def check_release(name: str = "4b") -> dict:
     return {"health": health, "response": served}
 
 
+@app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=2 * 60 * 60)
+def diagnose_ordinal(
+    name: str = "lev",
+    scales: str = "0,0.25,0.5,0.75,1.0",
+    subsets: str = "summeval-consistency,summeval-relevance,helpsteer2",
+) -> dict:
+    """Score the rating subsets at several adapter scales, keeping the adapter unmerged.
+
+    summeval-consistency is 0.271 against the frozen backbone's 0.826, so the
+    regression may be recoverable by scaling the adapter rather than retraining
+    (WiSE-FT, arXiv 2109.01903, which for a LoRA is just the adapter scale).
+    Scale 0 must reproduce the frozen backbone; that is the run's own control.
+    Also reports the argmax histogram, which levbench aggregates away.
+    """
+    import collections
+    import json
+
+    from lev import load
+    from lev.data.s1bench import load_eval_subset
+    from peft.tuners.lora import LoraLayer
+
+    engine = load(f"{RELEASES_DIR}/{name}", cache_dir=MODELS_DIR, merge_adapter=False)
+    layers = [m for m in engine.model.modules() if isinstance(m, LoraLayer)]
+    if not layers:
+        raise RuntimeError("no LoraLayer found; the adapter was merged or never applied")
+    adapters = sorted({a for m in layers for a in m.scaling})
+    print(f"{len(layers)} lora layers, adapters {adapters}")
+
+    data = {s: load_eval_subset(s) for s in subsets.split(",")}
+    report: dict = {"layers": len(layers), "subsets": {}}
+    for scale in [float(x) for x in scales.split(",")]:
+        for m in layers:
+            for a in m.scaling:
+                m.set_scale(a, scale)
+        for subset, (question, items) in data.items():
+            hits = 0
+            picks: collections.Counter = collections.Counter()
+            for item in items:
+                answer = engine.system_one(item.state, {"decision": question}).answers["decision"]
+                probs = {int(k): float(v) for k, v in answer.probabilities.items()}
+                pick = max(probs, key=probs.get)
+                picks[pick] += 1
+                hits += pick == item.truth
+            row = report["subsets"].setdefault(subset, {})
+            row[f"{scale:g}"] = {
+                "accuracy": round(hits / len(items), 4),
+                "n": len(items),
+                "argmax": dict(sorted(picks.items())),
+            }
+            acc = hits / len(items)
+            print(f"  scale {scale:<5g} {subset:22} {acc:.4f}  {dict(sorted(picks.items()))}")
+
+    print(json.dumps(report, indent=2))
+    return report
+
+
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=30 * 60)
 def diagnose_candidates(model_id: str = "Qwen/Qwen3.5-4B-Base") -> dict:
     """Compare candidate representations alone, batched, reversed and left-padded.
