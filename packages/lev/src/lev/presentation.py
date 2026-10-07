@@ -1,37 +1,15 @@
-"""Presentation checks: does an answer move with where an option is shown?
+"""Label-free checks for option-position bias and packing consistency (ADR-029).
 
-The design of NandhaKishorM/laya#259, over `system_one` (ADR-029). Per question type
-(Score and Choice), on any list of states, with no labels:
-
-- **identical**: the position bias of one read, before any order averaging. Every
-  option carries the same text, so options differ only by position and code. Metric:
-  slot 0's log-probability minus the mean over the slots, averaged over states and
-  configurations; 0 is no position effect. It is read with `order_average=False`,
-  because averaged orders cancel it by construction (cyclic) or hide the middle slots
-  (reversed): it measures the bias averaging has to remove, not what is left after it.
-  Choice keys must be unique, so they are shapes with no order (`KEYS`), and every
-  assignment of keys to slots is read, so a key's own pull cancels.
-- **first_slot**: three real options in all 3! = 6 orders per state, read as the engine
-  is configured. An order-free readout picks slot 0 in exactly 1/3 of the decisions; a
-  tie gives each of its m slots 1/m. `consistent` is the share of states whose six orders
-  all give one answer. In the chat style a Score line names its level by its place in
-  the request (`(level i of K)`), so a permuted listing renumbers the levels too.
-- **packed**: the largest probability difference between the probe's answers and each
-  question asked alone, so what is measured is the presentation and not the packing.
-
-Probabilities are whatever `system_one` returns: calibrated, unless the engine carries
-an empty `CalibrationProfile`. Within one question, calibrated log-probabilities are the
-raw scores divided by the bucket's temperature, so the identical metric shrinks by 1/T
-and the first-slot rate does not change. The proposed gate, -0.20, is Laya's, set on
-raw scores.
-"""
+Identical-option probes use one order; real-option probes use configured averaging.
+Scores use returned probabilities: calibration scales the identical metric by 1/T.
+The -0.20 gate comes from Laya's raw-score checks (NandhaKishorM/laya#259)."""
 
 from __future__ import annotations
 
 import itertools
 import json
 import math
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from typing import Any
@@ -41,7 +19,7 @@ IDENTICAL_KS = (3, 4, 5)
 KEYS = ("■", "●", "◆", "▲", "◎")
 SLOT0_MIN = -0.20
 FIRST_SLOT_MIN = 0.15
-# Batch rows per probe call: a full bench_en run peaked at 22.5 GiB reserved on a 32 GB card.
+# Limit probe rows to bound GPU memory use.
 MAX_ROWS = 32
 
 # en follows Laya's presentation_checks.py; ja the same wording in Japanese.
@@ -80,7 +58,7 @@ TEXT: dict[str, dict[str, Any]] = {
     },
 }
 
-# Settings a report records. The first group is known before the model loads.
+# Check pre-load settings before spending time loading weights.
 PRE_LOAD = ("n_states", "lang", "raw", "kinds", "score_order_average", "max_rows")
 POST_LOAD = ("checkpoint_revision", "dtype")
 SETTINGS = PRE_LOAD + POST_LOAD
@@ -101,8 +79,7 @@ def identical_questions(kind: str, text: str, k: int, instructions: str) -> dict
 
 
 def probe_questions(lang: str = "en", kinds: Sequence[str] = KINDS) -> dict[str, dict]:
-    """Every probe question for one state, keyed `kind|identical|text|k|keys` or
-    `kind|perm|012`."""
+    """Build identical-option and permutation probes with structured question ids."""
     questions: dict[str, dict] = {}
     for kind in kinds:
         spec = TEXT[lang][kind]
@@ -127,7 +104,7 @@ def is_identical(qid: str) -> bool:
 
 
 @contextmanager
-def configured(engine, **changes) -> Iterator[None]:
+def configured(engine, **changes) -> Generator[None, None, None]:
     """Run the block with `engine.config` changed as given, then restore it."""
     config = engine.config
     engine.config = replace(config, **changes)
@@ -138,13 +115,11 @@ def configured(engine, **changes) -> Iterator[None]:
 
 
 def single_order(engine):
-    """Read every question once, in the order given."""
     return configured(engine, order_average=False)
 
 
 def call_groups(engine, questions: dict[str, dict], max_rows: int) -> list[dict[str, dict]]:
-    """`questions` split into `system_one` calls of at most `max_rows` batch rows, as the
-    engine counts them under its current config."""
+    """Group questions into calls within the engine's rendered-row budget."""
     rows = engine.question_rows(questions)
     groups: list[dict[str, dict]] = []
     current: dict[str, dict] = {}
@@ -167,8 +142,7 @@ def ask(
     kinds: Sequence[str] = KINDS,
     max_rows: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Every probe answer for every state: the identical questions in one order, the
-    permuted ones as the engine is configured. Calls hold at most `max_rows` batch rows."""
+    """Run single-order identical probes and configured permutation probes within max_rows."""
     max_rows = max_rows or MAX_ROWS
     questions = probe_questions(lang, kinds)
     identical = {q: v for q, v in questions.items() if is_identical(q)}
@@ -182,8 +156,7 @@ def ask(
         with single_order(engine):
             for group in identical_groups:
                 got.update(engine.system_one(state, group).answers)
-        # The probe sizes its own calls; the serving limit would refuse its averaged
-        # calls on long states.
+        # Probes enforce their own row budget instead of the serving token limit.
         with configured(engine, max_batch_tokens=None):
             for group in permuted_groups:
                 got.update(engine.system_one(state, group).answers)
@@ -282,8 +255,7 @@ def packed_consistency(
     lang: str = "en",
     kinds: Sequence[str] = KINDS,
 ) -> float:
-    """Largest |p| difference between `ask`'s answers for `states` and each question asked
-    alone, under the same order setting."""
+    """Return the largest probability difference between packed and individual probes."""
     questions = probe_questions(lang, kinds)
     worst = 0.0
     for state, packed in zip(states, answers, strict=False):
@@ -302,8 +274,6 @@ def packed_consistency(
 
 
 def settings_mismatch(saved: dict, run: dict, keys: Sequence[str] = SETTINGS) -> list[str]:
-    """Every setting among `keys` that `saved` recorded and this run does not share, as
-    `<name> (report: X, run: Y)`. A setting the report never recorded is not checked."""
     return [
         f"{key} (report: {saved[key]!r}, run: {run.get(key)!r})"
         for key in keys
@@ -343,6 +313,5 @@ def to_markdown(report: dict) -> str:
 
 
 def read_states(path: str) -> list[Any]:
-    """`state` from each line of a JSONL file (bench_en.jsonl, bench_ja.jsonl or your own)."""
     with open(path, encoding="utf-8") as fh:
         return [json.loads(line)["state"] for line in fh if line.strip()]

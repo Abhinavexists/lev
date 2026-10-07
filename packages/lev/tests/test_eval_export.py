@@ -1,4 +1,4 @@
-"""The lev -> levbench handoff: a file, because levbench must not import lev."""
+"""Test the task-file contract between lev and levbench."""
 
 from __future__ import annotations
 
@@ -36,8 +36,7 @@ NOUL = Noul(instructions="is it urgent?")
 
 class TestRoundTrip:
     def test_same_options_in_a_different_order_are_different_questions(self, tmp_path):
-        """A question cache keyed on sorted payloads moved shuffled rows' targets onto wrong
-        options (ADR-024)."""
+        """Sorting cache keys changes what positional targets refer to (ADR-024)."""
         forward = Choice(instructions="q", criteria={"a": None, "b": None, "c": None})
         backward = Choice(instructions="q", criteria={"c": None, "b": None, "a": None})
         rows = [an_example(forward, target=0, state="x"), an_example(backward, target=0, state="y")]
@@ -45,13 +44,14 @@ class TestRoundTrip:
         write_jsonl(path, rows)
 
         back = read_jsonl(path)
+        assert isinstance(back[0].question, Choice)
+        assert isinstance(back[1].question, Choice)
         assert list(back[0].question.criteria)[back[0].target] == "a"
         assert list(back[1].question.criteria)[back[1].target] == "c"
         assert back[0].question is not back[1].question
 
     def test_round_trip_guard_catches_an_order_blind_reader(self, tmp_path, monkeypatch):
-        """Re-introduce the ADR-024 bug -- a question cache keyed on sorted
-        payloads -- and the build-time guard must refuse the file and name the row."""
+        """Inject an order-blind cache and require the guard to reject it."""
         import lev.data.build as build
         from lev.data.build import verify_round_trip
 
@@ -108,7 +108,6 @@ class TestTruthShapes:
         assert truth_for(SCORE, 2) == 2
 
     def test_noul_truth_collapses_the_rating_the_way_the_readout_will(self):
-        """Stored as a rating 0-8, compared as a bool. Both ends must map."""
         assert truth_for(NOUL, 8) is True
         assert truth_for(NOUL, 0) is False
 
@@ -126,7 +125,6 @@ class TestExport:
         assert json.loads((out / "index.json").read_text())["total_items"] == 160
 
     def test_levbench_can_read_what_was_written(self, tmp_path):
-        """The actual contract. levbench never imports lev; this file is the seam."""
         pytest.importorskip("levbench")
         from levbench.tasks import load_task_file
 
@@ -141,7 +139,6 @@ class TestExport:
         assert items[0].labels["a"] in questions["a"].criteria
 
     def test_abstain_rows_are_excluded(self, tmp_path):
-        """Scoring them measures abstention, not accuracy."""
         rows = [example(CHOICE, i % 2, i, source="a") for i in range(MIN_USEFUL_ITEMS + 10)]
         rows += [example(CHOICE, 0, 999, source="a", abstain=True) for _ in range(20)]
         out = tmp_path / "eval"
@@ -149,7 +146,6 @@ class TestExport:
         assert index["total_items"] == MIN_USEFUL_ITEMS + 10
 
     def test_an_eval_too_small_to_measure_anything_raises(self, tmp_path):
-        """At n=24 the interval is +/-16 points. That is not a measurement."""
         rows = [example(CHOICE, i % 2, i, source="a") for i in range(24)]
         with pytest.raises(ValueError, match="cannot tell you"):
             export(write_test_split(tmp_path / "mix", rows), tmp_path / "eval")
@@ -157,8 +153,7 @@ class TestExport:
 
 class TestVariableQuestions:
     def test_sources_whose_question_varies_per_row_are_skipped_and_listed(self, tmp_path):
-        """A task file has one question for all its items, so per-row options must not be
-        silently written under the first row's option set."""
+        """One task file cannot represent different option sets per row."""
         rows = [example(CHOICE, i % 2, i, source="a") for i in range(MIN_USEFUL_ITEMS + 10)]
         rows += [
             example(

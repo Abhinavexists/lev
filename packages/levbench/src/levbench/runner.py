@@ -1,21 +1,18 @@
-"""Backend-agnostic evaluation runner.
-
-Every backend exposes the same `system_one(state, questions)` call and answer
-types, so the benchmark is written once and only the client changes.
-"""
+"""Evaluate backends through the shared system_one interface."""
 
 from __future__ import annotations
 
 import os
 import statistics
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 from dotenv import load_dotenv
 
 from . import metrics, pricing
-from .tasks import Item
+from .tasks import FileItem, Item
 
 load_dotenv()
 
@@ -27,8 +24,7 @@ class CallResult:
     served_by: str
     input_tokens: int
     output_tokens: int
-    # Adapter-only retries (schema-invalid LLM output, transient provider errors);
-    # always 0 on the TypeSafe SDK, where schema conformance is structural.
+    # Adapter retries; the TypeSafe SDK reports zero.
     schema_retries: int = 0
     transient_retries: int = 0
 
@@ -85,11 +81,7 @@ def build_client(
     base_url: str | None = None,
     timeout: float | None = None,
 ):
-    """Return `(client, model_name)` for jev, lev or anthropic.
-
-    Jev and lev share the TypeSafe protocol. lev defaults to localhost, needs no
-    credential and uses self-hosted pricing. Anthropic uses the LLM adapter.
-    """
+    """Build a Jev, local lev, or Anthropic client and return its model name."""
     if backend in ("jev", "lev"):
         if backend == "lev":
             base_url = base_url or DEFAULT_LOCAL_BASE_URL
@@ -103,8 +95,7 @@ def build_client(
             kwargs["timeout"] = DEFAULT_LOCAL_TIMEOUT
         if base_url:
             kwargs["base_url"] = base_url
-            # Never forward the hosted API key to a custom endpoint. Empty local
-            # keys also fall back, since an empty Bearer header is invalid.
+            # Use local credentials for custom endpoints; empty keys produce invalid Bearer headers.
             kwargs["api_key"] = os.environ.get("LEVBENCH_LOCAL_API_KEY") or "local"
         return TypeSafeClient(**kwargs), resolved
 
@@ -126,8 +117,7 @@ def build_client(
 
 
 def _token_count(usage: Any, total_field: str, base_field: str) -> int:
-    """Prefer the adapter's `*_total` (it includes billed retries) over the SDK's base
-    field; a genuine 0 counts, but an absent count raises rather than booking it free."""
+    """Prefer billed retry totals; accept zero counts and reject missing counts."""
     for field_name in (total_field, base_field):
         value = getattr(usage, field_name, None)
         if value is not None:
@@ -167,12 +157,11 @@ def run_eval(
     client,
     backend: str,
     model: str,
-    items: list[Item],
+    items: Sequence[Item | FileItem],
     questions: dict[str, Any],
     concurrency: int = 1,
 ) -> EvalReport:
-    """Score every item, with up to `concurrency` requests in flight and results in
-    item order; concurrency lowers wall time, not the per-call latency reported."""
+    """Evaluate concurrently, returning results in item order and per-call latencies."""
     from concurrent.futures import ThreadPoolExecutor
 
     report = EvalReport(backend=backend, model=model)
@@ -188,14 +177,16 @@ def run_eval(
 
     for item, result in zip(items, results, strict=True):
         report.calls.append(result)
+        labels = item.labels
         for name, answer in result.answers.items():
-            truth = item.labels[name]
+            truth = labels[name]
+            distribution = metrics.to_distribution(answer)
             records[name].append(
                 (
-                    metrics.to_distribution(answer),
+                    distribution,
                     metrics.predicted_label(answer),
                     truth,
-                    metrics.top_probability(answer),
+                    max(distribution.values()),
                 )
             )
 
@@ -225,8 +216,7 @@ def _format_summary(report: EvalReport) -> list[str]:
     if n:
         lines.append(f"latency p50        {report.pct(0.5):.3f}s")
         lines.append(f"latency mean       {statistics.mean(report.latencies):.3f}s")
-        # Under 100 calls the p95 falls among the few slowest calls, which are
-        # mostly connection setup; report the slowest call instead.
+        # Report the maximum for small samples, where p95 is dominated by connection setup.
         if n >= 100:
             lines.append(f"latency p95        {report.pct(0.95):.3f}s")
         else:

@@ -66,8 +66,7 @@ class TestLabelCodes:
             label_codes(100_000)
 
     def test_single_token_check_uses_the_space_prefix(self, rich_tokenizer):
-        # The scored token follows "Answer:", so it is space-prefixed. Verifying
-        # the bare code would pass while the real token differs.
+        # Verify space-prefixed codes at the actual answer boundary.
         assert single_token_codes(rich_tokenizer, 5) == ["A", "B", "C", "D", "E"]
         assert single_token_codes(rich_tokenizer, 5, prefix="") is None
 
@@ -95,7 +94,6 @@ class TestRouter:
         assert r.codes == ["A", "B", "C"]
 
     def test_falls_through_to_mode_b_instead_of_rejecting(self, poor_tokenizer):
-        """The differentiator: where other implementations reject, lev routes."""
         q = Choice(criteria={k: None for k in "abcdefgh"})
         r = route(q, poor_tokenizer)
         assert r.mode is Mode.CANDIDATE_PATH
@@ -110,11 +108,13 @@ class TestRouter:
     def test_noul_routes_on_the_rating_scale(self, rich_tokenizer):
         r = route(Noul(instructions="urgent?"), rich_tokenizer)
         assert r.mode is Mode.LABEL_TOKEN
+        assert r.codes is not None
         assert len(r.codes) == len(NOUL_RATING_TOKENS)
 
     def test_score_routes_on_level_count(self, rich_tokenizer):
         r = route(Score(criteria=["low", "mid", "high"]), rich_tokenizer)
-        assert r.mode is Mode.LABEL_TOKEN and len(r.codes) == 3
+        assert r.mode is Mode.LABEL_TOKEN
+        assert r.codes is not None and len(r.codes) == 3
 
     def test_route_all_is_per_question(self, poor_tokenizer):
         routes = route_all(
@@ -179,8 +179,6 @@ class TestSchemaValidation:
 
 class TestOptionCap:
     def test_generous_tokenizer_still_routes_above_the_cap_to_mode_b(self):
-        """An explicit `max_label_options` forces Mode B even when the tokenizer
-        can express every code (Qwen3.5 encodes codes up to `BP` as one token)."""
         generous = two_letter_tokenizer()
         sixty = Choice(criteria={f"o{i}": None for i in range(60)})
         assert single_token_codes(generous, 60) is not None, "fixture must be generous"
@@ -200,6 +198,7 @@ class TestBinaryNoul:
 
     def test_default_route_is_still_the_rating_scale(self, rich_tokenizer):
         r = route(Noul(instructions="safe?"), rich_tokenizer)
+        assert r.codes is not None
         assert len(r.codes) == len(NOUL_RATING_TOKENS)
 
     def test_binary_render_lists_yes_then_no(self):
@@ -232,8 +231,6 @@ class TestOrderAveraging:
         assert merged == pytest.approx([0.7, 0.2, 0.1])
 
     def test_average_cancels_a_first_position_bias(self):
-        """A first-position bonus lands on different candidates in the two orders, so averaging
-        spreads it back out."""
         biased_forward = [0.6, 0.2, 0.2]  # candidate 0 first, gets the bonus
         biased_backward = [0.6, 0.2, 0.2]  # candidate 2 first, gets the bonus
         merged = average_orders([biased_forward, biased_backward], [None, [2, 1, 0]])
@@ -271,8 +268,7 @@ class TestWhichQuestionsGetTwoOrders:
         ]
 
     def test_score_keeps_its_level_order(self, rich_tokenizer):
-        """Levels run low to high and training never reorders them; a reversed
-        scale is a prompt the model has not seen (helpsteer2: -2.4 points)."""
+        """Training presents ordered levels from low to high."""
         assert self.orders(Score(criteria=["low", "mid", "high"]), rich_tokenizer) == [None]
 
     def test_rating_noul_keeps_its_scale(self, rich_tokenizer):
@@ -349,8 +345,7 @@ class TestChatStyle:
         assert label_prefix(Style.PLAIN) == " " and label_prefix(Style.CHAT) == ""
         q = Choice(criteria={"a": None, "b": None, "c": None})
         assert route(q, chat_tokenizer, label_prefix="").codes == ["A", "B", "C"]
-        # A tokenizer with only space-prefixed letters cannot express bare codes:
-        # the chat style falls through to Mode B there rather than misreading.
+        # Plain-only label tokens must fall back to Mode B for chat prompts.
         assert route(q, rich_tokenizer, label_prefix="").mode is Mode.CANDIDATE_PATH
 
     def test_plain_style_is_unchanged(self):
@@ -369,6 +364,7 @@ class TestSkipMultiTokenCodes:
     def test_skipping_passes_over_split_codes_and_keeps_the_order(self):
         tok = two_letter_tokenizer(missing="BQ")
         codes = single_token_codes(tok, 77, skip_multi_token=True)
+        assert codes is not None
         assert len(codes) == 77 and "BQ" not in codes and len(set(codes)) == 77
         assert codes[:68] == single_token_codes(tok, 68), "codes below the split are unchanged"
         assert codes[68] == "BR"
@@ -385,11 +381,16 @@ class TestSkipMultiTokenCodes:
 
 class TestRoutePreviewMatchesServing:
     def preview(self, tokenizer, request, tmp_path, monkeypatch, capsys) -> str:
-        """Run `lev route` on `request`, with `tokenizer` standing in for the Hub's."""
+        """Run the route CLI with an injected tokenizer."""
         from lev.cli import main
 
         stub = types.ModuleType("transformers")
-        stub.AutoTokenizer = types.SimpleNamespace(from_pretrained=lambda *_a, **_k: tokenizer)
+        monkeypatch.setattr(
+            stub,
+            "AutoTokenizer",
+            types.SimpleNamespace(from_pretrained=lambda *_a, **_k: tokenizer),
+            raising=False,
+        )
         monkeypatch.setitem(sys.modules, "transformers", stub)
         path = tmp_path / "request.json"
         path.write_text(json.dumps(request))
@@ -398,8 +399,6 @@ class TestRoutePreviewMatchesServing:
         return capsys.readouterr().out
 
     def test_lev_route_previews_the_mode_the_server_uses(self, tmp_path, monkeypatch, capsys):
-        """A 60-option Choice is Mode A when served, since the tokenizer can
-        express 60 codes, so the preview must say Mode A too."""
         request = {
             "state": "turn the lights off",
             "questions": {
@@ -420,31 +419,27 @@ class TestRoutePreviewMatchesServing:
 
 
 class TestSystemOneAcceptsPlainDicts:
-    """`lev.load` hands users an engine; they pass questions as JSON-shaped dicts."""
-
     def engine(self, tokenizer, **config):
         from lev.model import DecisionEngine, EngineConfig
 
         return DecisionEngine(model=None, tokenizer=tokenizer, config=EngineConfig(**config))
 
     def test_a_dict_question_is_parsed_and_routed(self, rich_tokenizer):
-        # Capped at two label options with no head loaded, a three-option Choice
-        # needs Mode B, so routing refuses before any forward pass is attempted.
+        # Require a Mode B head when the label cap excludes this question.
         engine = self.engine(rich_tokenizer, max_label_options=2)
         questions = {"pick": {"type": "choice", "criteria": {"a": None, "b": None, "c": None}}}
         with pytest.raises(RuntimeError, match="need Mode B"):
             engine.system_one("state", questions)
 
     def test_a_malformed_dict_is_a_value_error(self, rich_tokenizer):
-        """ValueError is what the server turns into a 422."""
+        """The server maps ValueError to HTTP 422."""
         engine = self.engine(rich_tokenizer)
         with pytest.raises(ValueError, match="at least 2 options"):
             engine.system_one("state", {"pick": {"type": "choice", "criteria": {"a": None}}})
 
 
 class TestTokenizerIsUsedOneCallAtATime:
-    """A fast tokenizer keeps padding and truncation as state on one shared Rust object, so
-    overlapping calls raise "Already borrowed" or encode with another call's truncation."""
+    """Concurrent access to a fast tokenizer can corrupt settings or raise Already borrowed."""
 
     class OverlapDetector:
         def __init__(self, inner):

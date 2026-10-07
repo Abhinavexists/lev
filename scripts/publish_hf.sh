@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Package and check the 4b-instruct release on Modal, pull it, add the hf/ model card
-# and upload it to a private Hugging Face repo.
+
+# Package, validate, pull, and publish the 4b-instruct release to Hugging Face.
 #
-#   scripts/publish_hf.sh                          # interfaze-ai/lev
-#   REPO=interfaze-ai/other scripts/publish_hf.sh  # another repo
-#   DRY_RUN=1 scripts/publish_hf.sh                # everything but the upload
+# scripts/publish_hf.sh                          # interfaze-ai/lev
+# REPO=interfaze-ai/other scripts/publish_hf.sh  # custom repo
+# DRY_RUN=1 scripts/publish_hf.sh                # skip upload
+
 set -euo pipefail
 
 PRESET="${PRESET:-4b-instruct}"
@@ -14,7 +15,7 @@ REPO="${REPO:-interfaze-ai/lev}"
 cd "$(dirname "$0")/.."
 release="weights/$NAME"
 
-# A token in .env (HF_TOKEN=...) wins over the one `hf auth login` stored.
+# Prefer HF_TOKEN from .env over `hf auth login`.
 if [[ -f .env ]] && grep -q '^HF_TOKEN=' .env; then
   set -a
   # shellcheck source=/dev/null
@@ -22,20 +23,23 @@ if [[ -f .env ]] && grep -q '^HF_TOKEN=' .env; then
   set +a
 fi
 
-hf auth whoami >/dev/null || { echo "not logged in to the Hub: run 'hf auth login'" >&2; exit 1; }
+hf auth whoami >/dev/null || {
+  echo "not logged in to the Hub: run 'hf auth login'" >&2
+  exit 1
+}
 
 modal run modal/app.py::export_checkpoint --preset "$PRESET" --name "$NAME"
-# Load the release as a user will before anything is pulled or published.
 modal run modal/app.py::check_release --name "$NAME"
-# The target must be an existing directory: given a missing path, `volume get`
-# writes every file of the release onto that one path.
+
 mkdir -p weights
 modal volume get --force lev-checkpoints "releases/$NAME" weights/
+
 cp hf/README.md "$release/README.md"
 cp -R hf/assets "$release/"
 
 echo "release ready in $release:"
 ls -la "$release"
+
 if [[ -n "${DRY_RUN:-}" ]]; then
   echo "DRY_RUN set: not uploading to $REPO"
   exit 0

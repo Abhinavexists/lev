@@ -1,12 +1,9 @@
-"""FastAPI endpoints for typed decisions and model health.
-
-Status codes: 422 malformed, 529 still loading, 503 past `max_pending` in flight
-or worker stopped, 504 queued past `timeout`.
-"""
+"""Serve typed decisions and health; return 422, 529, 503, or 504 for request failures."""
 
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from typing import Any, Literal
 
 # Module level: FastAPI resolves the endpoint's string annotations here.
@@ -37,11 +34,10 @@ def create_app(
 
     from . import __version__
 
-    app = FastAPI(title="lev", version=__version__)
     state: dict[str, Any] = {"engine": None, "batcher": None}
 
-    @app.on_event("startup")
-    def _load() -> None:
+    @asynccontextmanager
+    async def lifespan(app):
         engine = load(
             checkpoint_dir,
             model_id=model_id,
@@ -59,6 +55,9 @@ def create_app(
             engine, max_pending=max_pending, max_batch_tokens=max_batch_tokens, timeout=timeout
         )
         state["engine"] = engine
+        yield
+
+    app = FastAPI(title="lev", version=__version__, lifespan=lifespan)
 
     # Async, so a saturated thread pool cannot starve it.
     @app.get("/health")
@@ -112,8 +111,7 @@ def create_app(
 
 
 async def _disconnected(request: Request) -> None:
-    """Return when the client hangs up. With the body read, the next ASGI message is
-    the disconnect; any other means none is reported, so wait forever, not spin."""
+    """Wait for an ASGI disconnect; if none is reported, wait without polling."""
     if (await request.receive())["type"] == "http.disconnect":
         return
     await asyncio.Event().wait()

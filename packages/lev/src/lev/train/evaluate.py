@@ -1,5 +1,4 @@
-"""Evaluate checkpoints through the training forward path, per source, before and after
-fitted temperatures."""
+"""Evaluate checkpoints per source before and after temperature scaling."""
 
 from __future__ import annotations
 
@@ -100,30 +99,18 @@ def evaluate_split(
     limit_per_source: int | None = None,
     batch_size: int = 16,
 ) -> tuple[EvalReport, EvalReport]:
-    """Return (uncalibrated, calibrated) reports over `split`.
-
-    Both come from one forward pass, with the temperature applied to stored raw
-    logits, so any difference is the temperature alone.
-    """
-    import torch
+    """Return raw and calibrated reports from the same stored logits."""
 
     from ..data.build import load_split
     from ..data.splits import Split
-    from ..prompt import Style
-    from .checkpoints import load_checkpoint, resolve_checkpoint
-    from .collate import DecisionCollator, ModeBatcher, RouteCache
+    from .checkpoints import resolve_checkpoint
     from .config import PRESETS
-    from .loop import build_head, build_model, candidate_logits, device_of, to_device
+    from .loop import load_for_eval, scored_rows
 
     config = config or PRESETS["4b"]
     profile = profile or CalibrationProfile()
 
-    model, tokenizer = build_model(config, None)
-    head = build_head(config, model) if config.train_mode_b_head else None
-    load_checkpoint(model, head, checkpoint_dir)
-    model.eval()
-    if head is not None:
-        head.eval()
+    model, tokenizer, head = load_for_eval(config, checkpoint_dir)
 
     rows = [row for row in load_split(data_dir, Split(split)) if not row.abstain]
     if limit_per_source:
@@ -136,29 +123,18 @@ def evaluate_split(
                 kept.append(row)
         rows = kept
 
-    routes = RouteCache(tokenizer, config.max_label_options, Style(config.prompt_style))
-    collator = DecisionCollator(tokenizer, max_seq_len=config.max_seq_len, routes=routes)
     # Bucketed like training: each row is scored once whatever the order.
-    batcher = ModeBatcher(
-        tokenizer, batch_size=batch_size, bucket_window=config.bucket_window, routes=routes
-    )
-    device = device_of(model)
-
     collected: dict[tuple[str, str, str, int], list[tuple[list[float], int]]] = {}
-    with torch.no_grad():
-        for group in batcher(rows):
-            batch = to_device(collator(group), device)
-            logits = candidate_logits(model, batch, head)
-            for i, example in enumerate(group):
-                width = int((~batch.candidate_mask[i]).sum())
-                key = (example.source, example.question.type, batch.mode.value, width)
-                collected.setdefault(key, []).append((logits[i, :width].tolist(), example.target))
+    for example, logits, mode, width in scored_rows(
+        model, tokenizer, head, config, rows, batch_size, bucket_window=config.bucket_window
+    ):
+        key = (example.source, example.question.type, mode, width)
+        collected.setdefault(key, []).append((logits, example.target))
 
     resolved = str(resolve_checkpoint(checkpoint_dir))
     plain = EvalReport(split=split, checkpoint=resolved, calibrated=False)
     tuned = EvalReport(split=split, checkpoint=resolved, calibrated=bool(profile.temperatures))
-    # A source's rows may differ in option count, which sets the temperature, so
-    # each group is scored at its own temperature and then reported per source.
+    # Apply option-count temperatures per group before aggregating by source.
     per_source: dict[tuple[str, str, str], list[tuple[list[float], int, float]]] = {}
     for (source, qtype, mode, width), samples in collected.items():
         t = profile.temperature(qtype, mode, width)

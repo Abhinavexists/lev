@@ -1,14 +1,10 @@
-"""Built-in smoke fixture and file-backed benchmark tasks.
-
-The 24 support tickets below are too few to measure training improvements.
-Use held-out task files for benchmarks. Each JSON file has `questions` and
-`items`; each item has a `state` and `labels` keyed by question name.
-"""
+"""Smoke fixture and task-file loading; use held-out files to measure model improvements."""
 
 from __future__ import annotations
 
 import json
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -225,15 +221,14 @@ def load_task_file(path: str | Path) -> tuple[list[FileItem], dict[str, Any]]:
     return items, built
 
 
-def dataset(path: str | Path | None = None) -> tuple[list[Any], dict[str, Any]]:
+def dataset(path: str | Path | None = None) -> tuple[Sequence[Item | FileItem], dict[str, Any]]:
     if path is not None:
         return load_task_file(path)
     return ITEMS, questions()
 
 
 def detectable_difference(n: int, baseline: float = 0.8, z: float = 1.96) -> float:
-    """Roughly the smallest accuracy change `n` items can distinguish: the one-proportion
-    normal-approximation half-width (comparing two runs needs more; ADR-015)."""
+    """Estimate the accuracy margin (95% at default z); comparing runs needs more data."""
     if n <= 0:
         return 1.0
     return min(1.0, z * math.sqrt(baseline * (1 - baseline) / n))

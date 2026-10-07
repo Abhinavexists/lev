@@ -107,7 +107,7 @@ This is our plan's §14 ("encode the question, don't build per-question heads") 
 ### 3.6 Training objectives — from `NanoJev` and `decider`
 
 - NanoJev: CE / Brier / paired-proper-reward variants, with exact gradient checks.
-- decider: cross-entropy fine-tune with **random layout per example** and **abstain augmentation**; evaluation reports accuracy / NLL / Brier / ECE / AURC / selective accuracy per task; v10 adds **RL with a proper-score belief reward** — the open analogue of RLCD.
+- decider: cross-entropy fine-tune with **random layout per example** and **abstain augmentation**; evaluation reports accuracy / negative_log_likelihood / Brier / ECE / AURC / selective accuracy per task; v10 adds **RL with a proper-score belief reward** — the open analogue of RLCD.
 
 Supervised proper-scoring first, RL only after. That vindicates the plan's §17 ordering.
 
@@ -237,7 +237,7 @@ Three splits, not two. Temperature is fitted on a split disjoint from **both** t
 1. Train with a proper scoring rule (cross-entropy + Brier).
 2. **Abstain augmentation** (decider): examples where the answer is not determinable from the state, teaching the model to spread mass rather than guess confidently.
 3. Post-hoc temperature fit on the calibration split.
-4. Report accuracy, NLL, Brier and **ECE** per source, with and without the temperature.
+4. Report accuracy, negative_log_likelihood, Brier and **ECE** per source, with and without the temperature.
 
 Evidence this is worth the effort: the untuned Qwen3-8B (`qwen3-8b-full`) sits at **ECE 0.4252**; reflex, Qwen3.5-4B plus one fitted scalar, reaches **0.0849**. Jev is **0.0764**. **A single scalar is most of the gap.**
 

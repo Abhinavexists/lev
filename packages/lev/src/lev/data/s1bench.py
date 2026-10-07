@@ -1,9 +1,4 @@
-"""Export the 13 S1Bench subsets as levbench task files, for evaluation only.
-
-Must not import training data builders or produce an `Example` (checked by `test_s1bench.py`).
-Ids, questions and labels come from Nimble's pinned manifests in `s1bench_subsets/`;
-conversion details and the multinli metadata exception are in docs/FINDINGS.md §17.
-"""
+"""Export S1Bench evaluation data from pinned manifests; keep it outside training (FINDINGS §17)."""
 
 from __future__ import annotations
 
@@ -17,19 +12,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-if TYPE_CHECKING:  # `datasets` is heavy and only imported where it is used.
+if TYPE_CHECKING:
     from datasets import Dataset
 
 from ..types import Choice, Noul, Question, Score, question_payload
 from .contamination import assert_eval_only
 
 SUBSET_DIR = Path(__file__).with_name("s1bench_subsets")
-QUESTION_NAME = "decision"  # S1Bench asks every record one question under this name
+QUESTION_NAME = "decision"
 
 
 @dataclass(frozen=True)
 class EvalItem:
-    """One S1Bench record; `truth` is a Choice option string, Score level index or Noul bool."""
+    """An evaluation record with a Choice key, Score index, or Noul bool as truth."""
 
     id: str
     state: dict | str
@@ -38,11 +33,7 @@ class EvalItem:
 
 @dataclass(frozen=True)
 class EvalSubset:
-    """One S1Bench subset and Jev's score on it.
-
-    `jev_published` is Jev 1.13's figure; `jev_measured` is the board's `s1-fast` run in
-    `data/s1bench-snapshot.json`, which covered only six subsets.
-    """
+    """A subset with published Jev 1.13 and measured s1-fast scores."""
 
     name: str
     hf_id: str
@@ -100,14 +91,13 @@ def _download(repo: str, filename: str, revision: str | None = None) -> str:
 
 
 def _parquet(repo: str, filename: str, revision: str | None = None) -> Dataset:
-    from datasets import load_dataset  # heavy, and only needed to export
+    from datasets import load_dataset
 
-    # `split=` narrows load_dataset's return union to the one Dataset the annotation names.
     return load_dataset("parquet", data_files=_download(repo, filename, revision), split="train")
 
 
 def _rows(dataset: Dataset) -> Iterator[dict]:
-    # Upstream leaves `Dataset.__iter__` unannotated, so checkers reject column lookups.
+    # Upstream row iteration lacks type annotations.
     return cast("Iterator[dict]", iter(dataset))
 
 
@@ -264,11 +254,7 @@ _READERS: dict[str, Callable[[], Iterator[EvalItem]]] = {
 
 
 def load_eval_subset(name: str) -> tuple[Question, list[EvalItem]]:
-    """One S1Bench subset as its question plus exactly its records, sorted by id.
-
-    Raises `ContaminationError` for anything that is not S1Bench evaluation data,
-    and `ValueError` if the upstream data no longer yields the pinned ids and labels.
-    """
+    """Load a S1Bench subset, validating its records against pinned ids and labels."""
     subset = get_subset(name)
     spec = definition(subset.name)
     by_id = {item.id: item for item in _READERS[subset.name]()}

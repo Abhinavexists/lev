@@ -1,11 +1,11 @@
-"""Temperature scaling per question type, readout mode and Choice option band (ADR-028)."""
+"""Temperature scaling by question type, readout mode, and Choice option band (ADR-028)."""
 
 from __future__ import annotations
 
 import json
 import math
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -15,28 +15,34 @@ Logits = Sequence[float]
 def softmax(logits: Logits, temperature: float = 1.0) -> list[float]:
     if temperature <= 0:
         raise ValueError(f"temperature must be positive, got {temperature}")
+
     scaled = [x / temperature for x in logits]
     top = max(scaled)
     exps = [math.exp(x - top) for x in scaled]
     total = sum(exps)
+
     return [e / total for e in exps]
 
 
-def nll(
+def negative_log_likelihood(
     samples: Sequence[tuple[Logits, int]],
     temperature: float,
     weights: Sequence[float] | None = None,
 ) -> float:
-    """Mean (optionally weighted) negative log-likelihood of the true class."""
+
     if not samples:
         return 0.0
+
     total = 0.0
     weight_sum = 0.0
+
     for i, (logits, truth) in enumerate(samples):
-        w = 1.0 if weights is None else weights[i]
-        p = softmax(logits, temperature)[truth]
-        total -= w * math.log(max(p, 1e-15))
-        weight_sum += w
+        weight = 1.0 if weights is None else weights[i]
+        probability = softmax(logits, temperature)[truth]
+
+        total -= weight * math.log(max(probability, 1e-15))
+        weight_sum += weight
+
     return total / weight_sum
 
 
@@ -47,22 +53,29 @@ def fit_temperature(
     tol: float = 1e-4,
     weights: Sequence[float] | None = None,
 ) -> float:
-    """Minimise NLL over temperature by ternary search (NLL is unimodal in it).
 
-    Returns 1.0 when no temperature beats the identity, e.g. for all-equal logits.
-    """
     if not samples:
         return 1.0
+
     while hi - lo > tol:
         m1 = lo + (hi - lo) / 3
         m2 = hi - (hi - lo) / 3
-        if nll(samples, m1, weights) < nll(samples, m2, weights):
+
+        if negative_log_likelihood(samples, m1, weights) < negative_log_likelihood(
+            samples, m2, weights
+        ):
             hi = m2
         else:
             lo = m1
+
     fitted = (lo + hi) / 2
-    if nll(samples, fitted, weights) >= nll(samples, 1.0, weights) - 1e-12:
+
+    if (
+        negative_log_likelihood(samples, fitted, weights)
+        >= negative_log_likelihood(samples, 1.0, weights) - 1e-12
+    ):
         return 1.0
+
     return fitted
 
 
@@ -70,131 +83,182 @@ MIN_FAMILIES_FOR_TRANSFER = 3
 
 
 def family_weights(families: Sequence[str]) -> list[float]:
-    """Each family's rows share a total weight of 1."""
+    """Give each family equal total weight."""
+
     counts = Counter(families)
-    return [1.0 / counts[f] for f in families]
+    return [1.0 / counts[family] for family in families]
 
 
 def _fit(samples, families, method: str) -> float:
     return fit_temperature(
-        samples, weights=family_weights(families) if method == "family" else None
+        samples,
+        weights=family_weights(families) if method == "family" else None,
     )
 
 
 def leave_one_family_out_ece(
-    samples: Sequence[tuple[Logits, int]], families: Sequence[str], method: str
+    samples: Sequence[tuple[Logits, int]],
+    families: Sequence[str],
+    method: str,
 ) -> float:
-    """Mean over families of the ECE on that family, at the temperature `method`
-    fits on every other family. Families weigh equally, as a new task would."""
+    """Measure transfer ECE by holding out each family once."""
+
     eces = []
+
     for held_out in sorted(set(families)):
-        train = [(s, f) for s, f in zip(samples, families, strict=True) if f != held_out]
-        test = [s for s, f in zip(samples, families, strict=True) if f == held_out]
-        t = _fit([s for s, _ in train], [f for _, f in train], method)
-        probs = [softmax(logits, t) for logits, _ in test]
-        eces.append(expected_calibration_error(probs, [y for _, y in test]))
+        train = [
+            (sample, family)
+            for sample, family in zip(samples, families, strict=True)
+            if family != held_out
+        ]
+        test = [
+            sample for sample, family in zip(samples, families, strict=True) if family == held_out
+        ]
+
+        temperature = _fit(
+            [sample for sample, _ in train],
+            [family for _, family in train],
+            method,
+        )
+        probs = [softmax(logits, temperature) for logits, _ in test]
+        eces.append(expected_calibration_error(probs, [truth for _, truth in test]))
+
     return sum(eces) / len(eces)
 
 
 def fit_for_transfer(
-    buckets: dict[str, Sequence[tuple[Logits, int, str]]],
+    buckets: Mapping[str, Sequence[tuple[Logits, int, str]]],
     split_name: str,
     min_samples: int = 50,
 ) -> tuple[CalibrationProfile, dict[str, dict]]:
-    """Per bucket, keep whichever of the row and family fits transfers better.
+    """Choose the row- or family-weighted fit that transfers better per bucket."""
 
-    Buckets from fewer than `MIN_FAMILIES_FOR_TRANSFER` families keep the row fit.
-    Returns the profile and a per-bucket report of both fits and the choice.
-    """
     _refuse_held_out(split_name)
+
     profile = CalibrationProfile(fitted_on=f"{split_name} (transfer-selected)")
     report: dict[str, dict] = {}
+
     for bucket, rows in buckets.items():
         if len(rows) < min_samples:
             continue
-        samples = [(logits, y) for logits, y, _ in rows]
-        families = [f for _, _, f in rows]
-        entry: dict = {"n": len(rows), "families": len(set(families))}
+
+        samples = [(logits, truth) for logits, truth, _ in rows]
+        families = [family for _, _, family in rows]
+
+        entry: dict = {
+            "n": len(rows),
+            "families": len(set(families)),
+        }
         entry["t_rows"] = _fit(samples, families, "rows")
+
         if entry["families"] >= MIN_FAMILIES_FOR_TRANSFER:
             entry["t_family"] = _fit(samples, families, "family")
             entry["lofo_ece_rows"] = leave_one_family_out_ece(samples, families, "rows")
-            entry["lofo_ece_family"] = leave_one_family_out_ece(samples, families, "family")
+            entry["lofo_ece_family"] = leave_one_family_out_ece(
+                samples,
+                families,
+                "family",
+            )
             entry["chosen"] = (
                 "family" if entry["lofo_ece_family"] < entry["lofo_ece_rows"] else "rows"
             )
         else:
             entry["chosen"] = "rows"
+
         profile.temperatures[bucket] = entry[f"t_{entry['chosen']}"]
         profile.n_samples[bucket] = len(rows)
         report[bucket] = entry
+
     return profile, report
 
 
 def expected_calibration_error(
-    probs: Sequence[Sequence[float]], truths: Sequence[int], n_bins: int = 10
+    probs: Sequence[Sequence[float]],
+    truths: Sequence[int],
+    n_bins: int = 10,
 ) -> float:
-    """Sample-weighted mean absolute gap between top probability and accuracy."""
+
     if not probs:
         return 0.0
 
     bins: list[list[tuple[float, bool]]] = [[] for _ in range(n_bins)]
+
     for distribution, truth in zip(probs, truths, strict=True):
         confidence = max(distribution)
         predicted = max(range(len(distribution)), key=distribution.__getitem__)
-        # The top bin is closed: a confidence of exactly 1.0 would otherwise
-        # index one past the end.
-        bin_index = min(int(confidence * n_bins), n_bins - 1)
+
+        bin_index = min(int(confidence * n_bins), n_bins - 1)  # Keep 1.0 in the top bin.
         bins[bin_index].append((confidence, predicted == truth))
 
     total_weighted_gap = 0.0
+
     for members in bins:
         if not members:
             continue
-        mean_confidence = sum(c for c, _ in members) / len(members)
+
+        mean_confidence = sum(confidence for confidence, _ in members) / len(members)
         accuracy = sum(hit for _, hit in members) / len(members)
+
         total_weighted_gap += len(members) * abs(mean_confidence - accuracy)
+
     return total_weighted_gap / len(probs)
 
 
-# Softmax spreads mass differently as option count grows, so Choice fits use bands.
+# Choice calibration is banded because option count changes softmax behaviour.
 CHOICE_BANDS = ((8, "small"), (26, "mid"))
 
 
 def option_band(n_options: int | None) -> str | None:
     if n_options is None:
         return None
+
     for upper, name in CHOICE_BANDS:
         if n_options <= upper:
             return name
+
     return "large"
 
 
 @dataclass
 class CalibrationProfile:
-    """Fitted temperatures keyed by `"{question_type}:{mode}"`, and for Choice
-    by `"choice:{mode}:{band}"` as well."""
-
     temperatures: dict[str, float] = field(default_factory=dict)
     fitted_on: str = ""
     n_samples: dict[str, int] = field(default_factory=dict)
 
     @staticmethod
-    def key(question_type: str, mode: str, n_options: int | None = None) -> str:
+    def key(
+        question_type: str,
+        mode: str,
+        n_options: int | None = None,
+    ) -> str:
         band = option_band(n_options) if question_type == "choice" else None
         return f"{question_type}:{mode}" + (f":{band}" if band else "")
 
-    def temperature(self, question_type: str, mode: str, n_options: int | None = None) -> float:
-        # Banded, then unbanded (profiles fitted before bands), then 1.0: an
-        # unfitted bucket gets raw softmax rather than a borrowed scalar.
+    def temperature(
+        self,
+        question_type: str,
+        mode: str,
+        n_options: int | None = None,
+    ) -> float:
         banded = self.key(question_type, mode, n_options)
         plain = self.key(question_type, mode)
-        return self.temperatures.get(banded, self.temperatures.get(plain, 1.0))
+
+        return self.temperatures.get(
+            banded,
+            self.temperatures.get(plain, 1.0),
+        )
 
     def apply(
-        self, logits: Logits, question_type: str, mode: str, n_options: int | None = None
+        self,
+        logits: Logits,
+        question_type: str,
+        mode: str,
+        n_options: int | None = None,
     ) -> list[float]:
-        return softmax(logits, self.temperature(question_type, mode, n_options))
+        return softmax(
+            logits,
+            self.temperature(question_type, mode, n_options),
+        )
 
     def save(self, path: str | Path) -> None:
         Path(path).write_text(
@@ -211,6 +275,7 @@ class CalibrationProfile:
     @classmethod
     def load(cls, path: str | Path) -> CalibrationProfile:
         payload = json.loads(Path(path).read_text())
+
         return cls(
             temperatures=payload["temperatures"],
             fitted_on=payload.get("fitted_on", ""),
@@ -219,19 +284,22 @@ class CalibrationProfile:
 
 
 def fit(
-    buckets: dict[str, Sequence[tuple[Logits, int]]],
+    buckets: Mapping[str, Sequence[tuple[Logits, int]]],
     split_name: str,
     min_samples: int = 50,
 ) -> CalibrationProfile:
-    """Fit one temperature per bucket; reject test, eval and holdout splits."""
+    """Fit one temperature per sufficiently large bucket."""
+
     _refuse_held_out(split_name)
     profile = CalibrationProfile(fitted_on=split_name)
+
     for bucket, samples in buckets.items():
         if len(samples) < min_samples:
-            # Leave it unfitted (identity) rather than fit a scalar on noise.
             continue
+
         profile.temperatures[bucket] = fit_temperature(samples)
         profile.n_samples[bucket] = len(samples)
+
     return profile
 
 

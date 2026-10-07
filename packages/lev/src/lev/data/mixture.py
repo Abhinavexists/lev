@@ -1,12 +1,9 @@
-"""Sample typed training examples with layout, abstention and question variation.
-
-Loaders are injected so the mixture can be built and tested offline.
-"""
+"""Sample typed examples with layout, abstention, and question variation."""
 
 from __future__ import annotations
 
 import random
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from ..labels import NOUL_RATING_TOKENS
@@ -25,23 +22,18 @@ class Example:
     layout: Layout
     source: str
     abstain: bool = False
-    # Abstain examples only: no gold index, so the loss reads this uniform target
-    # instead of `target`.
+    # Abstain rows use a uniform soft target instead of a gold index.
     soft_target: list[float] | None = None
 
 
 @dataclass(frozen=True)
 class Augment:
-    """Per-source variation: train varies wording and options, calibration options only (ADR-026).
-
-    `negations` flip the Noul target so "yes" is not always "good"; `min_options` floors subsets.
-    """
+    """Per-source wording and option variation; negations flip Noul targets."""
 
     paraphrases: tuple[str, ...] = ()
     negations: tuple[str, ...] = ()
     min_options: int = 2
-    # Fraction of Choice rows exempt from subsampling; they may still be shuffled.
-    # For a large taxonomy this is the candidate-path head's training data.
+    # Keep full option sets on this share of rows to train the candidate head.
     keep_full_fraction: float = 0.0
 
 
@@ -52,8 +44,7 @@ class MixtureSpec:
     schema_first_fraction: float = 0.5
     abstain_fraction: float = 0.1
     seed: int = 17
-    # source -> sources whose states must not be used as abstain donors,
-    # because they would in fact answer the question. See `sources.ADJACENT`.
+    # Exclude sources that could still answer the question from abstain donors.
     adjacent: dict[str, frozenset[str]] = field(default_factory=dict)
     # Variation per source; empty means canonical questions (ADR-020).
     augment: dict[str, Augment] = field(default_factory=dict)
@@ -64,7 +55,6 @@ class MixtureSpec:
     description_dropout: float = 0.3
 
     def validate(self) -> None:
-        # Before any example loads: a contaminated run silently looks better.
         assert_clean(self.sources.keys())
         if not self.sources:
             raise ValueError("mixture has no sources")
@@ -76,12 +66,8 @@ class MixtureSpec:
 Loader = Callable[[], Iterable[Example]]
 
 
-def build_mixture(spec: MixtureSpec, loaders: dict[str, Loader]) -> Iterator[Example]:
-    """Yield `spec.n_examples`, respecting weights, layout split and abstain rate.
-
-    Raises `ContaminationError` for a blocked source, `KeyError` for one with no loader, and
-    `ValueError` for no sources, weights not summing to 1, or a source that yields nothing.
-    """
+def build_mixture(spec: MixtureSpec, loaders: Mapping[str, Loader]) -> Iterator[Example]:
+    """Sample examples from validated sources using the configured weights and augmentations."""
     spec.validate()
     missing = set(spec.sources) - set(loaders)
     if missing:
@@ -107,16 +93,14 @@ def build_mixture(spec: MixtureSpec, loaders: dict[str, Loader]) -> Iterator[Exa
         state = example.state
         question, target = example.question, example.target
         if (augment := spec.augment.get(source)) is not None:
-            # Negation flips the target, so it must not touch an abstain row,
-            # whose supervision is uniform regardless of polarity.
+            # Abstain supervision is uniform, so do not flip its target.
             question, target = _vary(
                 question, target, augment, spec, rng, allow_negation=not abstain
             )
 
         soft_target = None
         if abstain:
-            # Swap in an unrelated state and supervise a uniform distribution:
-            # with no evidence that is the calibrated answer (ADR-012).
+            # Pair unrelated evidence with uniform supervision (ADR-012).
             state = _donor_state(pools, source, spec.adjacent, rng)
             n_candidates = candidate_count(question)
             soft_target = [1.0 / n_candidates] * n_candidates
@@ -142,8 +126,7 @@ def _vary(
     rng: random.Random,
     allow_negation: bool,
 ) -> tuple[Question, int]:
-    # Preserves the gold answer: negation mirrors a Noul rating, subsampling keeps and
-    # re-indexes the gold option, and Score levels are never reordered.
+    # Preserve gold targets through negation and option subsets; never reorder Score levels.
     instructions = question.instructions
     can_negate = isinstance(question, Noul) and augment.negations and allow_negation
     if can_negate and rng.random() < spec.negate_fraction:
@@ -177,7 +160,7 @@ def _vary(
     return Choice(instructions=instructions, criteria=dict(options)), _index_of(options, gold[0])
 
 
-def _index_of(options: list[tuple[str, object]], key: str) -> int:
+def _index_of(options: Sequence[tuple[str, object]], key: str) -> int:
     for i, (k, _) in enumerate(options):
         if k == key:
             return i
@@ -190,8 +173,7 @@ def _donor_state(
     adjacent: dict[str, frozenset[str]],
     rng: random.Random,
 ) -> str | dict | list:
-    # Another source is not enough: a rotten_tomatoes state answers imdb's question, so
-    # `adjacent` sources are excluded too; the fallbacks let a narrow mixture still yield.
+    # Exclude adjacent sources when possible; fall back for narrow mixtures.
     excluded = {source} | set(adjacent.get(source, ()))
     eligible = (
         [name for name in pools if name not in excluded]

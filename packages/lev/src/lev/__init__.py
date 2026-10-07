@@ -1,8 +1,3 @@
-"""Typed, calibrated decisions without token generation.
-
-The core imports without Torch; loading a model requires the train extra.
-"""
-
 from .calibrate import CalibrationProfile
 from .model import DecisionEngine, load
 from .prompt import Layout

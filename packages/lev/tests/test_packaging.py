@@ -1,4 +1,4 @@
-"""Docs run commands from the repo root, so an extra defined only on a member is unreachable."""
+"""Test workspace extras and documented commands from the repository root."""
 
 from __future__ import annotations
 
@@ -58,8 +58,7 @@ def test_known_extras_are_present(expected):
 
 
 def _inspect_cli(tool: str) -> tuple[set[str], dict[str, set[str]]]:
-    """Introspects the real parser rather than regexing the source, so it checks what the
-    parser actually accepts."""
+    """Inspect the live parser to collect accepted commands and flags."""
     import argparse
     import importlib
 
@@ -117,8 +116,7 @@ CODE_SPANS = re.compile(r"```[a-z]*\n(.*?)```|`([^`\n]+)`", re.S)
 
 
 def _documented_commands(tool: str) -> dict[str, set[str]]:
-    """Only fenced blocks and inline backticks count; prose like "levbench must not import
-    lev" would otherwise match."""
+    """Extract commands from fenced blocks and inline code, excluding prose."""
     found: dict[str, set[str]] = {}
     sources = [ROOT / "README.md", ROOT / "Makefile", ROOT / "CONTRIBUTING.md"]
     sources += sorted((ROOT / "docs").glob("*.md"))
@@ -127,8 +125,7 @@ def _documented_commands(tool: str) -> dict[str, set[str]]:
         if not src.is_file():
             continue
         text = src.read_text()
-        # A Makefile is all code apart from its `## help text`, which is prose
-        # and mentions commands the way a sentence does.
+        # Exclude Makefile help comments from command extraction.
         code = (
             [re.sub(r"##.*", "", text)]
             if src.suffix != ".md"

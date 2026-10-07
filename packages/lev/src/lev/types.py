@@ -1,8 +1,4 @@
-"""TypeSafe-compatible request and response models for `/v1/systemone`.
-
-lev also exposes Noul rating probabilities and confidence. Clients that only
-read the shared `noul` probability can ignore these extra fields.
-"""
+"""TypeSafe-compatible models; lev adds optional Noul rating probabilities and confidence."""
 
 from __future__ import annotations
 
@@ -60,9 +56,7 @@ type Question = Annotated[Noul | Choice | Score, Field(discriminator="type")]
 
 
 def question_payload(question: Question) -> dict:
-    """The question as a levbench task file carries it. `criteria` is required on
-    a Choice and a Score and optional on a Noul, so an absent Noul criteria map
-    stays absent rather than round-tripping as an empty one."""
+    """Serialize a task question, preserving absent Noul criteria."""
     payload: dict = {"type": question.type, "instructions": question.instructions}
     if isinstance(question, Choice | Score) or question.criteria:
         payload["criteria"] = question.criteria

@@ -1,8 +1,4 @@
-"""The game loop: one decision per move, rounds, pacing, a replayable record.
-
-Rounds and the JSONL record follow laya (ADR-022). Shielded, a finished board starts the
-next seed; unassisted, the first round's end ends the run, so survival means something.
-"""
+"""Play and record Snake; guarded runs advance seeds, unassisted runs end after one round."""
 
 from __future__ import annotations
 
@@ -122,14 +118,10 @@ def play(
     keys: Callable[[], str] | None = None,
     on_step: Callable[[dict, dict, dict], None] | None = None,
 ) -> RunSummary:
-    """Play until `steps` moves, `duration` seconds, Q, or -- unassisted -- a round's end.
+    """Play until the move/time limit, quit, interrupt, or an unassisted round ends.
 
-    Ctrl-C also stops the run. `fps` paces moves to a budget; None waits only
-    on inference. `display` is a `LiveDisplay`; `keys` returns pressed keys
-    (SPACE pause, +/- or arrow up/down speed, R next round on the next seed,
-    Q quit); `on_step` gets `(game, decision, stats)` as dicts for headless
-    status lines.
-    """
+    fps controls pacing. Keys pause, change speed, advance rounds, or quit;
+    on_step receives game, decision, and stats dictionaries."""
     game = SnakeGame(width, height, seed, initial_length)
     policy = ModelPolicy(client, guarded=guarded, prompt=prompt)
     recorder = Recorder(record)
@@ -171,6 +163,8 @@ def play(
         "food_acc": 0.0,
     }
     deaths = 0
+    round_number = 1
+    route_correct = food_correct = 0
     best_length = len(game.body)
     served = model
     timestamps: deque[float] = deque(maxlen=60)
@@ -178,8 +172,10 @@ def play(
     started = time.perf_counter()
 
     def next_round() -> SnakeGame:
-        stats["round"] += 1
-        return SnakeGame(width, height, seed + stats["round"] - 1, initial_length)
+        nonlocal round_number
+        round_number += 1
+        stats["round"] = round_number
+        return SnakeGame(width, height, seed + round_number - 1, initial_length)
 
     try:
         while True:
@@ -229,12 +225,10 @@ def play(
             )
             stats["steps"] = len(decisions)
             n = len(decisions)
-            stats["route_acc"] = (
-                sum(((1 - d.dead_end_risk) >= 0.5) == d.route_truth for d in decisions) / n
-            )
-            stats["food_acc"] = (
-                sum((d.food_reachable >= 0.5) == d.food_truth for d in decisions) / n
-            )
+            route_correct += ((1 - decision.dead_end_risk) >= 0.5) == decision.route_truth
+            food_correct += (decision.food_reachable >= 0.5) == decision.food_truth
+            stats["route_acc"] = route_correct / n
+            stats["food_acc"] = food_correct / n
 
             shown_game, shown_decision = game.snapshot(), decision.to_dict()
             if display:
@@ -285,7 +279,7 @@ def play(
             seed=seed,
             best_length=best_length,
             seconds=seconds,
-            rounds=stats["round"],
+            rounds=round_number,
             deaths=deaths,
             best_score=max(stats["best"], game.score),
         )

@@ -19,14 +19,9 @@ def fit_profile(
     config=None,
     method: str = "transfer",
 ) -> dict:
-    """Collect raw logits on `split`, fit one temperature per bucket.
+    """Fit bucket temperatures on calibration data; optionally select by family transfer.
 
-    `method="transfer"` fits each bucket both by rows and by task family and
-    keeps whichever has the lower leave-one-family-out ECE (ADR-028), writing
-    the comparison to `calibration.report.json`; a bucket with too few families
-    keeps the row fit. `method="rows"` fits pooled rows only, ignoring family.
-    An existing profile is kept as `calibration.previous.json`.
-    """
+    Save transfer comparisons and preserve the previous profile before replacing it."""
     rows = collect_logits(checkpoint_dir, data_dir, split, config=config)
     out = Path(checkpoint_dir) / CALIBRATION
     if out.is_file():
@@ -73,52 +68,30 @@ def collect_logits(
     batch_size: int = 16,
     limit: int | None = None,
 ) -> dict[str, list[tuple[list[float], int, str]]]:
-    """Raw candidate logits per `CalibrationProfile.key` bucket, from the trained
-    model under `no_grad`, before any temperature.
-
-    Abstain rows are skipped: a temperature is fitted against a gold index. Each
-    sample carries its task family (`sources.family_of`) for the transfer fit.
-    """
-    import torch
+    """Collect raw logits and task families by calibration bucket, skipping abstain rows."""
 
     from ..data.build import load_split
     from ..data.sources import family_of
     from ..data.splits import Split
-    from ..prompt import Style
-    from .checkpoints import load_checkpoint
-    from .collate import DecisionCollator, ModeBatcher, RouteCache
     from .config import PRESETS
-    from .loop import build_head, build_model, candidate_logits, device_of, to_device
+    from .loop import load_for_eval, scored_rows
 
     config = config or PRESETS["4b"]
-    model, tokenizer = build_model(config, None)
-    head = build_head(config, model) if config.train_mode_b_head else None
-    load_checkpoint(model, head, checkpoint_dir)
-    model.eval()
-    if head is not None:
-        head.eval()
+    model, tokenizer, head = load_for_eval(config, checkpoint_dir)
 
     rows = [e for e in load_split(data_dir, Split(split)) if not e.abstain]
     if limit:
         rows = rows[:limit]
 
-    routes = RouteCache(tokenizer, config.max_label_options, Style(config.prompt_style))
-    collator = DecisionCollator(tokenizer, max_seq_len=config.max_seq_len, routes=routes)
-    batcher = ModeBatcher(tokenizer, batch_size=batch_size, routes=routes)
-    device = device_of(model)
-
     buckets: dict[str, list[tuple[list[float], int, str]]] = {}
-    with torch.no_grad():
-        for group in batcher(rows):
-            batch = to_device(collator(group), device)
-            logits = candidate_logits(model, batch, head)
-            for i, example in enumerate(group):
-                width = int((~batch.candidate_mask[i]).sum())
-                sample = (logits[i, :width].tolist(), example.target, family_of(example.source))
-                # Banded for serving, unbanded as the fallback for thin bands.
-                for key in {
-                    CalibrationProfile.key(example.question.type, batch.mode.value, width),
-                    CalibrationProfile.key(example.question.type, batch.mode.value),
-                }:
-                    buckets.setdefault(key, []).append(sample)
+    for example, logits, mode, width in scored_rows(
+        model, tokenizer, head, config, rows, batch_size
+    ):
+        sample = (logits, example.target, family_of(example.source))
+        # Banded for serving, unbanded as the fallback for thin bands.
+        for key in {
+            CalibrationProfile.key(example.question.type, mode, width),
+            CalibrationProfile.key(example.question.type, mode),
+        }:
+            buckets.setdefault(key, []).append(sample)
     return buckets

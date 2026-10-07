@@ -1,6 +1,6 @@
 [project]
 name = "levbench"
-version = "0.1.0"
+version = "0.1.1"
 description = "Benchmark harness for System One decision models (Jev and compatible servers)"
 readme = "README.md"
 requires-python = ">=3.12"

@@ -11,10 +11,7 @@ CALIBRATION = "calibration.json"
 
 
 def latest_checkpoint(output: str | Path) -> Path | None:
-    """The newest `step-N` under `output` that holds adapter weights, or None.
-
-    By step number, not mtime: a resumed run rewrites older directories.
-    """
+    """Return the highest numbered step with adapter weights, regardless of mtime."""
     source = Path(output)
     steps = sorted(
         (d for d in source.glob("step-*") if (d / ADAPTER_WEIGHTS).is_file()),
@@ -24,11 +21,7 @@ def latest_checkpoint(output: str | Path) -> Path | None:
 
 
 def fetch_checkpoint(spec: str | Path, cache_dir: str | None = None) -> Path:
-    """A local path as-is, else a Hub id (`hf://org/name` or `org/name`) downloaded.
-
-    A missing path shaped `a/b` (not starting `/` or `.`) is tried on the Hub, so a typo like
-    `checkpoints/lev-instuct` raises `FileNotFoundError` naming both readings.
-    """
+    """Use an existing local path or download a Hub id; report ambiguous missing paths clearly."""
     local = Path(spec)
     if local.exists():
         return local
@@ -47,8 +40,7 @@ def fetch_checkpoint(spec: str | Path, cache_dir: str | None = None) -> Path:
 
 
 def resolve_checkpoint(path: str | Path, cache_dir: str | None = None) -> Path:
-    """Accept a `step-N` directory, a parent holding several (newest step wins), a flat
-    release directory, or a Hub id for one."""
+    """Resolve a step directory, training output, flat release, or Hub id."""
     source = fetch_checkpoint(path, cache_dir)
     if (source / ADAPTER_WEIGHTS).is_file():
         return source
@@ -62,27 +54,18 @@ def resolve_checkpoint(path: str | Path, cache_dir: str | None = None) -> Path:
 
 
 def load_training_state(path: str | Path) -> dict | None:
-    """The optimiser, schedule and position saved beside the weights, if any.
-
-    None for a weights-only checkpoint (including those from before ADR-021);
-    the caller then starts the optimiser and schedule fresh.
-    """
+    """Load resume state, or return None for a weights-only checkpoint."""
     import torch
 
     file = resolve_checkpoint(path) / TRAINING_STATE
     if not file.is_file():
         return None
-    # Tensors, dicts, tuples and ints only, so `weights_only` loads it without arbitrary
-    # unpickling: safe for a state downloaded from a Hub id.
+    # Use weights_only to avoid arbitrary unpickling of downloaded resume state.
     return torch.load(file, map_location="cpu", weights_only=True)
 
 
 def load_checkpoint(model, head, path: str | Path) -> None:
-    """Restore adapter and head weights into existing parameter tensors.
-
-    Keeping the tensors preserves optimiser references. A missing or unexpected
-    head is an error, since dropping it would discard Mode B training.
-    """
+    """Restore weights in place to preserve optimizer references; reject head mismatches."""
     import torch
     from peft import set_peft_model_state_dict
     from safetensors.torch import load_file
@@ -117,10 +100,7 @@ def save_checkpoint(
     on_checkpoint=None,
     state: dict | None = None,
 ) -> Path:
-    """Write adapter, head and tokenizer, then optional training state.
-
-    Not atomic: an interrupted save may be incomplete (ADR-021).
-    """
+    """Write weights, tokenizer, and optional resume state; interrupted saves may be incomplete."""
     import torch
 
     path = output / f"step-{step}"

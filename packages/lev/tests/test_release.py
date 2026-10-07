@@ -10,7 +10,7 @@ from lev.train.checkpoints import TRAINING_STATE, fetch_checkpoint, resolve_chec
 
 
 def fake_checkpoint(root, step=18750, calibrated=True):
-    """The files `save_checkpoint` and `calibrate` leave behind, contents faked."""
+    """Create placeholder files matching a saved checkpoint and calibration."""
     out = root / "4b"
     step_dir = out / f"step-{step}"
     step_dir.mkdir(parents=True)
@@ -97,8 +97,7 @@ class TestResolvingAReleaseBack:
             fetch_checkpoint(spec)
 
     def test_a_mistyped_local_path_that_looks_like_a_hub_id_fails_clearly(self, monkeypatch):
-        """`checkpoints/lev-instuct` has one `/`, so it is tried on the Hub; a
-        missing repo must read as a missing path, not a raw Hub 404."""
+        """A missing relative path may also parse as a Hub id."""
         # Both ship with the `train` extra, absent on a bare `uv sync`.
         huggingface_hub = pytest.importorskip("huggingface_hub")
         httpx = pytest.importorskip("httpx")
@@ -115,7 +114,6 @@ class TestResolvingAReleaseBack:
 
 
 def test_model_card_describes_routing_as_it_is_served_and_trained(tmp_path):
-    """The card ships with the weights, so it must not carry a stale `27+` Mode B threshold."""
     out = fake_checkpoint(tmp_path)
     build_release(out, tmp_path / "release", preset="4b")
     card = (tmp_path / "release" / MODEL_CARD).read_text()

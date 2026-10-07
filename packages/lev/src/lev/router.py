@@ -44,13 +44,7 @@ def route(
     label_prefix: str = " ",
     skip_multi_token: bool = False,
 ) -> Route:
-    """Pick a mode for one question.
-
-    `max_label_options` caps Mode A below the tokenizer limit (decider measured it
-    losing 5-24 points on 50-219 options); None uses Mode A whenever it fits.
-    `noul_binary` reads a Noul as two lettered options: a stock checkpoint pins the
-    0-8 scale at one end regardless of content (ADR-007).
-    """
+    """Choose a readout using tokenizer support, an optional label cap, and binary Noul mode."""
     n = candidate_count(question)
 
     if max_label_options is not None and n > max_label_options:

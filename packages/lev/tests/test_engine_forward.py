@@ -76,5 +76,6 @@ def test_without_score_averaging_a_large_request_answers_as_with_no_limit(tiny_m
     unlimited = DecisionEngine(tiny_model, TinyTokenizer(), EngineConfig(max_batch_tokens=None))
     state = "a long support message " * 16
     prepared = limited.prepare(state, questions)
+    assert limited.config.max_batch_tokens is not None
     assert prepared.rows == 80 and prepared.rows * prepared.width > limited.config.max_batch_tokens
     assert limited.system_one(state, questions) == unlimited.system_one(state, questions)

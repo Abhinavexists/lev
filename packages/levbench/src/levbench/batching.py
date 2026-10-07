@@ -1,10 +1,4 @@
-"""The batching sweep: one state, N questions, one call versus N calls.
-
-Measures the central economic claim: input tokens are billed per *request*,
-so reading a large state is amortised across every question asked in the same
-call. If it holds, batched cost stays roughly flat as N grows while split cost
-grows linearly.
-"""
+"""Compare one batched call with separate calls over a shared state."""
 
 from __future__ import annotations
 
@@ -16,8 +10,7 @@ from typesafe_sdk import Choice, Noul, Score
 from . import pricing
 from .runner import call_once
 
-# One shared document; all three primitives, since output-token cost differs
-# between them.
+# Include all three primitives because their output costs differ.
 QUESTION_BANK: list[tuple[str, Any]] = [
     ("mentions_retention", Noul(instructions="The document discusses data retention periods.")),
     ("mentions_consent", Noul(instructions="The document discusses user consent.")),
@@ -96,17 +89,18 @@ def sweep(
     errors: list[tuple[int, str]] | None = None,
 ) -> list[SweepRow]:
     """Run the sweep, appending any per-count failure to `errors`."""
-    bank = bank or QUESTION_BANK
+    bank = QUESTION_BANK if bank is None else bank
     rows: list[SweepRow] = []
     errors = errors if errors is not None else []
 
     for n in counts:
+        if n < 1:
+            raise ValueError(f"Question count must be positive, got {n}")
         if n > len(bank):
             raise ValueError(f"Asked for {n} questions but the bank holds {len(bank)}")
         selected = dict(bank[:n])
 
-        # The default sweep (1,2,4,8,13) sends 33 sequential requests; each count
-        # is isolated so a late rate limit keeps the rows already paid for.
+        # Preserve completed rows if a later count hits an API failure.
         try:
             batched = call_once(client, state, selected)
             batched_cost = pricing.cost_usd(model, batched.input_tokens, batched.output_tokens)
@@ -117,7 +111,7 @@ def sweep(
                 one = call_once(client, state, {key: question})
                 split_cost += pricing.cost_usd(model, one.input_tokens, one.output_tokens)
                 split_seconds += one.seconds
-        except Exception as exc:  # noqa: BLE001 -- any API failure, report and move on
+        except Exception as exc:
             errors.append((n, f"{type(exc).__name__}: {exc}"))
             continue
 

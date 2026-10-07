@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from collections.abc import Sequence
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -20,8 +21,7 @@ load_dotenv()
 
 
 def repo_data_dir() -> Path:
-    """Find the repo's `data/` by walking up from this file, so it survives the
-    package moving within the repo."""
+    """Find the repository data directory relative to this module."""
     for parent in Path(__file__).resolve().parents:
         if (candidate := parent / "data").is_dir():
             return candidate
@@ -41,9 +41,8 @@ def _require_key(backend: str, base_url: str | None = None) -> None:
         sys.exit(f"{needed} is not set.\n{hint}")
 
 
-def _task_files(path: str | None) -> list[Path | None]:
-    """`None` for the built-in fixture, else one entry per task file; a generated
-    eval is a directory with one file per source (ADR-015)."""
+def _task_files(path: str | None) -> Sequence[Path | None]:
+    """Return task files, or None to use the built-in fixture."""
     if path is None:
         return [None]
     target = Path(path)

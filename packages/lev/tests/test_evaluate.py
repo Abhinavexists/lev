@@ -29,8 +29,6 @@ class TestEvalScoring:
 
 
 class TestAccuracyInterval:
-    """The report must state its own resolution: the eval is not reproducible."""
-
     def test_interval_shrinks_with_n(self):
         assert accuracy_interval(0.86, 200) > accuracy_interval(0.86, 1800)
 
@@ -38,7 +36,7 @@ class TestAccuracyInterval:
         assert accuracy_interval(0.86, 200) == pytest.approx(0.048, abs=0.001)
 
     def test_a_certain_estimate_still_reports_a_finite_interval(self):
-        """p=1.0 gives zero variance; the formula must not claim infinite precision."""
+        """Perfect observed accuracy does not imply zero uncertainty."""
         assert 0.0 <= accuracy_interval(1.0, 200) < 0.01
 
     def test_no_items_means_no_information(self):

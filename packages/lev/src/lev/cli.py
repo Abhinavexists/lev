@@ -10,7 +10,6 @@ from pathlib import Path
 
 
 def _measure_tokens(config, data_dir: str, sample: int = 1500) -> dict:
-    """Length distribution of real rendered prompts; the budget rests on it (ADR-016)."""
     import statistics
 
     from transformers import AutoTokenizer
@@ -21,8 +20,9 @@ def _measure_tokens(config, data_dir: str, sample: int = 1500) -> dict:
     from .train.collate import RouteCache, render
 
     tokenizer = AutoTokenizer.from_pretrained(config.model_id)
+    if tokenizer is None:
+        raise RuntimeError(f"could not load tokenizer for {config.model_id!r}")
     rows = load_split(data_dir, Split.TRAIN)[:sample]
-    # The preset's own prompt style: `chat` adds a system turn to every prompt.
     style = Style(config.prompt_style)
     routes = RouteCache(tokenizer, config.max_label_options, style)
     lengths = sorted(
@@ -92,8 +92,6 @@ def cmd_check_data(args: argparse.Namespace) -> None:
 
 
 def _preset_names() -> list[str]:
-    """Lazy, like every CLI import, so `lev plan` and `lev check-data` run
-    without the train extra."""
     from .train.config import PRESETS
 
     return sorted(PRESETS)
@@ -224,7 +222,6 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
 
 def _cuda():
-    """`torch.cuda` when a GPU is in use, else None; torch is imported only here."""
     try:
         import torch
     except ImportError:
@@ -233,13 +230,14 @@ def _cuda():
 
 
 def _snapshot_revision(checkpoint) -> str | None:
-    """The Hub commit a checkpoint was loaded from: the `snapshots/<sha>` directory name."""
     parts = Path(checkpoint).parts if checkpoint else ()
     return parts[parts.index("snapshots") + 1] if "snapshots" in parts[:-1] else None
 
 
 def _weights_dtype(engine) -> str | None:
     model = getattr(engine, "model", None)
+    if model is None:
+        return None
     try:
         return str(next(model.parameters()).dtype)
     except (AttributeError, StopIteration, TypeError):
@@ -247,9 +245,7 @@ def _weights_dtype(engine) -> str | None:
 
 
 def cmd_presentation_checks(args: argparse.Namespace) -> None:
-    """Label-free presentation checks (ADR-029). With `--compare`, exits 2 when the run's
-    settings differ from the report's, and 1 when a metric drifts beyond `--tolerance`;
-    `--enforce-gate` also fails a check below its gate."""
+    """Run presentation checks; exit 2 for settings mismatches and 1 for failed checks."""
     import time
 
     from . import presentation
@@ -331,7 +327,6 @@ def cmd_presentation_checks(args: argparse.Namespace) -> None:
 
 
 def _refuse_other_settings(saved: dict | None, settings: dict, keys) -> None:
-    """Metrics move with the order mode, the batching and the weights; compare like with like."""
     from .presentation import settings_mismatch
 
     differ = settings_mismatch(saved, settings, keys) if saved is not None else []
@@ -359,7 +354,7 @@ def main(argv: list[str] | None = None) -> None:
     route_parser = sub.add_parser("route", help="show the readout mode per question")
     route_parser.add_argument("request", help="path to a /v1/systemone request JSON")
     route_parser.add_argument("--model", default="Qwen/Qwen3.5-4B-Base")
-    # Defaults mirror `EngineConfig`, so the preview matches what a server does.
+    # Keep route-preview defaults aligned with EngineConfig.
     route_parser.add_argument(
         "--max-label-options",
         type=int,

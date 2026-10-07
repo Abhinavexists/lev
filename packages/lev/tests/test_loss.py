@@ -1,4 +1,4 @@
-"""torch is in the `train` extra, so these skip on a bare `uv sync`."""
+"""Decision-loss tests; skip when Torch is unavailable."""
 
 from __future__ import annotations
 
@@ -14,8 +14,7 @@ from lev.types import Noul  # noqa: E402
 
 class TestDecisionLoss:
     def test_padded_slots_do_not_produce_nan(self, train_config):
-        """The first smoke run's bug: a padded slot has logit -inf and target 0,
-        so a plain product is `0 * -inf` = NaN, poisoning the batch mean."""
+        """Padded slots must avoid 0 * -inf, which produces NaN."""
         logits = torch.tensor(
             [[1.0, 2.0, 0.5, 0.1], [0.3, 1.2, float("-inf"), float("-inf")]],
             requires_grad=True,
@@ -26,7 +25,6 @@ class TestDecisionLoss:
         assert torch.isfinite(logits.grad).all()
 
     def test_matches_cross_entropy_when_only_ce_is_enabled(self, train_config):
-        """Supporting soft targets must not change the hard-target answer."""
         import torch.nn.functional as F
 
         train_config.brier_weight = 0.0
@@ -40,7 +38,6 @@ class TestDecisionLoss:
 
     @pytest.mark.parametrize("weight", [0.5, 1.0])
     def test_brier_adds_the_weighted_multiclass_brier_score(self, train_config, weight):
-        """A padded slot (probability 0, target 0) must add nothing to the Brier term."""
         logits = torch.tensor(
             [[8.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 3.0, float("-inf")]],
         )
@@ -88,7 +85,6 @@ class TestDecisionLoss:
         assert near < far, "an ordered scale must not treat every wrong level alike"
 
     def test_ordinal_applies_only_to_the_rows_flagged(self, train_config):
-        """`ordinal` is per-row: a Score and a Choice can share a batch."""
         train_config.ordinal_weight = 5.0
         logits = torch.randn(4, 5)
         targets = torch.tensor([0, 1, 2, 3])
@@ -103,14 +99,11 @@ class TestDecisionLoss:
 
 class TestOrdinalCoverage:
     def test_noul_rows_are_flagged_ordinal(self, batching_tokenizer):
-        """The scale runs "0 = certainly no" to "8 = certainly yes": without the
-        ordinal term, rating 4 is as wrong as rating 0 when the truth is 8."""
         collator = DecisionCollator(batching_tokenizer, max_seq_len=512)
         batch = collator([an_example(Noul(instructions="urgent?"), target=8)])
         assert batch.ordinal.tolist() == [True]
 
     def test_choice_rows_are_not_flagged_ordinal(self, batching_tokenizer):
-        """Choice options are unordered symbols; a distance term is meaningless."""
         collator = DecisionCollator(batching_tokenizer, max_seq_len=512)
         assert collator([an_example(a_choice(4))]).ordinal.tolist() == [False]
 

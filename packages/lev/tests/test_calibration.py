@@ -1,4 +1,4 @@
-"""Calibration must actually reduce ECE, and must refuse to cheat."""
+"""Test calibration improvement and held-out split rejection."""
 
 from __future__ import annotations
 
@@ -11,14 +11,13 @@ from lev.calibrate import (
     expected_calibration_error,
     fit,
     fit_temperature,
-    nll,
+    negative_log_likelihood,
     softmax,
 )
 
 
 def overconfident_samples(n: int = 600, seed: int = 7, sharpness: float = 4.0):
-    """The untuned-backbone failure (ECE 0.4252): the correct class wins ~70% of the time,
-    but the margin implies ~96%."""
+    """Generate roughly 70% accuracy at 96% confidence."""
     rng = random.Random(seed)
     samples = []
     for _ in range(n):
@@ -56,19 +55,17 @@ class TestTemperatureFitting:
             [softmax(x, t) for x, _ in samples], [y for _, y in samples]
         )
         assert after < before, f"ECE got worse: {before:.4f} -> {after:.4f}"
-        # The measured effect on real backbones is 0.43 -> 0.08. Demand a real
-        # improvement, not a rounding-level one.
+        # Require a meaningful calibration improvement.
         assert after < before / 2, f"expected a large reduction, {before:.4f} -> {after:.4f}"
 
-    def test_fitting_minimises_nll(self):
+    def test_fitting_minimises_negative_log_likelihood(self):
         samples = overconfident_samples()
         t = fit_temperature(samples)
-        best = nll(samples, t)
+        best = negative_log_likelihood(samples, t)
         for other in (t * 0.5, t * 1.5, 1.0):
-            assert best <= nll(samples, other) + 1e-6
+            assert best <= negative_log_likelihood(samples, other) + 1e-6
 
     def test_a_flat_objective_returns_the_identity(self):
-        # All-equal logits: every temperature gives the same NLL, so none is fitted.
         samples = [([0.0, 0.0], i % 2) for i in range(400)]
         assert fit_temperature(samples) == 1.0
 
@@ -141,8 +138,7 @@ class TestOptionBands:
 
 class TestTransferSelectedCalibration:
     def family_rows(self):
-        """Equally confident rows where large easy families dominate a small hard one, so the
-        row fit is overconfident on the hard family."""
+        """Large easy families outnumber a small hard family at equal confidence."""
         rows = []
         for fam, n, acc in (
             ("easy1", 400, 0.97),

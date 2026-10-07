@@ -1,7 +1,4 @@
-"""Training dataset registry and readers for Choice, Score and Noul examples.
-
-Tests use fake loaders, so they do not verify that upstream datasets remain available.
-"""
+"""Training dataset registry and readers for Choice, Score, and Noul examples."""
 
 from __future__ import annotations
 
@@ -17,8 +14,7 @@ from ..types import Choice, JSONContent, Noul, Question, Score
 from .contamination import assert_clean
 from .mixture import Augment, Example
 
-# Large taxonomies whose label names are read at load time, so the registry
-# cannot count them.
+# Taxonomies with label counts determined at load time.
 _LARGE_OPTION_SETS = frozenset({"banking77", "clinc_oos"})
 
 Primitive = Literal["choice", "score", "noul"]
@@ -27,11 +23,13 @@ Primitive = Literal["choice", "score", "noul"]
 MODE_B_SHARE = 0.25
 
 
-# What a per-row reader returns: the state to show, the option texts if the row
-# carries its own (None means the source's fixed label set), and the gold index.
+# Reader output: state, per-row options (None uses fixed labels), and gold index.
 Row = tuple[str | dict, list[str] | None, int]
+ChoiceRow = tuple[str | dict, list[str], int]
+PairRow = tuple[dict, None, int]
+Rows = list[Row] | list[ChoiceRow] | list[PairRow]
 # Readers may yield several examples from one row, or None to skip it.
-Reader = Callable[[dict, random.Random], Row | list[Row] | None]
+Reader = Callable[[dict, random.Random], Row | Rows | None]
 
 
 @dataclass(frozen=True)
@@ -61,7 +59,7 @@ class SourceSpec:
         return bool(self.label_names) and len(self.label_names) > LABEL_OPTION_CAP
 
 
-def _read_race(row: dict, rng: random.Random) -> Row | None:
+def _read_race(row: dict, rng: random.Random) -> ChoiceRow | None:
     options = [str(o) for o in row["options"]]
     index = ord(str(row["answer"]).strip().upper()[:1] or "?") - ord("A")
     if len(options) < 2 or not 0 <= index < len(options):
@@ -69,13 +67,12 @@ def _read_race(row: dict, rng: random.Random) -> Row | None:
     return {"passage": row["article"], "question": row["question"]}, options, index
 
 
-def _read_keyed_choices(question_field: str, context_field: str | None = None) -> Reader:
-    """Read the `choices={"label", "text"}` + `answerKey` shape of commonsense_qa, openbookqa, ARC.
+def _read_keyed_choices(
+    question_field: str, context_field: str | None = None
+) -> Callable[[dict, random.Random], ChoiceRow | None]:
+    """Match answerKey to choice labels, including numeric ARC labels."""
 
-    ARC keys some rows 1-4 rather than A-D, so the key is matched against the labels, not A-Z.
-    """
-
-    def reader(row: dict, rng: random.Random) -> Row | None:
+    def reader(row: dict, rng: random.Random) -> ChoiceRow | None:
         labels = [str(x) for x in row["choices"]["label"]]
         texts = [str(x) for x in row["choices"]["text"]]
         key = str(row["answerKey"]).strip()
@@ -92,7 +89,7 @@ def _read_keyed_choices(question_field: str, context_field: str | None = None) -
     return reader
 
 
-def _read_sciq(row: dict, rng: random.Random) -> Row | None:
+def _read_sciq(row: dict, rng: random.Random) -> ChoiceRow | None:
     gold = row["correct_answer"]
     options = [gold, row["distractor1"], row["distractor2"], row["distractor3"]]
     options = [o for o in options if o and str(o).strip()]
@@ -122,10 +119,7 @@ def _read_nli(row: dict, rng: random.Random) -> Row | None:
 
 
 def swap_two_words(text: str, rng: random.Random) -> str | None:
-    """Exchange two distinct content words: full lexical overlap, changed meaning.
-
-    None when there are fewer than two candidates or 8 draws find no distinct pair.
-    """
+    """Swap distinct content words, or return None if no pair is found in eight draws."""
     words = text.split()
     slots = [i for i, w in enumerate(words) if len(w) > 3 and w.isalpha()]
     if len(slots) < 2:
@@ -139,17 +133,15 @@ def swap_two_words(text: str, rng: random.Random) -> str | None:
     return None
 
 
-def _read_pair(first: str, second: str, adversarial: float = 0.0) -> Reader:
-    """Read labelled sentence pairs, optionally adding word-swapped negatives.
+def _read_pair(
+    first: str, second: str, adversarial: float = 0.0
+) -> Callable[[dict, random.Random], list[PairRow]]:
+    """Read sentence pairs, optionally adding word-swapped negatives to positive rows."""
 
-    `adversarial` is the fraction of positive pairs that also yield a negative,
-    reducing the usefulness of lexical overlap as a shortcut.
-    """
-
-    def reader(row: dict, rng: random.Random) -> list[Row] | None:
+    def reader(row: dict, rng: random.Random) -> list[PairRow]:
         a, b = row[first], row[second]
         label = int(row["label"])
-        out: list[Row] = [({"sentence1": a, "sentence2": b}, None, label)]
+        out: list[PairRow] = [({"sentence1": a, "sentence2": b}, None, label)]
         adversary = label == 1 and adversarial and rng.random() < adversarial
         if adversary and (swapped := swap_two_words(b, rng)) is not None:
             out.append(({"sentence1": a, "sentence2": swapped}, None, 0))
@@ -167,15 +159,14 @@ FEVER_DESCRIPTIONS = {
 
 
 def _read_nli_fever(row: dict, rng: random.Random) -> Row | None:
-    # `premise` is the claim and `hypothesis` the evidence; the integer label's
-    # order differs from FEVER's own, so the string label is used.
+    # Use FEVER's string label; its integer order differs.
     label = row.get("fever_gold_label")
     if label not in FEVER_LABELS:
         return None
     return {"claim": row["premise"], "evidence": row["hypothesis"]}, None, FEVER_LABELS.index(label)
 
 
-def _read_parade(row: dict, rng: random.Random) -> Row | None:
+def _read_parade(row: dict, rng: random.Random) -> PairRow:
     return (
         {"sentence1": row["Definition1"], "sentence2": row["Definition2"]},
         None,
@@ -183,19 +174,20 @@ def _read_parade(row: dict, rng: random.Random) -> Row | None:
     )
 
 
-def _read_strategyqa(row: dict, rng: random.Random) -> Row | None:
+def _read_strategyqa(row: dict, rng: random.Random) -> PairRow:
     return {"question": row["question"], "facts": row["facts"]}, None, int(bool(row["answer"]))
 
 
-def yes_no_from_choices(reader: Reader) -> Reader:
+def yes_no_from_choices(reader: Reader) -> Callable[[dict, random.Random], list[PairRow] | None]:
     """Turn each multiple-choice row into two Noul rows: gold and wrong proposals."""
 
-    def wrapped(row: dict, rng: random.Random) -> list[Row] | None:
+    def wrapped(row: dict, rng: random.Random) -> list[PairRow] | None:
         produced = reader(row, rng)
         if produced is None:
             return None
-        out: list[Row] = []
-        for state, options, target in produced if isinstance(produced, list) else [produced]:
+        out: list[PairRow] = []
+        rows = produced if isinstance(produced, list) else [produced]
+        for state, options, target in rows:
             if not options or len(options) < 2:
                 continue
             base = state if isinstance(state, dict) else {"question": state}
@@ -207,7 +199,7 @@ def yes_no_from_choices(reader: Reader) -> Reader:
     return wrapped
 
 
-def _read_toxic_chat(row: dict, rng: random.Random) -> Row | None:
+def _read_toxic_chat(row: dict, rng: random.Random) -> Row:
     return row["user_input"], None, int(row["toxicity"])
 
 
@@ -219,9 +211,7 @@ def _read_toxigen(row: dict, rng: random.Random) -> Row | None:
     return row["text"], None, int(float(score) >= 3.0)
 
 
-def _read_beavertails(row: dict, rng: random.Random) -> Row | None:
-    # `is_safe` True -> yes; the registry's negation keeps polarity from being
-    # constant.
+def _read_beavertails(row: dict, rng: random.Random) -> PairRow:
     return {"prompt": row["prompt"], "response": row["response"]}, None, int(bool(row["is_safe"]))
 
 
@@ -234,8 +224,8 @@ HELPFULNESS_LEVELS = (
 )
 
 
-def _read_ultrafeedback(row: dict, rng: random.Random) -> list[Row] | None:
-    out: list[Row] = []
+def _read_ultrafeedback(row: dict, rng: random.Random) -> list[PairRow] | None:
+    out: list[PairRow] = []
     for completion in row.get("completions") or []:
         rating = ((completion.get("annotations") or {}).get("helpfulness") or {}).get("Rating")
         if rating is None:
@@ -273,7 +263,6 @@ YES_NO = ("no", "yes")
 
 
 REGISTRY: dict[str, SourceSpec] = {
-    # Choice: small, well-separated option sets.
     "ag_news": SourceSpec(
         name="ag_news",
         hf_id="fancyzhx/ag_news",
@@ -307,8 +296,7 @@ REGISTRY: dict[str, SourceSpec] = {
             "What type of entity is being described?",
         ),
     ),
-    # Choice with the question varying per row: the state alone cannot identify
-    # the answer set, so the model has to read the question.
+    # Per-row questions require reading the options as well as the state.
     "race": SourceSpec(
         name="race",
         hf_id="ehovy/race",
@@ -355,8 +343,6 @@ REGISTRY: dict[str, SourceSpec] = {
         paraphrases=("Choose the correct answer.", "What is the right answer to this question?"),
         reader=_read_keyed_choices("question"),
     ),
-    # Natural language inference: the same three options every time, but the
-    # answer depends on a relation between two fields, not on either alone.
     "snli": SourceSpec(
         name="snli",
         hf_id="stanfordnlp/snli",
@@ -406,7 +392,7 @@ REGISTRY: dict[str, SourceSpec] = {
         label_names=SNIPS_INTENTS,
         reader=_read_snips,
     ),
-    # Large taxonomies: their full sets train the Mode B head.
+    # Full taxonomies train the Mode B head.
     "banking77": SourceSpec(
         name="banking77",
         hf_id="legacy-datasets/banking77",
@@ -467,8 +453,7 @@ REGISTRY: dict[str, SourceSpec] = {
         label_names=HELPFULNESS_LEVELS,
         reader=_read_ultrafeedback,
     ),
-    # Noul: a single yes/no proposition. Every source carries a negation, so the
-    # mixture asks both polarities and "yes" is not always the good outcome.
+    # Each Noul source includes a negation to vary answer polarity.
     "imdb": SourceSpec(
         name="imdb",
         hf_id="stanfordnlp/imdb",
@@ -485,7 +470,6 @@ REGISTRY: dict[str, SourceSpec] = {
         paraphrases=("Did the critic like it?", "Is the sentiment favourable?"),
         negations=("Is this review negative?", "Did the critic pan it?"),
     ),
-    # Paraphrase, with word-swapped negatives so overlap is not the answer.
     "mrpc": SourceSpec(
         name="mrpc",
         hf_id="SetFit/mrpc",
@@ -516,7 +500,6 @@ REGISTRY: dict[str, SourceSpec] = {
         label_names=YES_NO,
         reader=_read_parade,
     ),
-    # Yes/no on a factual axis: a proposed answer to a grounded question.
     "strategyqa": SourceSpec(
         name="strategyqa",
         hf_id="ChilleD/StrategyQA",
@@ -594,7 +577,7 @@ REGISTRY: dict[str, SourceSpec] = {
     ),
 }
 
-# Checked once, at import. A contaminated id must never reach a loader.
+# Reject contaminated source ids before loading.
 assert_clean(REGISTRY.keys())
 assert_clean([spec.hf_id for spec in REGISTRY.values()])
 
@@ -602,8 +585,7 @@ MODE_B_SOURCES: frozenset[str] = frozenset(
     name for name, spec in REGISTRY.items() if spec.is_mode_b
 )
 
-# Sources whose states can answer each other's questions, so none donates an abstain
-# state to another (ADR-012); e.g. clinc_oos contains banking intents.
+# Adjacent sources may answer each other's questions; exclude them as abstain donors.
 ADJACENT: tuple[frozenset[str], ...] = (
     frozenset({"imdb", "rotten_tomatoes", "sst5", "yelp_review_full", "emotion"}),
     frozenset({"banking77", "clinc_oos", "snips"}),
@@ -628,11 +610,7 @@ ADJACENT: tuple[frozenset[str], ...] = (
 
 
 def family_of(source: str) -> str:
-    """The task family a source belongs to: its `ADJACENT` group, else itself.
-
-    Holding out mrpc while qqp stays in is not a new task, so calibration
-    transfer is measured over families, not sources (ADR-028).
-    """
+    """Return the adjacent-source family used for calibration transfer (ADR-028)."""
     for group in ADJACENT:
         if source in group:
             return "+".join(sorted(group))
@@ -640,7 +618,7 @@ def family_of(source: str) -> str:
 
 
 def adjacency_map() -> dict[str, frozenset[str]]:
-    """source -> the sources whose states must not be used to make it unanswerable."""
+    """Map sources to those excluded as abstain donors."""
     return {
         name: frozenset().union(*(group for group in ADJACENT if name in group)) - {name}
         for name in REGISTRY
@@ -679,7 +657,6 @@ def build_question(spec: SourceSpec, names: list[str]) -> Question:
         return Noul(instructions=spec.instructions)
     options = [humanise(n) for n in names]
     if spec.primitive == "score":
-        # `list` is invariant, so the element type has to be the one Score declares.
         levels: list[JSONContent] = [*options]
         return Score(instructions=spec.instructions, criteria=levels)
     return Choice(
@@ -696,13 +673,9 @@ def load_source(
     seed: int = 17,
     load_dataset: Callable | None = None,
 ) -> Iterator[Example]:
-    """Yield examples, shuffling before applying a row limit.
-
-    A head slice can contain only one class in a label-sorted corpus.
-    `load_dataset` is injectable so tests run offline.
-    """
+    """Yield examples through an injectable loader, shuffling before applying the limit."""
     if load_dataset is None:
-        from datasets import load_dataset  # noqa: PLC0415
+        from datasets import load_dataset
 
     extra = {"revision": spec.revision} if spec.revision else {}
     dataset = load_dataset(
@@ -711,8 +684,7 @@ def load_source(
     if limit is not None and limit < len(dataset):
         dataset = dataset.shuffle(seed=seed).select(range(limit))
 
-    # A fixed label set comes from the ClassLabel or the spec; a reader that
-    # supplies options per row has none.
+    # Fixed labels come from ClassLabel or the spec; per-row readers supply their own.
     names = _label_names(spec, dataset) if spec.reader is None or spec.label_names else None
     fixed_question = build_question(spec, names) if names is not None else None
     is_noul = spec.primitive == "noul"
@@ -755,8 +727,7 @@ def load_source(
                     raise ValueError(f"{spec.name}: reader gave no options and spec has no labels")
                 yield emit(state, fixed_question, target, len(names), i)
             else:
-                # Duplicate options would collapse in the criteria map and shift
-                # the gold index.
+                # Duplicate options collapse map keys and corrupt the gold index.
                 if len(set(options)) != len(options):
                     continue
                 question = Choice(
@@ -776,12 +747,7 @@ LARGE_SET_MIN_OPTIONS = 15
 
 
 def augmentation_map() -> dict[str, Augment]:
-    """Per-source augmentation for the train and calibration mixtures, read off the registry.
-
-    Large taxonomies keep their full option set half the time (the Mode B head's
-    data) and otherwise may be cut to `LARGE_SET_MIN_OPTIONS` or more, so Mode A
-    also learns large lettered sets. Everything else may be cut to two (ADR-026).
-    """
+    """Configure option variation; large taxonomies retain full sets half the time (ADR-026)."""
     return {
         name: Augment(
             paraphrases=spec.paraphrases,
@@ -794,11 +760,7 @@ def augmentation_map() -> dict[str, Augment]:
 
 
 def default_weights() -> dict[str, float]:
-    """Sampling weight per source: `MODE_B_SHARE` to Mode B, the rest by primitive.
-
-    The remainder splits evenly across the three primitives, then within each,
-    so no readout is starved by having few sources.
-    """
+    """Reserve MODE_B_SHARE for large taxonomies; balance the remainder across primitives."""
     mode_b_sources = sorted(MODE_B_SOURCES)
     sources_by_primitive: dict[str, list[str]] = {}
     for name, spec in REGISTRY.items():

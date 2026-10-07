@@ -1,13 +1,14 @@
-"""Batch and collate examples by readout mode.
-
-Rows are right-padded: `last_positions` points to each final real token.
-"""
+"""Collate by readout mode with right padding and final-real-token positions."""
 
 from __future__ import annotations
 
 import random
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from torch import Tensor
 
 from ..data.mixture import Example
 from ..prompt import Style, candidate_texts, label_prefix
@@ -27,8 +28,7 @@ class RouteCache:
         self._routes: dict[tuple[str, str, int], Route] = {}
 
     def route_for(self, example: Example) -> Route:
-        # Keyed on the option count: a source has many questions (subsampled option sets,
-        # per-row QA choices), and the route depends only on the count.
+        # Cache by option count; routing is independent of option wording.
         key = (example.source, example.name, candidate_count(example.question))
         if key not in self._routes:
             self._routes[key] = route(
@@ -42,24 +42,23 @@ class RouteCache:
 
 @dataclass
 class Batch:
-    """One homogeneous training batch. Tensors are torch, typed loosely to keep
-    this module importable without torch."""
+    """A training batch with one readout mode."""
 
     mode: Mode
-    input_ids: object  # (B, T)
-    attention_mask: object  # (B, T)
-    last_positions: object  # (B,)
-    candidate_mask: object  # (B, Kmax) True where padded
-    targets: object  # (B,) gold index, IGNORE_INDEX on abstain rows
-    soft_targets: object | None  # (B, Kmax) or None if no abstain rows
-    ordinal: object  # (B,) True for the ordered types: Score and Noul
+    input_ids: Tensor  # (B, T)
+    attention_mask: Tensor  # (B, T)
+    last_positions: Tensor  # (B,)
+    candidate_mask: Tensor  # (B, Kmax) True where padded
+    targets: Tensor  # (B,) gold index, IGNORE_INDEX on abstain rows
+    soft_targets: Tensor | None  # (B, Kmax) or None if no abstain rows
+    ordinal: Tensor  # (B,) True for the ordered types: Score and Noul
     # Mode A only: the label token id per candidate slot.
-    candidate_token_ids: object | None = None  # (B, Kmax)
+    candidate_token_ids: Tensor | None = None  # (B, Kmax)
     # Mode B only: a shared pool of encoded candidate strings, indexed per row.
-    candidate_input_ids: object | None = None  # (C, Tc)
-    candidate_attention_mask: object | None = None  # (C, Tc)
-    candidate_last_positions: object | None = None  # (C,)
-    candidate_index: object | None = None  # (B, Kmax) -> row in C, 0 where padded
+    candidate_input_ids: Tensor | None = None  # (C, Tc)
+    candidate_attention_mask: Tensor | None = None  # (C, Tc)
+    candidate_last_positions: Tensor | None = None  # (C,)
+    candidate_index: Tensor | None = None  # (B, Kmax) -> row in C, 0 where padded
 
     @property
     def size(self) -> int:
@@ -79,11 +78,7 @@ def render(example: Example, codes: list[str] | None, style: Style = Style.PLAIN
 
 
 class ModeBatcher:
-    """Group by readout mode, sort within length windows, then shuffle batches.
-
-    Windowed sorting limits padding without globally ordering rows by length
-    or source. No examples are dropped.
-    """
+    """Group by mode, sort within length windows, and shuffle batches without dropping examples."""
 
     def __init__(
         self,
@@ -131,13 +126,12 @@ class ModeBatcher:
                         for i in range(0, len(chunk), self.batch_size)
                     )
 
-        # Seeded on the epoch: differs between epochs, reproduces on a re-run.
         random.Random(self.seed + epoch).shuffle(batches)
         yield from (b for b in batches if b)
 
 
 class DecisionCollator:
-    """Examples -> Batch. All rows must share a mode; `ModeBatcher` guarantees it."""
+    """Collate rows sharing one readout mode."""
 
     def __init__(
         self,
@@ -187,8 +181,7 @@ class DecisionCollator:
                     )
                 soft_targets[i, : n_candidates[i]] = torch.tensor(e.soft_target)
 
-        # Noul is ordinal too ("0 = certainly no, 8 = certainly yes"): without
-        # this, rating 4 against a truth of 8 costs as much as rating 0.
+        # Treat Noul ratings as ordered so distant errors cost more.
         ordinal = torch.tensor(
             [e.question.type in ("score", "noul") for e in examples], dtype=torch.bool
         )
@@ -219,8 +212,7 @@ class DecisionCollator:
             max_length=self.max_seq_len,
             add_special_tokens=False,
         )
-        # The last real token, from the mask rather than len(text): truncation
-        # may have shortened the row.
+        # Derive final token positions from the mask to account for truncation.
         out["last_positions"] = out["attention_mask"].sum(dim=1).long() - 1
         if (out["last_positions"] < 0).any():
             raise ValueError("a prompt encoded to zero tokens")

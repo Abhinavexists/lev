@@ -1,4 +1,4 @@
-"""torch is in the `train` extra, so these skip on a bare `uv sync`."""
+"""Progress-reporting tests; skip when Torch is unavailable."""
 
 from __future__ import annotations
 
@@ -13,8 +13,6 @@ from lev.train.progress import ProgressLog, hms  # noqa: E402
 
 
 class TestProgressLog:
-    """A silent run is indistinguishable from a hung one."""
-
     def make(self, total=100, every=10):
         return ProgressLog(total, every)
 
@@ -27,14 +25,13 @@ class TestProgressLog:
         assert "step     10/100" in capsys.readouterr().out
 
     def test_always_logs_the_final_step(self, capsys):
-        """An interval that does not divide the total must not swallow the end."""
         log = self.make(total=7, every=10)
         for step in range(7):
             log.record(step, 1.0, "A", 1e-4, tokens=10)
         assert "step      7/7" in capsys.readouterr().out
 
     def test_modes_are_reported_separately(self, capsys):
-        """Mode B starts near ln(K); blending it with Mode A hides both."""
+        """Mode B starts near ln(K), so averaging modes hides their separate losses."""
         log = self.make(total=2, every=2)
         log.record(0, 1.0, "A", 1e-4, tokens=10)
         log.record(1, 5.0, "B", 1e-4, tokens=10)
@@ -52,13 +49,10 @@ class TestProgressLog:
         assert "A=1.0000" in capsys.readouterr().out, "stale window carried forward"
 
     def test_throughput_counts_real_tokens(self, capsys):
-        """Counted from the attention mask, not the config's average, which was once wrong by 10x
-        (ADR-016) and would have hidden the mistake."""
         log = self.make(total=1, every=1)
         log.record(0, 1.0, "A", 1e-4, tokens=4096)
         out = capsys.readouterr().out
-        # Parse the value rather than substring-match it: a fast window makes
-        # the rate large, and "4096000000 tok/s" contains "0 tok/s".
+        # Parse the rate so large values cannot falsely match a zero-rate substring.
         match = re.search(r"([\d,]+) tok/s", out)
         assert match, out
         assert int(match.group(1).replace(",", "")) > 0
@@ -75,8 +69,7 @@ class TestProgressLog:
 
 
 class TestWindowedRate:
-    """A cumulative rate never stops paying the startup cost: the 0.8B smoke read 0.33 it/s
-    against a true 2.50, and the ETA was 7.5x off (ADR-017)."""
+    """Windowed rates exclude startup delay from steady-state throughput and ETA."""
 
     @pytest.fixture
     def clock(self, monkeypatch):
@@ -100,7 +93,9 @@ class TestWindowedRate:
         second = capsys.readouterr().out
 
         def rate(out):
-            return float(re.search(r"([\d.]+) it/s", out).group(1))
+            match = re.search(r"([\d.]+) it/s", out)
+            assert match is not None, out
+            return float(match.group(1))
 
         assert rate(second) == pytest.approx(2.5, abs=0.05), second
         assert rate(second) > 5 * rate(first), f"{rate(first)} -> {rate(second)}"

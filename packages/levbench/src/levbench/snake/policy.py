@@ -1,8 +1,6 @@
-"""Turn a board into one System One call, and the answer into a move.
+"""Turn Snake boards into model decisions using laya-mlx prompts.
 
-Both prompts are laya-mlx's verbatim. `compact` states the two Noul answers in the state
-text, so a model that reads its input scores 100% on them; `detailed` uses prose.
-"""
+The compact prompt supplies the two Noul truths; the detailed prompt uses prose."""
 
 from __future__ import annotations
 
@@ -27,8 +25,7 @@ class Decision:
     executed: str
     safe_directions: list[str]
     intervened: bool
-    # `dead_end_risk` is 1 - the `risk` answer, which asks whether a safe route exists;
-    # the `*_truth` fields are what the planner knows.
+    # risk asks about a safe route; dead_end_risk is its complement. Truth comes from the planner.
     dead_end_risk: float
     food_reachable: float
     route_truth: bool
@@ -46,8 +43,7 @@ class Decision:
 
 
 def describe(game: SnakeGame, prompt: str) -> tuple[str, dict[str, Any], dict]:
-    """The state text and questions for one board, plus the planner's view; separate
-    from `decide` so the wording can be tested and logged without a call."""
+    """Build prompts and planner truth without calling the server."""
     if prompt not in PROMPTS:
         raise ValueError(f"prompt must be one of {PROMPTS}, got {prompt!r}")
     moves = game.moves()
@@ -120,8 +116,7 @@ def describe(game: SnakeGame, prompt: str) -> tuple[str, dict[str, Any], dict]:
 
 
 class PlannerClient:
-    """A stand-in server answering from the planner in SDK shapes: the reference row
-    every model is measured against, and a way to run the display with no server."""
+    """Return planner decisions in SDK shapes for the offline baseline."""
 
     served = "planner"
 
@@ -146,8 +141,7 @@ class PlannerClient:
 
 
 class ModelPolicy:
-    """Asks the server for a move; with `guarded`, executes the likeliest safe one and
-    raises if no safe move exists."""
+    """Ask for a move; guarded mode picks the likeliest safe move or raises if none exists."""
 
     def __init__(self, client, *, guarded: bool = True, prompt: str = "compact"):
         if prompt not in PROMPTS:
