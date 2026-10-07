@@ -1,7 +1,7 @@
 [project]
-name = "lev-workspace"
-version = "0.1.1"
-description = "lev — umbrella workspace: the `lev` decision model and the `levbench` harness"
+name = "lev-4b"
+version = "0.1.2"
+description = "an open System One decision model"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }

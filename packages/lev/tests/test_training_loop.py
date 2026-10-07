@@ -264,3 +264,47 @@ class TestModeAProjectsOnlyTheAnswerPositions:
         out = candidate_logits(FakeModel(), batch)
         assert seen["keep"] == [4, 7], "only the distinct answer positions are projected"
         assert out.tolist() == [[71.0, 72.0], [141.0, 142.0], [273.0, 274.0]]
+
+
+class TestScoredRows:
+    """`scored_rows` is the shared forward that calibration and evaluation both read."""
+
+    def rows_through(self, monkeypatch, n_rows):
+        from lev.train import loop
+        from lev.train.config import PRESETS
+
+        rows = [an_example(a_choice(4), target=i % 4, state=f"row {i}") for i in range(n_rows)]
+        monkeypatch.setattr(loop, "device_of", lambda m: torch.device("cpu"))
+        monkeypatch.setattr(loop, "to_device", lambda b, d: b)
+        monkeypatch.setattr(
+            loop,
+            "candidate_logits",
+            lambda m, b, h=None: torch.arange(
+                b.size * b.candidate_mask.size(1), dtype=torch.float
+            ).reshape(b.size, -1),
+        )
+        config = PRESETS["smoke"]
+        out = list(
+            loop.scored_rows(
+                StubModel(), make_batching_tokenizer(), None, config, rows, batch_size=8
+            )
+        )
+        return rows, out
+
+    def test_every_row_is_scored_exactly_once(self, monkeypatch):
+        rows, out = self.rows_through(monkeypatch, 32)
+        assert len(out) == len(rows)
+        assert {e.state for e, _, _, _ in out} == {r.state for r in rows}
+
+    def test_width_matches_the_option_count_and_logits_are_trimmed(self, monkeypatch):
+        from lev.router import Mode
+
+        _, out = self.rows_through(monkeypatch, 16)
+        for example, logits, mode, width in out:
+            assert width == len(example.question.criteria)
+            assert len(logits) == width
+            assert mode == Mode.LABEL_TOKEN.value
+
+    def test_bucket_window_does_not_drop_or_duplicate_rows(self, monkeypatch):
+        rows, wide = self.rows_through(monkeypatch, 24)
+        assert sorted(e.state for e, _, _, _ in wide) == sorted(r.state for r in rows)

@@ -13,7 +13,7 @@ resolution-markers = [
 [manifest]
 members = [
     "lev",
-    "lev-workspace",
+    "lev-4b",
     "levbench",
 ]
 
@@ -999,8 +999,8 @@ requires-dist = [
 provides-extras = ["train", "serve", "modal"]
 
 [[package]]
-name = "lev-workspace"
-version = "0.1.1"
+name = "lev-4b"
+version = "0.1.2"
 source = { virtual = "." }
 dependencies = [
     { name = "lev" },
@@ -1048,7 +1048,7 @@ dev = [
 
 [[package]]
 name = "levbench"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/levbench" }
 dependencies = [
     { name = "python-dotenv" },

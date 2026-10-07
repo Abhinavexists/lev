@@ -634,7 +634,7 @@ Accuracy, RPS, Choice and Noul are identical, to the last digit, to the runs bef
 Calibration of the averaged modes. The shipped Score temperature (2.80) was fitted on single-order rows. Refit per mode on half of each bench (stratified by the gold level, seed 0), judged on the other half:
 
 ```text
-                       T refit   held-out negative_log_likelihood       held-out ECE       held-out RPS
+                       T refit          NLL         held-out ECE       held-out RPS
                                  shipped  refit     shipped  refit     shipped  refit
   en (144)  off          3.96     0.935   0.909      0.130   0.108      0.152   0.147
             reversed     3.16     0.839   0.838      0.111   0.119      0.126   0.126

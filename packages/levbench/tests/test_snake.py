@@ -266,7 +266,7 @@ class TestRounds:
             height=4,
             initial_length=2,
             steps=60,
-            on_step=lambda game, decision, stats: observed.append((decision, stats)),
+            on_step=lambda _, decision, stats: observed.append((decision, stats)),
         )
         assert summary.rounds >= 2
         assert len(observed) == 60

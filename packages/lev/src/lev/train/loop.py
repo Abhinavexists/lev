@@ -179,6 +179,41 @@ def build_head(config: TrainConfig, model=None):
     return head
 
 
+def load_for_eval(config: TrainConfig, checkpoint_dir, model_cache: str | None = None):
+    """Build the model and head, restore a checkpoint into them, and put both in eval mode."""
+    model, tokenizer = build_model(config, model_cache)
+    head = build_head(config, model) if config.train_mode_b_head else None
+    load_checkpoint(model, head, checkpoint_dir)
+    model.eval()
+    if head is not None:
+        head.eval()
+    return model, tokenizer, head
+
+
+def scored_rows(model, tokenizer, head, config: TrainConfig, rows, batch_size, bucket_window=64):
+    """Yield `(example, logits, mode, width)` per row, batched as training batches.
+
+    Callers differ only in how they bucket the result, so the forward pass lives here;
+    `bucket_window` is explicit because calibration and evaluation have always passed
+    different values.
+    """
+    import torch
+
+    routes = RouteCache(tokenizer, config.max_label_options, Style(config.prompt_style))
+    collator = DecisionCollator(tokenizer, max_seq_len=config.max_seq_len, routes=routes)
+    batcher = ModeBatcher(
+        tokenizer, batch_size=batch_size, bucket_window=bucket_window, routes=routes
+    )
+    device = device_of(model)
+    with torch.no_grad():
+        for group in batcher(rows):
+            batch = to_device(collator(group), device)
+            logits = candidate_logits(model, batch, head)
+            for i, example in enumerate(group):
+                width = int((~batch.candidate_mask[i]).sum())
+                yield example, logits[i, :width].tolist(), batch.mode.value, width
+
+
 def device_of(model):
     return next(model.parameters()).device
 
