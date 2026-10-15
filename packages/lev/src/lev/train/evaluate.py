@@ -54,7 +54,7 @@ class EvalReport:
             weighted_accuracy = sum(s.accuracy * s.n for s in self.per_source) / total
             weighted_ece = sum(s.ece * s.n for s in self.per_source) / total
             rows.append(
-                f"  {'WEIGHTED':<18} {'':<6} {' '}  n={total:<5} "
+                f"  {'WEIGHTED':<18} {'':<6} {'':<1}  n={total:<5} "
                 f"acc {weighted_accuracy:.3f} "
                 f"+/-{accuracy_interval(weighted_accuracy, total):.3f}  "
                 f"ECE {weighted_ece:.4f}"

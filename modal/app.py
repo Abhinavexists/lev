@@ -336,8 +336,8 @@ def export_checkpoint(preset: str = "4b", name: str | None = None) -> dict:
     print(
         f"release {manifest['name']} -> {RELEASES_DIR}/{target}  ({len(manifest['files'])} files)"
     )
-    print(f"  pull it:    make weights RELEASE={target}")
-    print(f"  publish it: make publish RELEASE={target} REPO=<org/name>")
+    print(f"  {'pull it:':<12}make weights RELEASE={target}")
+    print(f"  {'publish it:':<12}make publish RELEASE={target} REPO=<org/name>")
     return manifest
 
 

@@ -212,29 +212,29 @@ def _format_summary(report: EvalReport) -> list[str]:
         lines.append(
             f"{'wall time':<18} {report.wall_seconds:.1f}s  ({n / report.wall_seconds:.2f} items/s)"
         )
-    lines.append(f"calls              {n}")
+    lines.append(f"{'calls':<18} {n}")
     if n:
-        lines.append(f"latency p50        {report.pct(0.5):.3f}s")
-        lines.append(f"latency mean       {statistics.mean(report.latencies):.3f}s")
+        lines.append(f"{'latency p50':<18} {report.pct(0.5):.3f}s")
+        lines.append(f"{'latency mean':<18} {statistics.mean(report.latencies):.3f}s")
         # Report the maximum for small samples, where p95 is dominated by connection setup.
         if n >= 100:
-            lines.append(f"latency p95        {report.pct(0.95):.3f}s")
+            lines.append(f"{'latency p95':<18} {report.pct(0.95):.3f}s")
         else:
             lines.append(
-                f"latency slowest    {report.latencies[-1]:.3f}s  (n={n}; too few for a p95)"
+                f"{'latency slowest':<18} {report.latencies[-1]:.3f}s  (n={n}; too few for a p95)"
             )
-    lines.append(f"input tokens       {sum(call.input_tokens for call in report.calls):,}")
-    lines.append(f"output tokens      {sum(call.output_tokens for call in report.calls):,}")
+    lines.append(f"{'input tokens':<18} {sum(call.input_tokens for call in report.calls):,}")
+    lines.append(f"{'output tokens':<18} {sum(call.output_tokens for call in report.calls):,}")
     if pricing.is_self_hosted(report.model):
-        lines.append("total cost         self-hosted (GPU time, not per-token)")
+        lines.append(f"{'total cost':<18} self-hosted (GPU time, not per-token)")
     else:
-        lines.append(f"total cost         ${report.total_cost:.6f}")
-    lines.append(f"schema retries     {report.total_schema_retries}")
-    lines.append(f"transient retries  {report.total_transient_retries}")
+        lines.append(f"{'total cost':<18} ${report.total_cost:.6f}")
+    lines.append(f"{'schema retries':<18} {report.total_schema_retries}")
+    lines.append(f"{'transient retries':<18} {report.total_transient_retries}")
     served = report.served_by
     if served and served != {report.model} and not pricing.is_self_hosted(report.model):
         lines.append(
-            f"WARNING            requested {report.model!r} but server served "
+            f"{'WARNING':<18} requested {report.model!r} but server served "
             f"{sorted(served)} -- cost figures use the requested model's price"
         )
     lines.append("")

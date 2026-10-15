@@ -208,7 +208,7 @@ def compose(game: dict, decision: dict, stats: dict) -> Canvas:
     c.put(height - 2, left, "SPACE pause   +/- speed   R reset   Q quit", MUTED)
     elapsed = stats.get("elapsed", 0.0)
     clock = f"{int(elapsed) // 60:02d}:{int(elapsed) % 60:02d}"
-    c.put(height - 2, right, f"ESTIMATES BY THE MODEL       {clock}", MUTED)
+    c.put(height - 2, right, f"{'ESTIMATES BY THE MODEL':<29}{clock}", MUTED)
     return c
 
 

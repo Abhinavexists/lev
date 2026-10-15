@@ -118,7 +118,9 @@ def cmd_data_build(args: argparse.Namespace) -> None:
         f"(oversample {ratio}x)"
         + ("  <- raise --limit-per-source to lower this" if ratio > 2 else "")
     )
-    print(f"  sources      {len(manifest['sources'])} ({', '.join(sorted(manifest['sources']))})")
+    print(
+        f"  {'sources':<12} {len(manifest['sources'])} ({', '.join(sorted(manifest['sources']))})"
+    )
 
 
 def cmd_data_eval(args: argparse.Namespace) -> None:
