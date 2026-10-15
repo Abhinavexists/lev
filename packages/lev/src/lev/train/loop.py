@@ -8,7 +8,10 @@ import time
 from collections.abc import Callable
 from dataclasses import fields
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import torch
 
 from ..prompt import Style
 from .checkpoints import (
@@ -77,7 +80,13 @@ def build_model(config: TrainConfig, model_cache: str | None = None):
     return model, tokenizer
 
 
-def decision_loss(logits, targets, config: TrainConfig, ordinal=False, soft_targets=None):
+def decision_loss(
+    logits,
+    targets,
+    config: TrainConfig,
+    ordinal: bool | torch.Tensor = False,
+    soft_targets=None,
+):
     """Cross-entropy, Brier and ordinal loss over padded candidate sets.
 
     Args:
@@ -400,7 +409,7 @@ def run_training(
                 step,
                 value,
                 batch.mode.value,
-                scheduler.get_last_lr()[0],
+                float(scheduler.get_last_lr()[0]),
                 tokens=int(batch.attention_mask.sum()),
             )
             step += 1
