@@ -78,7 +78,7 @@ def run_resumable(
     from lev.train.collate import DecisionCollator
 
     saved: list[int] = []
-    seen: list[tuple[str, ...]] = []
+    seen: list[tuple[object, ...]] = []
 
     class RecordingCollator(DecisionCollator):
         def __call__(self, examples):
@@ -295,13 +295,16 @@ class TestScoredRows:
     def test_every_row_is_scored_exactly_once(self, monkeypatch, n_rows):
         rows, out = self.rows_through(monkeypatch, n_rows)
         assert len(out) == len(rows)
-        assert {e.state for e, _, _, _ in out} == {r.state for r in rows}
+        assert len(out) == len(rows)
+        assert all(any(e.state == r.state for e, _, _, _ in out) for r in rows)
 
     def test_width_matches_the_option_count_and_logits_are_trimmed(self, monkeypatch):
         from lev.router import Mode
 
         _, out = self.rows_through(monkeypatch, 16)
         for example, logits, mode, width in out:
-            assert width == len(example.question.criteria)
+            criteria = example.question.criteria
+            assert criteria is not None
+            assert width == len(criteria)
             assert len(logits) == width
             assert mode == Mode.LABEL_TOKEN.value
