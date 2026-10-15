@@ -10,9 +10,9 @@ lev is an open System One decision model and the harness that measures it. Give 
   Read full blog here: <a href="https://interfaze.ai/blog/jev-now-open-source-lev">https://interfaze.ai/blog/jev-now-open-source-lev</a>
 </p>
 
-<h2 align="center">68.9% on all 13 S1Bench subsets. 4B parameters. Zero output tokens.</h2>
+<h2 align="center">74.3% on all 13 S1Bench subsets. 4B parameters. Zero output tokens.</h2>
 
-<p align="center"><strong>Qwen3.5-4B + LoRA on one H100.</strong> On the six subsets the public S1Bench board completed, level with reflex-4b and behind only Jev and three open models of 26B–35B.<br><a href="docs/FINDINGS.md#17-all-13-s1bench-subsets-on-the-pinned-items">Accuracy receipt</a> · <a href="docs/DECISIONS.md#adr-023--one-batched-forward-not-prefill-and-fork">Speed receipt</a></p>
+<p align="center"><strong>Qwen3.5-4B + LoRA on one H100.</strong> On the six subsets the public S1Bench board completed, behind only Jev and two open models of 26B and up, ahead of reflex-4b and a 35B model.<br><a href="docs/FINDINGS.md#19-the-adapter-scale-is-an-out-of-distribution-knob-and-it-is-worth-39-macro-points">Accuracy receipt</a> · <a href="docs/DECISIONS.md#adr-023--one-batched-forward-not-prefill-and-fork">Speed receipt</a></p>
 
 <p align="center"><a href="#quickstart"><strong>Quickstart</strong></a> · <a href="#why-it-works">Why it works</a> · <a href="#the-optimizations-that-mattered">What mattered</a> · <a href="#measure-it-yourself">Benchmark harness</a> · <a href="#watch-it-decide">Snake demo</a> · <a href="#train-it-yourself">Train it</a> · <a href="docs/DECISIONS.md">Decision log</a> · <a href="https://huggingface.co/interfaze-ai/lev">Model card</a></p>
 
@@ -22,27 +22,27 @@ lev is an open System One decision model and the harness that measures it. Give 
 
 | subset | task | **lev** | Jev | always the most common label |
 | --- | --- | --: | --: | --: |
-| vitaminc-dev | claim verification | 0.668 | **0.801** | 0.503 |
-| massive-en-US | intent routing, 18 scenarios | 0.857 | **0.874** | 0.163 |
-| massive-de-DE | intent routing, German | 0.823 | **0.871** | 0.163 |
-| boolq | yes/no reading comprehension | 0.827 | **0.893** | 0.580 |
-| squad2 | answerability | 0.813 | **0.836** | 0.502 |
-| paws | adversarial paraphrase | 0.776 | **0.900** | 0.516 |
-| multinli | natural language inference | **0.890** | 0.836 | 0.361 |
-| civil_comments | toxicity | 0.760 | **0.803** | 0.893 |
-| aegis2 | safety moderation | 0.800 | **0.804** | 0.568 |
-| helpsteer2 | helpfulness, 5 levels | **0.386** | 0.341 | 0.422 |
-| summeval-relevance | summary relevance, 5 levels | 0.358 | 0.358 | 0.458 |
-| summeval-consistency | summary faithfulness, 5 levels | 0.271 | **0.812** | 0.840 |
-| pubmedqa | biomedical yes/no/maybe | 0.732 | **0.764** | 0.532 |
-| **macro** | | 0.689 | **0.761** | |
+| vitaminc-dev | claim verification | 0.726 | **0.801** | 0.503 |
+| massive-en-US | intent routing, 18 scenarios | 0.869 | **0.874** | 0.163 |
+| massive-de-DE | intent routing, German | 0.829 | **0.871** | 0.163 |
+| boolq | yes/no reading comprehension | 0.853 | **0.893** | 0.580 |
+| squad2 | answerability | 0.819 | **0.836** | 0.502 |
+| paws | adversarial paraphrase | 0.844 | **0.900** | 0.516 |
+| multinli | natural language inference | **0.849** | 0.836 | 0.361 |
+| civil_comments | toxicity | 0.783 | **0.803** | 0.893 |
+| aegis2 | safety moderation | **0.836** | 0.804 | 0.568 |
+| helpsteer2 | helpfulness, 5 levels | **0.361** | 0.341 | 0.422 |
+| summeval-relevance | summary relevance, 5 levels | **0.371** | 0.358 | 0.458 |
+| summeval-consistency | summary faithfulness, 5 levels | 0.806 | **0.812** | 0.840 |
+| pubmedqa | biomedical yes/no/maybe | 0.716 | **0.764** | 0.532 |
+| **macro** | | 0.743 | **0.761** | |
 
-lev and Jev ran through the same harness on all 3,880 items S1Bench scores, pinned by [Nimble](https://github.com/bespokelabsai/nimble)'s manifests. The Jev run lands within 0.8 points of TypeSafe's published figure on every subset, so the harness is not the gap.
+lev and Jev ran through the same harness on all 3,880 items S1Bench scores, pinned by [Nimble](https://github.com/bespokelabsai/nimble)'s manifests. The Jev run lands within 0.8 points of TypeSafe's published figure on every subset, so the harness is not the gap. The adapter scale was chosen by leave-one-family-out over these subsets; scored only on families held out of that choice, it estimates 0.728 ([FINDINGS §19](docs/FINDINGS.md#19-the-adapter-scale-is-an-out-of-distribution-knob-and-it-is-worth-39-macro-points)).
 
-- **Noise:** at these sizes a per-subset difference needs roughly 5–9 points to be real. lev's leads on multinli and helpsteer2 are inside that.
-- **Where Jev is clearly ahead:** the minimal-edit pairs (paws −12.4, vitaminc −13.3) and summeval-consistency (−54.1), where lev rates most fully faithful summaries one level low. Fine-tuning introduced that: the untuned backbone scores 0.826.
+- **Noise:** at these sizes a per-subset difference needs roughly 5–9 points to be real. lev's leads on aegis2, helpsteer2, multinli and summeval-relevance are all inside that.
+- **Where Jev is clearly ahead:** the minimal-edit pairs (vitaminc −7.5, paws −5.6). The adapter runs at a quarter of its trained strength, which narrowed those gaps from −13.3 and −12.4 and closed summeval-consistency's from −54.1 to −0.6: at full strength it rated most fully faithful summaries one level low.
 - **Constant baselines:** on civil_comments (89% not toxic) and the three 5-level rating subsets, always answering the most common label beats both models.
-- **Calibration:** mean ECE 0.115 for lev, 0.091 for Jev; lev is better calibrated on 5 of 13.
+- **Calibration:** mean ECE 0.097 for lev, 0.091 for Jev; lev is better calibrated on 6 of 13. summeval-consistency is the outlier, under-confident at 0.303.
 - **Speed:** 69 ms is lev's engine compute for a short request inside the container. End to end from a laptop, Jev answered in 335–346 ms median and lev on one Modal H100 in 414–654 ms across two runs.
 
 [Every run, per-subset breakdowns and what each run changed →](docs/FINDINGS.md)
