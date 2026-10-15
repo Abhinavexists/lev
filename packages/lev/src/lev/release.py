@@ -124,7 +124,9 @@ Numbers on S1Bench, the harness and the decision log are in the repository.
 """
 
 
-def publish(release_dir: str | Path, repo_id: str, *, private: bool = False) -> str:
+def publish(
+    release_dir: str | Path, repo_id: str, *, private: bool = False, token: str | None = None
+) -> str:
     from huggingface_hub import HfApi
 
     folder = Path(release_dir)
@@ -133,7 +135,7 @@ def publish(release_dir: str | Path, repo_id: str, *, private: bool = False) -> 
             f"{folder} has no {RELEASE_MANIFEST}; build it with `lev release build` first"
         )
     manifest = json.loads((folder / RELEASE_MANIFEST).read_text())
-    api = HfApi()
+    api = HfApi(token=token)
     api.create_repo(repo_id, repo_type="model", private=private, exist_ok=True)
     message = f"{manifest['name']}: step {manifest['step']} of preset {manifest['preset']}"
     api.upload_folder(

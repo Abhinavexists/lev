@@ -55,11 +55,10 @@ def published_token(monkeypatch, tmp_path, env_file: str | None, exported: str |
         monkeypatch.delenv("HF_TOKEN", raising=False)
     else:
         monkeypatch.setenv("HF_TOKEN", exported)
-    monkeypatch.setattr(os, "environ", dict(os.environ))  # load_dotenv writes here
     seen = {}
 
-    def fake_publish(*args, **kwargs):
-        seen["token"] = os.environ.get("HF_TOKEN") or None
+    def fake_publish(*args, token=None, **kwargs):
+        seen["token"] = token
         return "url"
 
     monkeypatch.setattr(release, "publish", fake_publish)
@@ -79,3 +78,10 @@ def test_an_exported_token_wins_over_dot_env(monkeypatch, tmp_path, capsys):
 def test_without_either_publish_falls_back_to_the_hub_login(monkeypatch, tmp_path, capsys):
     assert published_token(monkeypatch, tmp_path, None, None) is None
     assert published_token(monkeypatch, tmp_path, "HF_TOKEN=\n", None) is None
+
+
+def test_publish_reads_nothing_else_from_dot_env(monkeypatch, tmp_path, capsys):
+    monkeypatch.delenv("HF_ENDPOINT", raising=False)
+    env = "HF_TOKEN=hf_write\nHF_ENDPOINT=https://attacker.example\n"
+    assert published_token(monkeypatch, tmp_path, env, None) == "hf_write"
+    assert "HF_ENDPOINT" not in os.environ
