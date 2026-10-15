@@ -394,6 +394,115 @@ def check_release(name: str = "4b") -> dict:
     return {"health": health, "response": served}
 
 
+@app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=4 * 60 * 60)
+def fit_at_adapter_scale(
+    name: str = "lev",
+    preset: str = "4b-instruct",
+    scale: float = 0.25,
+    scales: str = "",
+    split: str = "calibration",
+    search_rows: int = 6000,
+    apply: bool = False,
+) -> dict:
+    """Refit the temperature profile with the adapter scaled to `scale`.
+
+    Shrinking the adapter trades in-distribution accuracy for out-of-distribution
+    robustness, so `split` cannot choose the scale: it is drawn from the training
+    mixture, and accuracy there rises monotonically to scale 1.0 (0.6233 at 0.125,
+    0.8133 at 1.0). The scale is chosen instead by leave-one-family-out over S1Bench,
+    which holds each family out of its own selection; that put it at 0.25 for 6 of 7
+    families. Temperatures still belong on `split`, which is what this fits.
+
+    Passing `scales` sweeps them on `search_rows` rows and reports in-distribution
+    sensitivity, without selecting. `apply` writes the scale and profile into the release.
+    """
+    import json
+    import random
+
+    from lev import load
+    from lev.calibrate import CalibrationProfile, fit_for_transfer
+    from lev.data.build import load_split
+    from lev.data.sources import family_of
+    from lev.data.splits import Split
+    from lev.train.checkpoints import CALIBRATION
+    from lev.train.config import PRESETS
+    from lev.train.evaluate import score
+    from lev.train.loop import scored_rows
+    from peft.tuners.lora import LoraLayer
+
+    release = Path(f"{RELEASES_DIR}/{name}")
+    engine = load(str(release), cache_dir=MODELS_DIR, merge_adapter=False)
+    layers = [m for m in engine.model.modules() if isinstance(m, LoraLayer)]
+    if not layers:
+        raise RuntimeError("adapter already merged; nothing to scale")
+
+    config = PRESETS[preset]
+    everything = [r for r in load_split(DATA_DIR, Split(split)) if not r.abstain]
+    # The search only has to separate scales that differ by points, so it runs on a
+    # shuffled subsample; the chosen scale is then fitted on the whole split.
+    search_set = everything
+    if search_rows and search_rows < len(everything):
+        search_set = random.Random(17).sample(everything, search_rows)
+    print(
+        f"{len(layers)} lora layers, {len(everything)} {split} rows, "
+        f"searching on {len(search_set)}",
+        flush=True,
+    )
+
+    def collect(scale: float, rows):
+        for m in layers:
+            for adapter in m.scaling:
+                m.set_scale(adapter, scale)
+        buckets: dict[str, list[tuple[list[float], int, str]]] = {}
+        flat: list[tuple[list[float], int]] = []
+        for example, logits, mode, width in scored_rows(
+            engine.model, engine.tokenizer, engine.mode_b_head, config, rows, 32
+        ):
+            flat.append((logits, example.target))
+            sample = (logits, example.target, family_of(example.source))
+            for key in {
+                CalibrationProfile.key(example.question.type, mode, width),
+                CalibrationProfile.key(example.question.type, mode),
+            }:
+                buckets.setdefault(key, []).append(sample)
+        return buckets, flat
+
+    results: dict[str, dict] = {}
+    for swept in [float(x) for x in scales.split(",") if x.strip()]:
+        _, flat = collect(swept, search_set)
+        accuracy, ece, brier, log_loss = score(flat, 1.0)
+        results[f"{swept:g}"] = {
+            "accuracy": round(accuracy, 4),
+            "ece_uncalibrated": round(ece, 4),
+            "brier": round(brier, 4),
+            "log_loss": round(log_loss, 4),
+        }
+        print(f"  scale {swept:<7g} {split} accuracy {accuracy:.4f}  ECE {ece:.4f}", flush=True)
+
+    print(f"fitting temperatures at scale {scale} on all {len(everything)} rows", flush=True)
+    buckets, flat = collect(scale, everything)
+    profile, report = fit_for_transfer(buckets, split_name=split)
+    after = score(flat, 1.0)
+    out = {
+        "scale": scale,
+        "fitted_on": split,
+        "per_scale": results,
+        "search_rows": len(search_set) if results else 0,
+        "temperatures": profile.temperatures,
+        "calibration_accuracy": round(after[0], 4),
+        "calibration_ece_uncalibrated": round(after[1], 4),
+    }
+    if apply:
+        profile.save(release / CALIBRATION)
+        manifest = json.loads((release / "lev_release.json").read_text())
+        manifest["adapter_scale"] = scale
+        (release / "lev_release.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        checkpoints.commit()
+        print(f"wrote scale {scale} and refitted temperatures into {release}")
+    print(json.dumps(out, indent=2))
+    return out
+
+
 def _predicted_label(answer):
     """levbench's label rule, so a sweep is comparable with a `levbench eval` run."""
     if answer.type == "noul":
