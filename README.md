@@ -166,7 +166,7 @@ flowchart LR
     style O fill:#2a78d6,stroke:#2a78d6,color:#ffffff
 ```
 
-Each option gets a short code, and the answer is read from the next-token logits over those codes. Choices are read in two option orders and averaged, which cancels position bias. Codes that would split into two tokens are skipped, so this reaches several hundred options.
+Each option gets a short code, and the answer is read from the next-token logits over those codes. Choices are read in two option orders and averaged, which cancels position bias. Score levels stay in their trained order unless the server runs with `--score-order-average` (off by default, [ADR-029](docs/DECISIONS.md#adr-029--score-is-read-in-one-order-measure-the-position-effect-and-offer-averaging-off-by-default)). Codes that would split into two tokens are skipped, so this reaches several hundred options.
 
 **The router is the part nobody else had.** Every other implementation picks one readout family and hits a wall when options stop fitting in single tokens: it caps the option count or rejects the request. lev routes those questions to a small learned head that matches the state against each option's text, so there is no fixed option ceiling. [ADR-005 →](docs/DECISIONS.md#adr-005--dual-mode-readout-the-differentiator)
 
@@ -265,7 +265,7 @@ The data build refuses any source that resolves to one of the 13 S1Bench subsets
 
 ```text
 packages/
-  lev/          the model     — schema, prompt layouts, router, readouts, calibration, loader, server, S1Bench export
+  lev/          the model     — schema, prompt layouts, router, readouts, calibration, loader, server, presentation checks, S1Bench export
   levbench/     the harness   — accuracy, ECE, cost, latency, batching economics, Snake
 modal/          app.py        — train / calibrate / serve / check a release on one H100
 hf/             README.md     — the Hub model card, and the charts it shows
@@ -276,7 +276,7 @@ docs/           ARCHITECTURE  — the design, and every model it was derived fro
                 STATUS        — what is built and how far it has been run
                 SETUP, TRAINING — local and Modal, the pipeline step by step
                 charts/       — the lev-vs-Jev comparison page, built from the logs
-data/           sample state + the S1Bench snapshot the analysis rests on
+data/           sample state, the S1Bench snapshot the analysis rests on, the presentation report
 ```
 
 ## Prior work

@@ -187,7 +187,7 @@ The 69 ms is engine compute for a short request (a three-sentence state), measur
 
 <p align="center"><img src="assets/how-it-works.png" alt="State and questions go through one forward pass, then label-token readout or the candidate-path head, then per-bucket temperatures, then typed answers" width="460"></p>
 
-- **Label-token readout.** Each option gets a short code, and the answer is read from the next-token logits over those codes. Codes that would split into two tokens are skipped, so every option stays one token. This handles yes/no, scores, and choice lists up to several hundred options. Choices are read in two option orders and averaged, which cancels position bias.
+- **Label-token readout.** Each option gets a short code, and the answer is read from the next-token logits over those codes. Codes that would split into two tokens are skipped, so every option stays one token. This handles yes/no, scores, and choice lists up to several hundred options. Choices are read in two option orders and averaged, which cancels position bias. Score levels stay in their trained order unless `lev serve` runs with `--score-order-average`, which is off by default.
 - **Candidate-path head.** Past that point, a small learned head matches the state against each option's text, so the number of options has no fixed ceiling.
 - **Calibration.** Temperatures fitted after training are applied at load time. There is one per question type, readout mode, and choice option-count band. They were selected by how well they carry over to task families left out of the fit, not only by how well they fit held-out rows.
 
