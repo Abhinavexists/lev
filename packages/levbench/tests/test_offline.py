@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import httpx2
 import pytest
-from fake_transport import transport
+from fake_transport import JEV_VERSION, transport
 from levbench import batching, confidence_id, metrics, runner
 from levbench.pricing import cost_usd
 from levbench.tasks import FileItem, dataset, detectable_difference, load_task_file
@@ -87,7 +87,7 @@ def test_ece_bins_on_the_top_probability_not_the_vendor_confidence_field() -> No
 
 def test_eval_runs_end_to_end_over_the_built_in_fixture() -> None:
     items, questions = dataset()
-    report = runner.run_eval(fake_client(), "jev", "jev-latest", items, questions)
+    report = runner.run_eval(fake_client(), "jev", runner.JEV_DEFAULT, items, questions)
     assert len(report.calls) == len(items)
     assert set(report.per_question) == set(questions)
     assert report.total_cost > 0
@@ -98,7 +98,7 @@ def test_eval_runs_end_to_end_over_the_built_in_fixture() -> None:
 def test_sweep_arithmetic_over_a_fixed_billing_shape() -> None:
     """Synthetic billing verifies sweep arithmetic; live billing requires a live sweep."""
     state = (ROOT / "data" / "sample_policy.md").read_text()
-    rows = batching.sweep(fake_client(), "jev-latest", state, [1, 2, 4, 8, 13])
+    rows = batching.sweep(fake_client(), runner.JEV_DEFAULT, state, [1, 2, 4, 8, 13])
 
     assert rows[0].cost_ratio == pytest.approx(1.0, abs=0.01, rel=0), (
         "at N=1 batched and split are the same call; ratio must be ~1"
@@ -108,18 +108,18 @@ def test_sweep_arithmetic_over_a_fixed_billing_shape() -> None:
     assert rows[-1].cost_ratio > 5, (
         f"at N=13 expected a large saving, got {rows[-1].cost_ratio:.1f}x"
     )
-    assert "batching sweep" in batching.format_sweep(rows, "jev-latest", len(state))
+    assert "batching sweep" in batching.format_sweep(rows, runner.JEV_DEFAULT, len(state))
 
 
 @pytest.mark.parametrize("count", [0, -1])
 def test_sweep_rejects_non_positive_question_counts(count) -> None:
     with pytest.raises(ValueError, match="must be positive"):
-        batching.sweep(None, "jev-latest", "state", [count])
+        batching.sweep(None, runner.JEV_DEFAULT, "state", [count])
 
 
 def test_sweep_respects_an_explicitly_empty_bank() -> None:
     with pytest.raises(ValueError, match="bank holds 0"):
-        batching.sweep(None, "jev-latest", "state", [1], bank=[])
+        batching.sweep(None, runner.JEV_DEFAULT, "state", [1], bank=[])
 
 
 @pytest.mark.parametrize("planted", confidence_id.CANDIDATES)
@@ -193,9 +193,24 @@ def test_local_base_url_never_forwards_the_real_key(monkeypatch) -> None:
     assert "REAL-SECRET" not in str(local._config.api_key), "leaked the real key"
     assert local._config.api_key == "local"
 
-    hosted, _ = runner.build_client("jev", "jev-latest")
+    hosted, _ = runner.build_client("jev")
     assert isinstance(hosted, TypeSafeClient)
     assert hosted._config.api_key == "sk-REAL-SECRET-KEY", "hosted path lost its key"
+
+
+def test_an_unpinned_jev_client_takes_the_sdk_default(monkeypatch) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-test")
+    monkeypatch.setenv("TYPESAFE_DEFAULT_MODEL", "jev-1.12")
+    client, label = runner.build_client("jev")
+    assert label == runner.JEV_DEFAULT
+    assert client._config.default_model == "jev-1.12"
+
+
+def test_an_unpinned_jev_run_reports_the_version_served() -> None:
+    items, questions = dataset()
+    report = runner.run_eval(fake_client(), "jev", runner.JEV_DEFAULT, items, questions)
+    assert report.model == JEV_VERSION
+    assert "WARNING" not in runner.format_report(report)
 
 
 def test_empty_local_key_env_var_falls_back(monkeypatch) -> None:
@@ -235,7 +250,7 @@ def test_eval_runs_over_a_generated_task_file(tmp_path, question_type) -> None:
     """Exercise the task-file format produced by `lev data eval` for every primitive."""
     items, questions = dataset(_write_task_file(tmp_path / "gen.json", question_type))
     assert questions["q"].type == question_type
-    report = runner.run_eval(fake_client(), "jev", "jev-latest", items, questions)
+    report = runner.run_eval(fake_client(), "jev", runner.JEV_DEFAULT, items, questions)
     assert len(report.calls) == 5
     assert set(report.per_question) == {"q"}
     assert report.per_question["q"] is not None
@@ -361,7 +376,7 @@ class TestConcurrentEval:
 
 class TestCostAccounting:
     def test_cost_is_per_million_tokens_at_list_price(self) -> None:
-        assert cost_usd("jev-latest", 1_000_000, 0) == pytest.approx(0.042)
+        assert cost_usd(JEV_VERSION, 1_000_000, 0) == pytest.approx(0.042)
         assert cost_usd("claude-opus-5", 1_000_000, 1_000_000) == pytest.approx(30.0)
         assert cost_usd("Qwen/Qwen3.5-4B", 1_000_000, 1_000_000) == 0.0, "self-hosted is unmetered"
 
@@ -378,8 +393,8 @@ class TestCostAccounting:
 
     def test_a_substituted_model_is_flagged_in_the_report(self) -> None:
         """Report model substitution because pricing uses the requested model."""
-        report = runner.EvalReport(backend="jev", model="jev-latest")
-        report.calls.append(runner.CallResult({}, 0.3, "jev-1.13.0", 10, 1))
-        assert "requested 'jev-latest' but server served ['jev-1.13.0']" in runner.format_report(
+        report = runner.EvalReport(backend="jev", model="jev-1.12")
+        report.calls.append(runner.CallResult({}, 0.3, JEV_VERSION, 10, 1))
+        assert "requested 'jev-1.12' but server served ['jev-1.13.0']" in runner.format_report(
             report
         )

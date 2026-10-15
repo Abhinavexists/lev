@@ -69,6 +69,8 @@ class EvalReport:
 
 
 DEFAULT_LOCAL_BASE_URL = "http://localhost:8000"
+# Label for Jev runs left on the SDK's default model; reports name the version served instead.
+JEV_DEFAULT = "jev"
 
 
 # Modal's 4B cold start measured 20-55 s, against the SDK's 10 s default (ADR-022).
@@ -87,8 +89,8 @@ def build_client(
             base_url = base_url or DEFAULT_LOCAL_BASE_URL
         from typesafe_sdk import TypeSafeClient
 
-        resolved = model or ("jev-latest" if backend == "jev" else "local")
-        kwargs: dict[str, Any] = {"model": resolved}
+        resolved = model or (JEV_DEFAULT if backend == "jev" else "local")
+        kwargs: dict[str, Any] = {"model": None if resolved == JEV_DEFAULT else resolved}
         if timeout is not None:
             kwargs["timeout"] = timeout
         elif backend == "lev":
@@ -191,7 +193,7 @@ def run_eval(
             )
 
     served = report.served_by
-    if backend == "lev" and len(served) == 1:
+    if (backend == "lev" or model == JEV_DEFAULT) and len(served) == 1:
         # The label was a placeholder; the server knows what it loaded.
         report.model = served.pop()
 

@@ -184,11 +184,15 @@ def cmd_confidence(args: argparse.Namespace) -> None:
     client, model = runner.build_client("jev", args.model, args.base_url)
 
     answers: list = []
+    served: set[str] = set()
     for item in items:
-        answers.extend(runner.call_once(client, item.state, questions).answers.values())
+        result = runner.call_once(client, item.state, questions)
+        answers.extend(result.answers.values())
+        served.add(result.served_by)
 
     samples = confidence_id.collect(answers)
-    print(f"model: {model}   answers with a distribution: {len(samples)}\n")
+    shown = ", ".join(sorted(served)) or model
+    print(f"model: {shown}   answers with a distribution: {len(samples)}\n")
     print(confidence_id.format_fits(confidence_id.identify(samples)))
 
 

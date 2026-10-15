@@ -6,6 +6,9 @@ import hashlib
 import json
 
 import httpx2
+from typesafe_sdk import constants
+
+JEV_VERSION = "jev-1.13.0"
 
 
 def _rand(*parts: str) -> float:
@@ -53,6 +56,10 @@ def handler(request: httpx2.Request) -> httpx2.Response:
     state_text = state if isinstance(state, str) else json.dumps(state, sort_keys=True)
     state_sig = hashlib.sha256(state_text.encode()).hexdigest()[:16]
 
+    requested = body.get("model")
+    # Like the hosted API, serve a concrete version when asked for the SDK's default alias.
+    served = JEV_VERSION if requested in (None, constants.DEFAULT_MODEL) else requested
+
     questions = body["questions"]
     answers = {k: _answer(k, q, state_sig) for k, q in questions.items()}
 
@@ -63,7 +70,7 @@ def handler(request: httpx2.Request) -> httpx2.Response:
     return httpx2.Response(
         200,
         json={
-            "model": body.get("model", "jev-latest"),
+            "model": served,
             "answers": answers,
             "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
         },

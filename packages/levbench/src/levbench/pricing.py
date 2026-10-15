@@ -11,9 +11,10 @@ class Price:
     output_per_mtok: float
 
 
+# Every Jev version bills at the published Jev rate unless PRICES names it.
+JEV = Price(0.042, 0.0)
+
 PRICES: dict[str, Price] = {
-    "jev-latest": Price(0.042, 0.0),
-    "jev-1.13": Price(0.042, 0.0),
     "claude-opus-5": Price(5.00, 25.00),
     "claude-sonnet-5": Price(2.00, 10.00),
     "claude-haiku-4-5": Price(1.00, 5.00),
@@ -21,7 +22,7 @@ PRICES: dict[str, Price] = {
 }
 
 
-# Unknown jev names use jev-latest rates; other unknown models have zero token cost.
+# Unknown non-Jev models are self-hosted and have zero token cost.
 SELF_HOSTED = Price(0.0, 0.0)
 
 
@@ -33,7 +34,7 @@ def lookup(model: str) -> Price:
     if model in PRICES:
         return PRICES[model]
     if model.startswith("jev"):
-        return PRICES["jev-latest"]
+        return JEV
     return SELF_HOSTED
 
 
