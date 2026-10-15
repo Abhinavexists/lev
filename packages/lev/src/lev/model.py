@@ -535,11 +535,16 @@ def load(
     score_order_average: Literal["off", "reversed", "cyclic"] = "off",
     max_batch_tokens: int | None = MAX_BATCH_TOKENS,
     merge_adapter: bool = True,
+    adapter_scale: float | None = None,
 ) -> DecisionEngine:
     """Load an engine from a release, training output, or Hub id; otherwise use the frozen base.
 
     Release metadata overrides the base model and prompt style. Load the checkpoint's
-    tokenizer, head, and calibration when present; warn if calibration is missing."""
+    tokenizer, head, and calibration when present; warn if calibration is missing.
+
+    `adapter_scale` overrides the manifest's `adapter_scale`, a multiplier on the adapter's
+    trained strength: below 1.0 it interpolates back toward the frozen backbone, trading
+    in-distribution accuracy for out-of-distribution robustness (FINDINGS.md §19)."""
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -548,9 +553,11 @@ def load(
     # Load the base model before applying the checkpoint's adapter.
     resolved = resolve_checkpoint(checkpoint, cache_dir) if checkpoint else None
     manifest_file = resolved / "lev_release.json" if resolved else None
+    released_scale = 1.0
     if manifest_file and manifest_file.is_file():
         manifest = json.loads(manifest_file.read_text())
         prompt_style = manifest.get("prompt_style", prompt_style)
+        released_scale = float(manifest.get("adapter_scale", 1.0))
         if manifest["base_model"] != model_id:
             print(
                 f"release manifest names base {manifest['base_model']!r}; "
@@ -578,6 +585,9 @@ def load(
 
         # Merge to reduce launches and fix graph weights; keep separate for adapter-scale sweeps.
         model = PeftModel.from_pretrained(model, str(resolved))
+        scale = released_scale if adapter_scale is None else adapter_scale
+        if scale != 1.0:
+            _set_adapter_scale(model, scale)
         if merge_adapter:
             model = model.merge_and_unload()
         head = _load_head(resolved / MODE_B_HEAD, model)
@@ -610,6 +620,18 @@ def load(
     if compile:
         print(f"warmup: compiled forward in {engine.warmup():.0f}s", flush=True)
     return engine
+
+
+def _set_adapter_scale(model, scale: float) -> None:
+    """Scale every LoRA layer relative to its trained strength, before any merge bakes it in."""
+    from peft.tuners.lora import LoraLayer
+
+    layers = [m for m in model.modules() if isinstance(m, LoraLayer)]
+    if not layers:
+        raise RuntimeError(f"adapter_scale {scale} requested, but the model has no LoRA layers")
+    for layer in layers:
+        for adapter in layer.scaling:
+            layer.set_scale(adapter, scale)
 
 
 def _load_head(path: Path, model):
