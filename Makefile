@@ -96,10 +96,10 @@ calibrate:
 
 .PHONY: serve deploy release weights publish
 serve:
-	LEV_SERVE_PRESET=$(PRESET) modal serve modal/app.py
+	LEV_SERVE_PRESET=$(PRESET) $(if $(NAME),LEV_SERVE_RELEASE=$(NAME)) modal serve modal/app.py
 
 deploy:
-	LEV_SERVE_PRESET=$(PRESET) modal deploy modal/app.py
+	LEV_SERVE_PRESET=$(PRESET) $(if $(NAME),LEV_SERVE_RELEASE=$(NAME)) modal deploy modal/app.py
 
 release:
 	modal run modal/app.py::export_checkpoint --preset $(PRESET) $(if $(NAME),--name $(NAME),)

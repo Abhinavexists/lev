@@ -101,6 +101,7 @@ def _serve_overrides() -> list:
         for key in (
             "LEV_SERVE_PRESET",
             "LEV_SERVE_MODEL",
+            "LEV_SERVE_RELEASE",
             "LEV_SERVE_COMPILE",
             "LEV_SERVE_MAX_LABEL_OPTIONS",
             "LEV_SERVE_PROMPT",
@@ -285,9 +286,16 @@ def serve():
     skip_codes = os.environ.get("LEV_SERVE_SKIP_CODES", "1") not in ("0", "false", "no")
     # A frozen-model override must bypass the adapter checkpoint.
     frozen = os.environ.get("LEV_SERVE_MODEL")
+    release = os.environ.get("LEV_SERVE_RELEASE")
     if frozen:
         print(f"serving {frozen} frozen: no adapter, binary Noul, raw softmax")
         checkpoint_dir, model_id = None, frozen
+    elif release:
+        # A release is what was published: its manifest's adapter scale and refit temperatures.
+        checkpoint_dir, model_id = f"{RELEASES_DIR}/{release}", config.model_id
+        if not Path(checkpoint_dir, "lev_release.json").is_file():
+            raise FileNotFoundError(f"LEV_SERVE_RELEASE={release!r}: nothing at {checkpoint_dir}")
+        print(f"serving release {release}")
     else:
         output = Path(f"{CKPT_DIR}/{preset}")
         # `latest_checkpoint` skips a step directory without weights (an interrupted save).
