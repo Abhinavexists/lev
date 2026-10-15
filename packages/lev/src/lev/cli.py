@@ -193,8 +193,12 @@ def cmd_release_build(args: argparse.Namespace) -> None:
 
 
 def cmd_release_publish(args: argparse.Namespace) -> None:
+    from dotenv import find_dotenv, load_dotenv
+
     from .release import publish
 
+    # The Hub write key lives in .env; `hf auth login` may hold a token without org write access.
+    load_dotenv(find_dotenv(usecwd=True))
     url = publish(args.release, args.repo, private=args.private)
     print(f"published -> {url}")
     print(f"\n  uv run lev serve --checkpoint {args.repo}")

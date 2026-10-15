@@ -28,6 +28,7 @@ train = [
     "accelerate>=1.2",
     "datasets>=3.2",
     "huggingface-hub>=1.0",
+    "python-dotenv>=1.2.3",
     "safetensors>=0.4",
 ]
 serve = [
