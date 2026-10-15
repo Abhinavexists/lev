@@ -34,8 +34,6 @@ Reader = Callable[[dict, random.Random], Row | Rows | None]
 
 @dataclass(frozen=True)
 class SourceSpec:
-    """A dataset and its question, label mapping and optional row reader."""
-
     name: str
     hf_id: str
     primitive: Primitive
@@ -67,11 +65,10 @@ def _read_race(row: dict, rng: random.Random) -> ChoiceRow | None:
     return {"passage": row["article"], "question": row["question"]}, options, index
 
 
+# Includes ARC's numeric choice labels, not only letters.
 def _read_keyed_choices(
     question_field: str, context_field: str | None = None
 ) -> Callable[[dict, random.Random], ChoiceRow | None]:
-    """Match answerKey to choice labels, including numeric ARC labels."""
-
     def reader(row: dict, rng: random.Random) -> ChoiceRow | None:
         labels = [str(x) for x in row["choices"]["label"]]
         texts = [str(x) for x in row["choices"]["text"]]
@@ -119,7 +116,6 @@ def _read_nli(row: dict, rng: random.Random) -> Row | None:
 
 
 def swap_two_words(text: str, rng: random.Random) -> str | None:
-    """Swap distinct content words, or return None if no pair is found in eight draws."""
     words = text.split()
     slots = [i for i, w in enumerate(words) if len(w) > 3 and w.isalpha()]
     if len(slots) < 2:
@@ -136,8 +132,6 @@ def swap_two_words(text: str, rng: random.Random) -> str | None:
 def _read_pair(
     first: str, second: str, adversarial: float = 0.0
 ) -> Callable[[dict, random.Random], list[PairRow]]:
-    """Read sentence pairs, optionally adding word-swapped negatives to positive rows."""
-
     def reader(row: dict, rng: random.Random) -> list[PairRow]:
         a, b = row[first], row[second]
         label = int(row["label"])
@@ -179,8 +173,6 @@ def _read_strategyqa(row: dict, rng: random.Random) -> PairRow:
 
 
 def yes_no_from_choices(reader: Reader) -> Callable[[dict, random.Random], list[PairRow] | None]:
-    """Turn each multiple-choice row into two Noul rows: gold and wrong proposals."""
-
     def wrapped(row: dict, rng: random.Random) -> list[PairRow] | None:
         produced = reader(row, rng)
         if produced is None:
@@ -610,7 +602,6 @@ ADJACENT: tuple[frozenset[str], ...] = (
 
 
 def family_of(source: str) -> str:
-    """Return the adjacent-source family used for calibration transfer (ADR-028)."""
     for group in ADJACENT:
         if source in group:
             return "+".join(sorted(group))
@@ -618,20 +609,19 @@ def family_of(source: str) -> str:
 
 
 def adjacency_map() -> dict[str, frozenset[str]]:
-    """Map sources to those excluded as abstain donors."""
     return {
         name: frozenset().union(*(group for group in ADJACENT if name in group)) - {name}
         for name in REGISTRY
     }
 
 
+# Rating 1 would mean P(yes)=0.125, so binary labels map to ratings 0 and 8.
 def _noul_rating(label: int) -> int:
-    """Map binary labels to ratings 0 and 8; rating 1 would mean P(yes)=0.125."""
     return 0 if int(label) == 0 else len(NOUL_RATING_TOKENS) - 1
 
 
+# Leave names such as Sci/Tech intact.
 def humanise(label: str) -> str:
-    """Expand snake_case and camelCase labels; leave names such as Sci/Tech intact."""
     spaced = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", label)
     return re.sub(r"[_\-]+", " ", spaced).strip()
 
@@ -665,6 +655,7 @@ def build_question(spec: SourceSpec, names: list[str]) -> Question:
     )
 
 
+# Shuffle before the limit: corpora often ship sorted by label, so a head slice can hold one class.
 def load_source(
     spec: SourceSpec,
     limit: int | None = None,
@@ -673,7 +664,6 @@ def load_source(
     seed: int = 17,
     load_dataset: Callable | None = None,
 ) -> Iterator[Example]:
-    """Yield examples through an injectable loader, shuffling before applying the limit."""
     if load_dataset is None:
         from datasets import load_dataset
 
@@ -746,8 +736,8 @@ def _blank(state) -> bool:
 LARGE_SET_MIN_OPTIONS = 15
 
 
+# Large taxonomies keep their full option set half the time (ADR-026).
 def augmentation_map() -> dict[str, Augment]:
-    """Configure option variation; large taxonomies retain full sets half the time (ADR-026)."""
     return {
         name: Augment(
             paraphrases=spec.paraphrases,
@@ -760,7 +750,6 @@ def augmentation_map() -> dict[str, Augment]:
 
 
 def default_weights() -> dict[str, float]:
-    """Reserve MODE_B_SHARE for large taxonomies; balance the remainder across primitives."""
     mode_b_sources = sorted(MODE_B_SOURCES)
     sources_by_primitive: dict[str, list[str]] = {}
     for name, spec in REGISTRY.items():

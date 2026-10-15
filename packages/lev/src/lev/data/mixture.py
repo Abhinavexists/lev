@@ -26,10 +26,9 @@ class Example:
     soft_target: list[float] | None = None
 
 
+# Negated wordings flip the Noul target.
 @dataclass(frozen=True)
 class Augment:
-    """Per-source wording and option variation; negations flip Noul targets."""
-
     paraphrases: tuple[str, ...] = ()
     negations: tuple[str, ...] = ()
     min_options: int = 2
@@ -67,7 +66,6 @@ Loader = Callable[[], Iterable[Example]]
 
 
 def build_mixture(spec: MixtureSpec, loaders: Mapping[str, Loader]) -> Iterator[Example]:
-    """Sample examples from validated sources using the configured weights and augmentations."""
     spec.validate()
     missing = set(spec.sources) - set(loaders)
     if missing:

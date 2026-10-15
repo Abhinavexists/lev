@@ -64,9 +64,8 @@ def test_every_primitive_flattens_to_a_distribution() -> None:
     assert score.score == pytest.approx(expected, abs=1e-2, rel=0)
 
 
+# Vendor confidence formulas differ, so ECE must use the answer's top probability.
 def test_ece_bins_on_the_top_probability_not_the_vendor_confidence_field() -> None:
-    """Vendor confidence formulas differ; ECE must use the answer's top probability."""
-
     class Server:
         def system_one(self, state, questions):
             answer = SimpleNamespace(
@@ -95,8 +94,8 @@ def test_eval_runs_end_to_end_over_the_built_in_fixture() -> None:
     assert "accuracy" in text and "ECE" in text
 
 
+# Synthetic billing checks the sweep arithmetic; live billing needs a live sweep.
 def test_sweep_arithmetic_over_a_fixed_billing_shape() -> None:
-    """Synthetic billing verifies sweep arithmetic; live billing requires a live sweep."""
     state = (ROOT / "data" / "sample_policy.md").read_text()
     rows = batching.sweep(fake_client(), runner.JEV_DEFAULT, state, [1, 2, 4, 8, 13])
 
@@ -122,10 +121,9 @@ def test_sweep_respects_an_explicitly_empty_bank() -> None:
         batching.sweep(None, runner.JEV_DEFAULT, "state", [1], bank=[])
 
 
+# A match only means something if the identifier can tell candidate formulas apart.
 @pytest.mark.parametrize("planted", confidence_id.CANDIDATES)
 def test_confidence_identifier_recovers_a_planted_formula(planted) -> None:
-    """A match is useful only if the identifier can distinguish candidate formulas."""
-
     def handle(request):
         body = json.loads(request.content)
         answers = {}
@@ -185,7 +183,6 @@ def test_base_url_routes_to_a_local_clone() -> None:
 
 
 def test_local_base_url_never_forwards_the_real_key(monkeypatch) -> None:
-    """Custom endpoints use a local key; hosted requests retain the real credential."""
     monkeypatch.setenv("TYPESAFE_API_KEY", "sk-REAL-SECRET-KEY")
     monkeypatch.delenv("LEVBENCH_LOCAL_API_KEY", raising=False)
     local, _ = runner.build_client("jev", "litjev", "http://127.0.0.1:8000")
@@ -214,7 +211,6 @@ def test_an_unpinned_jev_run_reports_the_version_served() -> None:
 
 
 def test_empty_local_key_env_var_falls_back(monkeypatch) -> None:
-    """An empty key produces an invalid Bearer header; use the local fallback."""
     monkeypatch.setenv("LEVBENCH_LOCAL_API_KEY", "")
     client, _ = runner.build_client("lev")
     assert isinstance(client, TypeSafeClient)
@@ -247,7 +243,6 @@ def _write_task_file(path, question_type="choice", n=5):
 
 @pytest.mark.parametrize("question_type", ["choice", "score", "noul"])
 def test_eval_runs_over_a_generated_task_file(tmp_path, question_type) -> None:
-    """Exercise the task-file format produced by `lev data eval` for every primitive."""
     items, questions = dataset(_write_task_file(tmp_path / "gen.json", question_type))
     assert questions["q"].type == question_type
     report = runner.run_eval(fake_client(), "jev", runner.JEV_DEFAULT, items, questions)
@@ -258,7 +253,6 @@ def test_eval_runs_over_a_generated_task_file(tmp_path, question_type) -> None:
 
 
 def test_a_task_file_labelling_an_undefined_question_raises(tmp_path) -> None:
-    """Reject undefined questions so their labels cannot be silently excluded from scoring."""
     path = tmp_path / "bad.json"
     path.write_text(
         json.dumps(
@@ -283,8 +277,8 @@ def test_detectable_difference_shrinks_with_n() -> None:
     assert detectable_difference(0) == 1.0
 
 
+# Grouping by candidate-set size can expose a formula that pooled samples hide.
 def test_pooling_can_hide_a_formula_that_holds_per_candidate_set_size() -> None:
-    """Grouping by candidate-set size can expose formulas hidden by pooled samples."""
     four = [0.7, 0.1, 0.1, 0.1]
     three = [0.5, 0.3, 0.2]
     samples = [(four, confidence_id.max_prob(four))] * 6
@@ -311,14 +305,14 @@ def test_worst_residuals_surfaces_the_samples_that_break_a_candidate() -> None:
     assert predicted == pytest.approx(0.5, abs=1e-9, rel=0)
 
 
+# Incomplete distributions can distort confidence formulas independently of fit.
 def test_diagnosis_reports_whether_distributions_are_complete() -> None:
-    """Incomplete distributions can distort confidence formulas independently of fit."""
     truncated = [([0.6, 0.3], 0.6)]
     assert "sum to 1 within 0.1" in confidence_id.format_diagnosis(truncated)
 
 
+# Normalized max probability amplifies rounding by K/(K-1).
 def test_tolerance_accounts_for_how_much_a_statistic_amplifies_rounding() -> None:
-    """Normalized max probability amplifies rounding by K/(K-1)."""
     rng = random.Random(0)
     samples = []
     for size in (4, 3):
@@ -381,7 +375,6 @@ class TestCostAccounting:
         assert cost_usd("Qwen/Qwen3.5-4B", 1_000_000, 1_000_000) == 0.0, "self-hosted is unmetered"
 
     def test_billed_totals_win_over_base_counts(self) -> None:
-        """Retry totals reflect billed usage."""
         usage = SimpleNamespace(
             input_tokens=10, input_tokens_total=25, output_tokens=2, output_tokens_total=4
         )
@@ -391,8 +384,8 @@ class TestCostAccounting:
         with pytest.raises(ValueError, match="refusing to assume 0 tokens"):
             runner._usage_ints(SimpleNamespace(input_tokens=None, output_tokens=None))
 
+    # Pricing uses the requested model, so a substitution has to be reported.
     def test_a_substituted_model_is_flagged_in_the_report(self) -> None:
-        """Report model substitution because pricing uses the requested model."""
         report = runner.EvalReport(backend="jev", model="jev-1.12")
         report.calls.append(runner.CallResult({}, 0.3, JEV_VERSION, 10, 1))
         assert "requested 'jev-1.12' but server served ['jev-1.13.0']" in runner.format_report(

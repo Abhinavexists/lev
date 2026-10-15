@@ -29,7 +29,6 @@ HISTORY = "history.json"
 
 
 def build_model(config: TrainConfig, model_cache: str | None = None):
-    """Load the tokenizer and backbone, wrapped in LoRA when `config.use_lora`."""
     import torch
     from peft import LoraConfig, get_peft_model
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -80,6 +79,8 @@ def build_model(config: TrainConfig, model_cache: str | None = None):
     return model, tokenizer
 
 
+# logits (B, K), -inf at padded slots; targets (B,) gold indices, IGNORE_INDEX for abstain rows;
+# ordinal (B,) bool or a scalar bool; soft_targets (B, K) distributions for abstain rows.
 def decision_loss(
     logits,
     targets,
@@ -87,14 +88,6 @@ def decision_loss(
     ordinal: bool | torch.Tensor = False,
     soft_targets=None,
 ):
-    """Cross-entropy, Brier and ordinal loss over padded candidate sets.
-
-    Args:
-        logits: `(B, K)`, with `-inf` at padded slots.
-        targets: `(B,)` gold indices; `IGNORE_INDEX` for abstain rows.
-        ordinal: `(B,)` bool for ordered targets, or a scalar bool.
-        soft_targets: `(B, K)` distributions for abstain rows.
-    """
     import torch
     import torch.nn.functional as F
 
@@ -126,8 +119,8 @@ def decision_loss(
     return loss
 
 
+# (B, K) scores: label logits in Mode A, pooled candidate embeddings in Mode B.
 def candidate_logits(model, batch, head=None):
-    """Compute (B, K) scores using label logits or pooled candidate embeddings."""
     import torch
 
     from ..router import Mode
@@ -173,8 +166,8 @@ def candidate_logits(model, batch, head=None):
     return logits.float().masked_fill(batch.candidate_mask.to(logits.device), float("-inf"))
 
 
+# The head stays fp32 beside the bf16 backbone.
 def build_head(config: TrainConfig, model=None):
-    """The Mode B matching head, in fp32 beside the bf16 backbone."""
     import torch
 
     from ..readout.mode_b import CandidatePathReadout
@@ -189,7 +182,6 @@ def build_head(config: TrainConfig, model=None):
 
 
 def load_for_eval(config: TrainConfig, checkpoint_dir, model_cache: str | None = None):
-    """Build the model and head, restore a checkpoint into them, and put both in eval mode."""
     model, tokenizer = build_model(config, model_cache)
     head = build_head(config, model) if config.train_mode_b_head else None
     load_checkpoint(model, head, checkpoint_dir)
@@ -200,7 +192,6 @@ def load_for_eval(config: TrainConfig, checkpoint_dir, model_cache: str | None =
 
 
 def scored_rows(model, tokenizer, head, config: TrainConfig, rows, batch_size):
-    """Yield `(example, logits, mode, width)` per row, batched as training batches."""
     import torch
 
     routes = RouteCache(tokenizer, config.max_label_options, Style(config.prompt_style))
@@ -232,8 +223,8 @@ def to_device(batch, device):
     return batch
 
 
+# Validate before loading the model, so bad data fails fast.
 def prepare_data(config: TrainConfig, data_dir: str):
-    """Validate data and contamination before loading the model."""
     from ..data.build import MANIFEST, load_split
     from ..data.splits import Split
 
@@ -269,9 +260,6 @@ def run_training(
     max_steps: int | None = None,
     fresh: bool = False,
 ) -> dict:
-    """Train with periodic checkpoints; auto-resume the newest step unless fresh=True.
-
-    Resume optimizer, schedule, and data order when saved; otherwise restore weights only."""
     import torch
     from torch.optim import AdamW
     from transformers import get_cosine_schedule_with_warmup
@@ -445,7 +433,6 @@ def run_training(
 
 
 def set_aside_previous_run(output: Path) -> Path | None:
-    """Move previous run artifacts into a timestamped directory, or return None if empty."""
     stale = list(output.glob("step-*")) + [
         output / name for name in (HISTORY, CALIBRATION) if (output / name).exists()
     ]

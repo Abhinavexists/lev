@@ -19,9 +19,6 @@ def fit_profile(
     config=None,
     method: str = "transfer",
 ) -> dict:
-    """Fit bucket temperatures on calibration data; optionally select by family transfer.
-
-    Save transfer comparisons and preserve the previous profile before replacing it."""
     rows = collect_logits(checkpoint_dir, data_dir, split, config=config)
     out = Path(checkpoint_dir) / CALIBRATION
     if out.is_file():
@@ -68,8 +65,6 @@ def collect_logits(
     batch_size: int = 16,
     limit: int | None = None,
 ) -> dict[str, list[tuple[list[float], int, str]]]:
-    """Collect raw logits and task families by calibration bucket, skipping abstain rows."""
-
     from ..data.build import load_split
     from ..data.sources import family_of
     from ..data.splits import Split

@@ -33,7 +33,6 @@ def tiny_base():
 
 
 def merged_delta(scale: float | None):
-    """Weight the merge adds to `TARGET`, with the adapter scaled by `scale` first."""
     base = tiny_base()
     before = base.get_submodule(TARGET).weight.detach().clone()
 

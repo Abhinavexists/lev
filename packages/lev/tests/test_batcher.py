@@ -14,9 +14,8 @@ def request(name: str, rows: int = 1, width: int = 10):
     return SimpleNamespace(name=name, rows=rows, width=width)
 
 
+# Holds the first forward so later requests queue behind it.
 class GatedEngine:
-    """Hold the first forward so later requests queue behind it."""
-
     def __init__(self):
         self.forwards: list[list[str]] = []
         self.started = threading.Event()
@@ -33,7 +32,6 @@ class GatedEngine:
 
 
 async def submit_while_busy(batcher, engine, first, queued):
-    """Occupy the worker with `first` and queue `queued` behind it."""
     head = asyncio.ensure_future(batcher.submit(first))
     while not engine.started.is_set():
         await asyncio.sleep(0.001)
@@ -148,9 +146,8 @@ def test_a_failed_batch_is_retried_one_request_at_a_time():
     assert after == "answer to c", "the worker survives a failed forward"
 
 
+# Every forward waits for one `step()`, so a test controls when each runs.
 class SteppedEngine:
-    """Every forward waits for one `step()`, so a test controls when each runs."""
-
     def __init__(self, fail_with: BaseException | None = None, short_by: int = 0):
         self.forwards: list[list[str]] = []
         self.calls = 0
@@ -228,9 +225,8 @@ def test_a_held_request_past_its_deadline_times_out_without_running():
     assert asyncio.run(run()).forwards == [["a"], ["b"]]
 
 
+# Disconnecting does not release GPU capacity already in use.
 def test_an_abandoned_running_request_still_counts_as_pending():
-    """Disconnecting does not release GPU capacity already in use."""
-
     async def run():
         engine = SteppedEngine()
         batcher = Batcher(engine)
@@ -264,9 +260,8 @@ def test_a_failing_disconnect_watch_still_returns_the_answer():
     assert asyncio.run(run()) == "answer to a"
 
 
+# A short response list trips zip(strict=True) outside the forward's error handling.
 def test_an_error_outside_the_forward_fails_its_batch_and_the_worker_keeps_serving():
-    """A short response list triggers zip(strict=True) outside forward error handling."""
-
     async def run():
         engine = SteppedEngine(short_by=1)
         batcher = Batcher(engine)

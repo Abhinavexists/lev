@@ -62,8 +62,8 @@ class EngineConfig:
     pad_to: int = 32
 
 
+# Rounding up to a multiple gives graph capture a stable set of shapes.
 def bucket(n: int, multiple: int) -> int:
-    """`n` rounded up to a multiple; a stable set of shapes for graph capture."""
     return max(multiple, ((n + multiple - 1) // multiple) * multiple)
 
 
@@ -73,8 +73,6 @@ def pow2(n: int) -> int:
 
 @dataclass(frozen=True)
 class Variant:
-    """One rendering of one question: the candidate order shown, and its suffix."""
-
     name: str
     order: list[int] | None
     suffix_ids: list[int]
@@ -82,8 +80,6 @@ class Variant:
 
 @dataclass(frozen=True)
 class Prepared:
-    """One request validated, routed and tokenised, ready to share a forward."""
-
     questions: dict[str, Question]
     routes: dict[str, Route]
     prefix_ids: list[int]
@@ -102,8 +98,8 @@ class Prepared:
         return any(r.mode is Mode.CANDIDATE_PATH for r in self.routes.values())
 
 
+# Average probabilities, not logits.
 def average_orders(prob_rows: list[list[float]], orders: list[list[int] | None]) -> list[float]:
-    """Restore canonical candidate order and average probabilities, not logits."""
     if len(prob_rows) != len(orders):
         raise ValueError("one order per probability row")
     k = len(prob_rows[0])
@@ -114,10 +110,10 @@ def average_orders(prob_rows: list[list[float]], orders: list[list[int] | None])
     return [t / len(prob_rows) for t in total]
 
 
+# Shared with `lev route`, so its preview matches serving.
 def serving_routes(
     questions: dict[str, Question], tokenizer, config: EngineConfig
 ) -> dict[str, Route]:
-    """Resolve the serving routes, also exposed by `lev route`."""
     return route_all(
         questions,
         tokenizer,
@@ -288,8 +284,8 @@ class DecisionEngine:
             ),
         )
 
+    # Score levels stay canonical unless Score averaging is enabled (ADR-029).
     def _orders(self, question: Question, route: Route) -> list[list[int] | None]:
-        """Choose candidate orders; keep scales canonical unless Score averaging is enabled."""
         if (
             not self.config.order_average
             or route.mode is not Mode.LABEL_TOKEN
@@ -344,8 +340,8 @@ class DecisionEngine:
             for name, order, r in rendered
         ]
 
+    # Last-token logits (N, V) and optional hidden states (N, H), in request order.
     def _forward(self, requests: list[Prepared]):
-        """Return last-token logits (N, V) and optional hidden states (N, H) in request order."""
         import torch
 
         want_hidden = any(r.want_hidden for r in requests)
@@ -364,7 +360,6 @@ class DecisionEngine:
         return logits, hidden
 
     def _forward_single(self, rows: list[list[int]], want_hidden: bool):
-        """Run right-padded prefix/suffix rows, using shape buckets when compiled."""
         import torch
 
         device = self._device
@@ -386,7 +381,6 @@ class DecisionEngine:
             return self._project(states, last_positions, want_hidden)
 
     def _forward_forked(self, prefix_ids: list[int], suffixes: list[list[int]], want_hidden: bool):
-        """Prefill the prefix once, then run all suffixes against forked caches."""
         import torch
 
         device = self._device
@@ -417,15 +411,14 @@ class DecisionEngine:
             return self._project(states, [len(s) - 1 for s in suffixes], want_hidden)
 
     def _project(self, states, last_positions: list[int], want_hidden: bool):
-        """Gather each row's last real token and project only those to the vocabulary."""
         import torch
 
         rows = torch.arange(states.size(0), device=states.device)
         last = states[rows, torch.tensor(last_positions, device=states.device)]  # (N, H)
         return self._lm_head(last), (last if want_hidden else None)
 
+    # `logits` is (V,); `hidden` is (H,) or None.
     def _scores(self, logits, hidden, route: Route, question: Question) -> list[float]:
-        """Scores for one variant row: `logits` is `(V,)`, `hidden` `(H,)` or None."""
         if route.mode is Mode.LABEL_TOKEN:
             return self._label_token_scores(logits, route)
         return self._candidate_path_scores(hidden, question)
@@ -458,8 +451,8 @@ class DecisionEngine:
             )
         return scores[0].float().tolist()
 
+    # Unbounded cache: meant for fixed schemas, whose candidate set does not grow.
     def _candidate_reprs(self, texts: list[str]):
-        """Cache candidate embeddings without a size bound; intended for fixed schemas."""
         import torch
 
         key = tuple(texts)
@@ -622,8 +615,8 @@ def load(
     return engine
 
 
+# Scale before any merge, which bakes the current scale into the weights.
 def _set_adapter_scale(model, scale: float) -> None:
-    """Scale every LoRA layer relative to its trained strength, before any merge bakes it in."""
     from peft.tuners.lora import LoraLayer
 
     layers = [m for m in model.modules() if isinstance(m, LoraLayer)]
@@ -635,7 +628,6 @@ def _set_adapter_scale(model, scale: float) -> None:
 
 
 def _load_head(path: Path, model):
-    """Load the saved Mode B head, or return None for Mode A-only serving."""
     import torch
 
     from .readout.mode_b import CandidatePathReadout
@@ -651,8 +643,8 @@ def _load_head(path: Path, model):
     return head.to(device=next(model.parameters()).device, dtype=torch.float32).eval()
 
 
+# Binary Noul calibration is kept separate from the trained rating scale.
 def _bucket_type(question: Question, route: Route) -> str:
-    """Keep binary Noul calibration separate from the trained rating scale."""
     return "noul_binary" if route.reason == BINARY_NOUL else question.type
 
 

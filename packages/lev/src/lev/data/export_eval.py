@@ -15,7 +15,6 @@ MIN_USEFUL_ITEMS = 100
 
 
 def truth_for(question: Question, target: int) -> bool | int | str:
-    """Convert a target to a Choice key, Score index, or Noul bool."""
     if isinstance(question, Noul):
         # The target is a rating index; collapse it as the readout does.
         return noul_probability({target: 1.0}) >= 0.5
@@ -30,7 +29,6 @@ def export(
     split: Split = Split.TEST,
     limit_per_source: int | None = None,
 ) -> dict:
-    """Write `<source>.json` per source, plus an `index.json` describing them."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 

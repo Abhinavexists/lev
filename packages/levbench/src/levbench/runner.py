@@ -83,7 +83,6 @@ def build_client(
     base_url: str | None = None,
     timeout: float | None = None,
 ):
-    """Build a Jev, local lev, or Anthropic client and return its model name."""
     if backend in ("jev", "lev"):
         if backend == "lev":
             base_url = base_url or DEFAULT_LOCAL_BASE_URL
@@ -118,8 +117,8 @@ def build_client(
     raise ValueError(f"Unknown backend {backend!r} (expected 'jev', 'lev' or 'anthropic')")
 
 
+# Billed retry totals win; zero counts are accepted, missing counts raise.
 def _token_count(usage: Any, total_field: str, base_field: str) -> int:
-    """Prefer billed retry totals; accept zero counts and reject missing counts."""
     for field_name in (total_field, base_field):
         value = getattr(usage, field_name, None)
         if value is not None:
@@ -163,7 +162,6 @@ def run_eval(
     questions: dict[str, Any],
     concurrency: int = 1,
 ) -> EvalReport:
-    """Evaluate concurrently, returning results in item order and per-call latencies."""
     from concurrent.futures import ThreadPoolExecutor
 
     report = EvalReport(backend=backend, model=model)

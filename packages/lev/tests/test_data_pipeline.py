@@ -53,8 +53,8 @@ class FakeDataset:
         return FakeDataset([self.rows[i] for i in indices], self.features)
 
 
+# Grouped by label, which is how most real corpora ship.
 def label_sorted_loader(n_labels: int, per_label: int, text_field="text", label_field="label"):
-    """A corpus grouped by label -- which is how most of the real ones ship."""
     rows = [
         {text_field: f"row {label}-{i}", label_field: label}
         for label in range(n_labels)
@@ -120,8 +120,8 @@ class TestQuestions:
 
 
 class TestSampling:
+    # A head slice of a label-sorted corpus may contain only one class.
     def test_limit_samples_rather_than_truncates(self):
-        """A head slice of a label-sorted corpus may contain only one class."""
         spec = REGISTRY["dbpedia_14"]
         loader = label_sorted_loader(14, 100, text_field="content")
         rows = list(load_source(spec, limit=140, load_dataset=loader))
@@ -133,8 +133,8 @@ class TestSampling:
         b = [e.state for e in load_source(REGISTRY["dbpedia_14"], 50, load_dataset=loader)]
         assert a == b
 
+    # A binary label of 1 must become rating 8, not P(yes) = 0.125.
     def test_noul_labels_land_on_the_ends_of_the_rating_scale(self):
-        """A binary label of 1 must become rating 8, not P(yes) = 0.125."""
         loader = label_sorted_loader(2, 20)
         rows = list(load_source(REGISTRY["imdb"], load_dataset=loader))
         assert {e.target for e in rows} == {0, len(NOUL_RATING_TOKENS) - 1}
@@ -155,8 +155,8 @@ class TestSampling:
             list(load_source(REGISTRY["ag_news"], load_dataset=loader))
 
 
+# The state names its own source, so donor tests can trace it.
 def traceable_example(source, target, index, n_options=4):
-    """One row whose state names its own source, so donor tests can trace it."""
     return an_example(
         a_choice(n_options), target=target, source=source, state=f"{source} text {index}"
     )
@@ -180,8 +180,8 @@ class TestSplits:
         assert not states[Split.TRAIN] & states[Split.CALIBRATION]
         assert not states[Split.CALIBRATION] & states[Split.TEST]
 
+    # Python's hash() is salted per process.
     def test_assignment_is_stable_across_processes(self):
-        """Python hash() is salted per process."""
         import os
         import subprocess
         import sys
@@ -212,8 +212,8 @@ class TestSplits:
         with pytest.raises(ValueError, match="never in it"):
             check_coverage(splits)
 
+    # Train coverage alone misses offered labels absent from every split.
     def test_option_never_observed_at_all_raises(self):
-        """Train coverage alone misses offered labels absent from every split."""
         splits = {
             Split.TRAIN: [traceable_example("s", 0, 1), traceable_example("s", 1, 2)],
             Split.CALIBRATION: [],
@@ -222,8 +222,8 @@ class TestSplits:
         with pytest.raises(ValueError, match="never show some of the options"):
             check_coverage(splits)
 
+    # Binary data observes only the endpoints of the nine-level scale.
     def test_noul_is_exempt_from_the_offered_option_check(self):
-        """Binary data observes only the endpoints of the nine-level scale."""
         rows = [
             Example("t", "n", Noul(instructions="q"), t, Layout.STATE_FIRST, "imdb")
             for t in (0, 8, 0, 8)
@@ -269,9 +269,8 @@ class TestLargeTaxonomyThreshold:
         assert LABEL_OPTION_CAP == 26
 
 
+# Adjacent sources may still answer the question, so they are unsuitable abstain donors.
 class TestAbstainDonors:
-    """Adjacent sources may still answer the question and are unsuitable abstain donors."""
-
     def test_adjacency_is_symmetric_and_excludes_self(self):
         mapping = adjacency_map()
         for source, related in mapping.items():
@@ -496,8 +495,8 @@ class TestReaderSources:
         assert [e.target for e in examples] == [len(NOUL_RATING_TOKENS) - 1, 0]
         assert examples[0].state == {"sentence1": "a", "sentence2": "b"}
 
+    # Both polarities stop yes from always meaning a good outcome.
     def test_every_noul_source_carries_a_negation(self):
-        """Both polarities prevent yes from always meaning a good outcome."""
         for name, spec in REGISTRY.items():
             if spec.primitive == "noul":
                 assert spec.negations, f"{name} has no negated question"
@@ -721,8 +720,8 @@ class TestBuildDataset:
             loader=self.loader,
         )
 
+    # Late-bound loader closures can cross source contents while keeping source labels.
     def test_every_split_draws_from_every_source(self, tmp_path):
-        """Late-bound loader closures can cross source contents while preserving source labels."""
         from lev.data.build import SPLIT_FILES, read_jsonl
 
         manifest = self.build(tmp_path)

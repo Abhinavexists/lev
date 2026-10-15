@@ -39,7 +39,6 @@ class CandidatePathReadout(nn.Module):
 
 
 def ordinal_penalty(scores: torch.Tensor, target_level: torch.Tensor) -> torch.Tensor:
-    """Expected squared distance from the true level under the predicted distribution."""
     n_levels = scores.size(-1)
     levels = torch.arange(n_levels, device=scores.device, dtype=scores.dtype)
     distance = (levels.unsqueeze(0) - target_level.unsqueeze(1).to(scores.dtype)) ** 2

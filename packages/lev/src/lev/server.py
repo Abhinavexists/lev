@@ -111,7 +111,6 @@ def create_app(
 
 
 async def _disconnected(request: Request) -> None:
-    """Wait for an ASGI disconnect; if none is reported, wait without polling."""
     if (await request.receive())["type"] == "http.disconnect":
         return
     await asyncio.Event().wait()

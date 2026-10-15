@@ -26,7 +26,6 @@ def _doc_sources() -> list[Path]:
 
 
 def _documented_values(pattern: str) -> dict[str, set[str]]:
-    """Map each value `pattern` captures to the documentation files that mention it."""
     found: dict[str, set[str]] = {}
     for src in _doc_sources():
         for value in re.findall(pattern, src.read_text()):
@@ -64,7 +63,6 @@ def test_known_extras_are_present(expected):
 
 
 def _inspect_cli(tool: str) -> tuple[set[str], dict[str, set[str]]]:
-    """Inspect the live parser to collect accepted commands and flags."""
     import argparse
     import importlib
 
@@ -111,7 +109,6 @@ CODE_SPANS = re.compile(r"```[a-z]*\n(.*?)```|`([^`\n]+)`", re.S)
 
 
 def _documented_commands(tool: str) -> dict[str, set[str]]:
-    """Extract commands from fenced blocks and inline code, excluding prose."""
     found: dict[str, set[str]] = {}
     pattern = re.compile(rf"(?:^|\s)(?:uv run )?{tool} ([a-z][a-z0-9-]*)", re.M)
     for src in _doc_sources():

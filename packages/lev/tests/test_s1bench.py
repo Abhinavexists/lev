@@ -45,8 +45,8 @@ class TestEvalDoorOpensOnlyOnEvalData:
 
 
 class TestStructuralSeparation:
+    # A fresh interpreter, so imports already made by the test suite cannot mask dependencies.
     def test_s1bench_cannot_reach_the_mixture_builder(self) -> None:
-        """Use a fresh interpreter so existing test-suite imports do not mask dependencies."""
         probe = (
             "import sys; import lev.data.s1bench; "
             "leaked = sorted(m for m in sys.modules "
@@ -98,9 +98,9 @@ class TestPinnedDefinitions:
         assert spec["source"].startswith("https://github.com/bespokelabsai/nimble/blob/")
         assert s1bench.question_for(spec).type == EXPECTED_TYPES[name]
 
+    # The pinned helpsteer2 filter yields 249 records, one fewer than the board.
     @pytest.mark.parametrize("name", sorted(EVAL_SUBSETS))
     def test_record_counts_match_the_board(self, name: str) -> None:
-        """The pinned helpsteer2 filter yields 249 records, one fewer than the board."""
         board = jev_board(snapshot())[name]
         expected = board["total"] - (1 if name == "helpsteer2" else 0)
         assert definition(name)["count"] == expected

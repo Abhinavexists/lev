@@ -309,9 +309,9 @@ def serve():
     )
 
 
+# Default entrypoint: print the budget without spending it.
 @app.local_entrypoint()
 def main(preset: str = "4b", dry_run: bool = True):
-    """Default entrypoint: print the budget without spending it."""
     result = train.remote(preset=preset, dry_run=dry_run)
     print(result)
 
@@ -394,6 +394,8 @@ def check_release(name: str = "4b") -> dict:
     return {"health": health, "response": served}
 
 
+# `split` is in-distribution and favours full strength, so the scale is chosen by
+# leave-one-family-out over S1Bench (FINDINGS §19). `scales` only reports; it never selects.
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=4 * 60 * 60)
 def fit_at_adapter_scale(
     name: str = "lev",
@@ -404,18 +406,6 @@ def fit_at_adapter_scale(
     search_rows: int = 6000,
     apply: bool = False,
 ) -> dict:
-    """Refit the temperature profile with the adapter scaled to `scale`.
-
-    Shrinking the adapter trades in-distribution accuracy for out-of-distribution
-    robustness, so `split` cannot choose the scale: it is drawn from the training
-    mixture, and accuracy there rises monotonically to scale 1.0 (0.6233 at 0.125,
-    0.8133 at 1.0). The scale is chosen instead by leave-one-family-out over S1Bench,
-    which holds each family out of its own selection; that put it at 0.25 for 6 of 7
-    families. Temperatures still belong on `split`, which is what this fits.
-
-    Passing `scales` sweeps them on `search_rows` rows and reports in-distribution
-    sensitivity, without selecting. `apply` writes the scale and profile into the release.
-    """
     import json
     import random
 
@@ -503,8 +493,8 @@ def fit_at_adapter_scale(
     return out
 
 
+# Mirrors levbench's label rule so a sweep is comparable with a `levbench eval` run.
 def _predicted_label(answer):
-    """levbench's label rule, so a sweep is comparable with a `levbench eval` run."""
     if answer.type == "noul":
         return float(answer.noul) >= 0.5
     if answer.type == "choice":
@@ -512,13 +502,13 @@ def _predicted_label(answer):
     return max(answer.probabilities.items(), key=lambda kv: kv[1])[0]
 
 
+# Scale zero is the frozen-backbone control.
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=2 * 60 * 60)
 def diagnose_ordinal(
     name: str = "lev",
     scales: str = "0,0.25,0.5,0.75,1.0",
     subsets: str = "summeval-consistency,summeval-relevance,helpsteer2",
 ) -> dict:
-    """Sweep adapter scales on rating tasks; use scale zero as the frozen-backbone control."""
     import collections
     import json
 
@@ -562,7 +552,6 @@ def diagnose_ordinal(
 
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=30 * 60)
 def diagnose_candidates(model_id: str = "Qwen/Qwen3.5-4B-Base") -> dict:
-    """Compare candidate embeddings alone, batched, reversed, and left-padded."""
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -666,7 +655,6 @@ def _probabilities(answer: Answer) -> dict[Any, float]:
 
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=30 * 60)
 def profile_engine(preset: str = "4b", rounds: int = 20) -> dict:
-    """Time CUDA-synchronized engine stages after warmup, excluding network time."""
     import statistics
     import time
 

@@ -22,8 +22,8 @@ def to_distribution(answer: Any) -> dict[Any, float]:
     raise ValueError(f"Unknown answer type {kind!r}")
 
 
+# Choice uses the model's own pick rather than the argmax.
 def predicted_label(answer: Any) -> Any:
-    """The argmax label, except for Choice, which uses the model's own pick."""
     kind = answer.type
     if kind == "noul":
         return float(answer.noul) >= 0.5
@@ -36,7 +36,6 @@ def predicted_label(answer: Any) -> Any:
 
 
 def top_probability(answer: Any) -> float:
-    """Return the top-label probability used for ECE."""
     return max(to_distribution(answer).values())
 
 
@@ -44,8 +43,8 @@ def log_loss(dist: dict[Any, float], truth: Any) -> float:
     return -math.log(max(dist.get(truth, 0.0), _EPS))
 
 
+# Multiclass Brier: squared error summed over the whole vector.
 def brier(dist: dict[Any, float], truth: Any) -> float:
-    """Multiclass Brier score: summed squared error over the whole vector."""
     labels = set(dist) | {truth}
     return sum((dist.get(k, 0.0) - (1.0 if k == truth else 0.0)) ** 2 for k in labels)
 
@@ -66,9 +65,9 @@ class Bin:
     def mean_confidence(self) -> float:
         return self.conf_sum / self.n if self.n else 0.0
 
+    # Signed: positive means overconfident.
     @property
     def gap(self) -> float:
-        """Signed: positive means overconfident."""
         return self.mean_confidence - self.accuracy
 
 
@@ -94,7 +93,6 @@ class Calibration:
 
     @property
     def ece(self) -> float:
-        """Expected Calibration Error: sample-weighted mean absolute bin gap."""
         if not self.n:
             return 0.0
         return sum(b.n * abs(b.gap) for b in self.bins) / self.n
@@ -103,7 +101,6 @@ class Calibration:
 def calibration(
     records: list[tuple[dict[Any, float], Any, Any, float]], n_bins: int = 10
 ) -> Calibration:
-    """Aggregate metrics over (distribution, predicted, truth, confidence) rows."""
     edges = [i / n_bins for i in range(n_bins + 1)]
     cal = Calibration(bins=[Bin(edges[i], edges[i + 1]) for i in range(n_bins)])
 
@@ -127,7 +124,6 @@ def calibration(
 def selective_accuracy(
     records: list[tuple[dict[Any, float], Any, Any, float]], threshold: float
 ) -> tuple[float, float]:
-    """Return accuracy and coverage above a confidence threshold."""
     kept = [r for r in records if r[3] >= threshold]
     if not kept:
         return 0.0, 0.0

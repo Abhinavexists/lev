@@ -83,8 +83,6 @@ MIN_FAMILIES_FOR_TRANSFER = 3
 
 
 def family_weights(families: Sequence[str]) -> list[float]:
-    """Give each family equal total weight."""
-
     counts = Counter(families)
     return [1.0 / counts[family] for family in families]
 
@@ -101,8 +99,6 @@ def leave_one_family_out_ece(
     families: Sequence[str],
     method: str,
 ) -> float:
-    """Measure transfer ECE by holding out each family once."""
-
     eces = []
 
     for held_out in sorted(set(families)):
@@ -131,8 +127,6 @@ def fit_for_transfer(
     split_name: str,
     min_samples: int = 50,
 ) -> tuple[CalibrationProfile, dict[str, dict]]:
-    """Choose the row- or family-weighted fit that transfers better per bucket."""
-
     _refuse_held_out(split_name)
 
     profile = CalibrationProfile(fitted_on=f"{split_name} (transfer-selected)")
@@ -288,8 +282,6 @@ def fit(
     split_name: str,
     min_samples: int = 50,
 ) -> CalibrationProfile:
-    """Fit one temperature per sufficiently large bucket."""
-
     _refuse_held_out(split_name)
     profile = CalibrationProfile(fitted_on=split_name)
 

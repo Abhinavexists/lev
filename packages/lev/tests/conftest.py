@@ -10,8 +10,6 @@ from lev.types import Choice
 
 
 class FakeTokenizer:
-    """Control which strings encode as a single token."""
-
     def __init__(self, single_tokens: set[str]):
         self.single_tokens = single_tokens
 
@@ -22,17 +20,17 @@ class FakeTokenizer:
         return [1] * (len(text) + 1)
 
 
+# Space-prefixed A-Z and 0-8 are single tokens. Two-letter codes are not.
 @pytest.fixture
 def rich_tokenizer() -> FakeTokenizer:
-    """Space-prefixed A-Z and 0-8 are single tokens. Two-letter codes are not."""
     from string import ascii_uppercase
 
     return FakeTokenizer({f" {c}" for c in ascii_uppercase} | {f" {i}" for i in range(9)})
 
 
+# Bare A-Z and 0-8 are single tokens too -- what follows an assistant turn.
 @pytest.fixture
 def chat_tokenizer() -> FakeTokenizer:
-    """Bare A-Z and 0-8 are single tokens too -- what follows an assistant turn."""
     from string import ascii_uppercase
 
     letters = set(ascii_uppercase) | {f" {c}" for c in ascii_uppercase}
@@ -40,15 +38,14 @@ def chat_tokenizer() -> FakeTokenizer:
     return FakeTokenizer(letters | digits)
 
 
+# Only the first four letters are single tokens, which forces Mode B quickly.
 @pytest.fixture
 def poor_tokenizer() -> FakeTokenizer:
-    """Only the first four letters are single tokens — forces Mode B quickly."""
     return FakeTokenizer({" A", " B", " C", " D"} | {f" {i}" for i in range(9)})
 
 
+# One id per character, to expose padding and last-token errors.
 class BatchingTokenizer(FakeTokenizer):
-    """Encode one id per character to expose padding and last-token errors."""
-
     pad_token_id = 0
     padding_side = "right"
 
@@ -88,9 +85,9 @@ def batching_tokenizer() -> BatchingTokenizer:
     return BatchingTokenizer({f" {c}" for c in ascii_uppercase} | {f" {i}" for i in range(9)})
 
 
+# A throwaway copy of the smoke preset, safe for a test to mutate.
 @pytest.fixture
 def train_config():
-    """A throwaway copy of the smoke preset, safe for a test to mutate."""
     from dataclasses import replace
 
     return replace(PRESETS["smoke"])

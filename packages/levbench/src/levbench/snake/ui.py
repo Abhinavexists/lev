@@ -90,8 +90,8 @@ def network_label(backend: str, base_url: str | None) -> str:
     return "localhost"
 
 
+# Probabilities describe the displayed board, before its announced next step.
 def compose(game: dict, decision: dict, stats: dict) -> Canvas:
-    """Probabilities describe the displayed board, before its announced next step."""
     width, height = layout_size(game["width"], game["height"])
     c = Canvas(width, height)
     left, right, top = 3, max(58, game["width"] * 2 + 10), 6
@@ -227,8 +227,6 @@ def status_line(game: dict, decision: dict, stats: dict) -> str:
 
 
 class Keyboard:
-    """Non-blocking single-key reads from a TTY; a no-op anywhere else."""
-
     def __enter__(self):
         self.saved = None
         if sys.stdin.isatty():

@@ -5,9 +5,8 @@ from __future__ import annotations
 import time
 
 
+# Throughput counts real tokens, not padding.
 class ProgressLog:
-    """Flush periodic per-mode losses and throughput measured from real tokens."""
-
     def __init__(self, total_steps: int, log_every: int):
         self.total = total_steps
         self.every = max(1, log_every)

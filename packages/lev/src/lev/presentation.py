@@ -65,7 +65,6 @@ SETTINGS = PRE_LOAD + POST_LOAD
 
 
 def identical_questions(kind: str, text: str, k: int, instructions: str) -> dict[str, dict]:
-    """The identical-option questions of one configuration, keyed by key assignment."""
     if kind == "score":
         return {"": {"type": "score", "instructions": instructions, "criteria": [text] * k}}
     return {
@@ -79,7 +78,6 @@ def identical_questions(kind: str, text: str, k: int, instructions: str) -> dict
 
 
 def probe_questions(lang: str = "en", kinds: Sequence[str] = KINDS) -> dict[str, dict]:
-    """Build identical-option and permutation probes with structured question ids."""
     questions: dict[str, dict] = {}
     for kind in kinds:
         spec = TEXT[lang][kind]
@@ -105,7 +103,6 @@ def is_identical(qid: str) -> bool:
 
 @contextmanager
 def configured(engine, **changes) -> Generator[None, None, None]:
-    """Run the block with `engine.config` changed as given, then restore it."""
     config = engine.config
     engine.config = replace(config, **changes)
     try:
@@ -119,7 +116,6 @@ def single_order(engine):
 
 
 def call_groups(engine, questions: dict[str, dict], max_rows: int) -> list[dict[str, dict]]:
-    """Group questions into calls within the engine's rendered-row budget."""
     rows = engine.question_rows(questions)
     groups: list[dict[str, dict]] = []
     current: dict[str, dict] = {}
@@ -142,7 +138,6 @@ def ask(
     kinds: Sequence[str] = KINDS,
     max_rows: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Run single-order identical probes and configured permutation probes within max_rows."""
     max_rows = max_rows or MAX_ROWS
     questions = probe_questions(lang, kinds)
     identical = {q: v for q, v in questions.items() if is_identical(q)}
@@ -165,7 +160,6 @@ def ask(
 
 
 def slot_probs(answer: Any, question: dict) -> list[float]:
-    """An answer's probabilities in the order the options were shown."""
     probs = answer.probabilities
     if question["type"] == "score":
         return [float(probs[i]) for i in range(len(question["criteria"]))]
@@ -193,7 +187,6 @@ def report(
     kinds: Sequence[str] = KINDS,
     slot0_min: float = SLOT0_MIN,
 ) -> dict[str, dict]:
-    """Both checks for each kind from `ask`'s answers."""
     questions = probe_questions(lang, kinds)
     out: dict[str, dict] = {}
     for kind in kinds:
@@ -255,7 +248,6 @@ def packed_consistency(
     lang: str = "en",
     kinds: Sequence[str] = KINDS,
 ) -> float:
-    """Return the largest probability difference between packed and individual probes."""
     questions = probe_questions(lang, kinds)
     worst = 0.0
     for state, packed in zip(states, answers, strict=False):
@@ -282,7 +274,6 @@ def settings_mismatch(saved: dict, run: dict, keys: Sequence[str] = SETTINGS) ->
 
 
 def drift(report: dict, snapshot: dict, tolerance: float) -> list[str]:
-    """Every metric that moved more than `tolerance` from the committed report."""
     moved = []
     for kind, checks in snapshot.items():
         for check, committed in checks.items():

@@ -247,7 +247,6 @@ def _weights_dtype(engine) -> str | None:
 
 
 def cmd_presentation_checks(args: argparse.Namespace) -> None:
-    """Run presentation checks; exit 2 for settings mismatches and 1 for failed checks."""
     import time
 
     from . import presentation

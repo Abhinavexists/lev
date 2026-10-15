@@ -11,7 +11,6 @@ from ..metrics import brier, log_loss
 
 
 def accuracy_interval(accuracy: float, n: int, z: float = 1.96) -> float:
-    """Normal-approximation confidence interval half-width; 95% at the default z."""
     if n <= 0:
         return 1.0
     return min(1.0, z * math.sqrt(max(accuracy * (1 - accuracy), 1e-9) / n))
@@ -69,14 +68,12 @@ class EvalReport:
 def score(
     raw_logits: Sequence[tuple[list[float], int]], temperature: float
 ) -> tuple[float, float, float, float]:
-    """Accuracy, ECE, mean Brier and mean log loss at one temperature."""
     return score_mixed([(logits, truth, temperature) for logits, truth in raw_logits])
 
 
 def score_mixed(
     rows: Sequence[tuple[list[float], int, float]],
 ) -> tuple[float, float, float, float]:
-    """`score` for rows that each carry their own temperature."""
     probs = [softmax(logits, t) for logits, _, t in rows]
     truths = [truth for _, truth, _ in rows]
     correct = sum(
@@ -90,6 +87,7 @@ def score_mixed(
     )
 
 
+# Raw and calibrated reports share the stored logits, so they differ only in temperature.
 def evaluate_split(
     checkpoint_dir: str,
     data_dir: str,
@@ -99,8 +97,6 @@ def evaluate_split(
     limit_per_source: int | None = None,
     batch_size: int = 16,
 ) -> tuple[EvalReport, EvalReport]:
-    """Return raw and calibrated reports from the same stored logits."""
-
     from ..data.build import load_split
     from ..data.splits import Split
     from .checkpoints import resolve_checkpoint

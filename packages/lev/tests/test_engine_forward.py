@@ -49,9 +49,8 @@ def test_single_forward_matches_the_full_logits_at_each_last_token(tiny_model, w
     assert (hidden is not None) == want_hidden
 
 
+# Ids inside the tiny vocabulary; space-prefixed A-Z are single tokens, as label codes need.
 class TinyTokenizer:
-    """Ids inside the tiny vocabulary; space-prefixed A-Z are single tokens, as label codes need."""
-
     pad_token_id = 0
     single = {f" {c}": 400 + i for i, c in enumerate("ABCDEFGHIJKLMNOPQRSTUVWXYZ")}
 
@@ -61,8 +60,8 @@ class TinyTokenizer:
         )
 
 
+# The token limit never touches a request Score averaging did not grow (ADR-029).
 def test_without_score_averaging_a_large_request_answers_as_with_no_limit(tiny_model):
-    """The token limit never touches a request Score averaging did not grow (ADR-029)."""
     from lev.types import Choice, Score
 
     questions = {

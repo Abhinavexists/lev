@@ -36,8 +36,8 @@ def make_batching_tokenizer():
     )
 
 
+# The 64 rows are 4-option Choices, so every batch takes Mode A.
 def stub_backbone(monkeypatch, loop):
-    """The 64 rows are 4-option Choices, so every batch takes Mode A."""
     rows = [an_example(a_choice(4), target=i % 4, state=f"row {i}") for i in range(64)]
     monkeypatch.setattr(loop, "prepare_data", lambda c, d: {"train": rows, "calibration": []})
     monkeypatch.setattr(
@@ -72,7 +72,6 @@ def smoke_config(tmp_path, *, epochs, checkpoint_every):
 def run_resumable(
     tmp_path, monkeypatch, *, max_steps, checkpoint_every=3, fresh=False, persist=True
 ):
-    """Run with on-disk checkpoints; return saved steps, observed batches, and summary."""
     import lev.train.loop as loop
     from lev.train.checkpoints import TRAINING_STATE
     from lev.train.collate import DecisionCollator
@@ -104,8 +103,6 @@ def run_resumable(
 
 
 class TestCheckpointCadence:
-    """Exercise real batching and checkpoint decisions with model and storage stubs."""
-
     def run(self, tmp_path, monkeypatch, *, max_steps, checkpoint_every, epochs=1):
         import lev.train.loop as loop
 
@@ -165,15 +162,15 @@ class TestResume:
         assert saved == [3, 6]
         assert summary["history"][0]["step"] == 0
 
+    # Weight loading is stubbed; this checks the schedule restart only.
     def test_weights_only_checkpoint_restarts_the_schedule(self, tmp_path, monkeypatch):
-        """Weight loading is stubbed; this checks schedule restart only."""
         run_resumable(tmp_path, monkeypatch, max_steps=6, persist=False)
         saved, _, summary = run_resumable(tmp_path, monkeypatch, max_steps=6)
         assert saved == [3, 6]
         assert summary["history"][0]["step"] == 0
 
+    # An off-interval final checkpoint must carry resume state.
     def test_rerunning_a_finished_run_trains_nothing(self, tmp_path, monkeypatch):
-        """An off-interval final checkpoint must carry resume state."""
         run_resumable(tmp_path, monkeypatch, max_steps=7)
         saved, seen, summary = run_resumable(tmp_path, monkeypatch, max_steps=7)
         assert seen == [], "a finished run must not train again"
@@ -188,8 +185,8 @@ class TestResume:
         assert saved == [9, 10]
         assert [h["step"] for h in summary["history"]] == list(range(10))
 
+    # At batch size two, step 33 is the first step of the second 64-row epoch.
     def test_resume_across_an_epoch_boundary(self, tmp_path, monkeypatch):
-        """At batch size two, step 33 is the first step of the second 64-row epoch."""
         _, full, _ = run_resumable(tmp_path / "ref", monkeypatch, max_steps=36)
         run_resumable(tmp_path, monkeypatch, max_steps=33)
         _, seen, summary = run_resumable(tmp_path, monkeypatch, max_steps=36)
@@ -217,8 +214,8 @@ class TestFreshSetsAsideThePreviousRun:
         assert (moved / "calibration.json").is_file()
         assert set_aside_previous_run(out) is None
 
+    # Stale higher-step checkpoints must not survive in the active run directory.
     def test_fresh_run_does_not_resume_from_a_higher_stale_step(self, tmp_path, monkeypatch):
-        """Stale higher-step checkpoints must not survive in the active run directory."""
         from lev.train.checkpoints import latest_checkpoint
 
         stale = tmp_path / "out" / "step-18750"
@@ -233,7 +230,6 @@ class TestFreshSetsAsideThePreviousRun:
 
 class TestModeAProjectsOnlyTheAnswerPositions:
     def test_logits_to_keep_selects_distinct_positions_and_rows_read_their_own(self):
-        """Project only answer positions and select the correct output column per row."""
         from types import SimpleNamespace
 
         from lev.router import Mode
@@ -266,9 +262,8 @@ class TestModeAProjectsOnlyTheAnswerPositions:
         assert out.tolist() == [[71.0, 72.0], [141.0, 142.0], [273.0, 274.0]]
 
 
+# `scored_rows` is the shared forward that calibration and evaluation both read.
 class TestScoredRows:
-    """`scored_rows` is the shared forward that calibration and evaluation both read."""
-
     def rows_through(self, monkeypatch, n_rows):
         from lev.train import loop
         from lev.train.config import PRESETS

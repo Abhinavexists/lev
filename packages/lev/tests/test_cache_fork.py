@@ -12,8 +12,8 @@ from lev.model import _fork  # noqa: E402
 BATCH, HEADS, SEQ, DIM = 1, 2, 5, 4
 
 
+# Shaped like Qwen3.5's cache: full-attention and linear layers mixed.
 def hybrid_cache():
-    """A cache shaped like Qwen3.5's: full-attention and linear layers mixed."""
     full = cache_utils.DynamicLayer()
     full.update(torch.randn(BATCH, HEADS, SEQ, DIM), torch.randn(BATCH, HEADS, SEQ, DIM))
 
@@ -62,8 +62,8 @@ def test_fork_does_not_mutate_the_source():
     assert torch.equal(original.layers[1].conv_states[0], before_conv)
 
 
+# Hybrid caches do not support batch_repeat_interleave.
 def test_the_old_approach_still_fails():
-    """Hybrid caches do not support batch_repeat_interleave."""
     linear = cache_utils.LinearAttentionLayer()
     assert not hasattr(linear, "batch_repeat_interleave"), (
         "LinearAttentionLayer now implements batch_repeat_interleave; "

@@ -40,18 +40,16 @@ def softmax(z: list[float]) -> list[float]:
     return [v / sum(e) for v in e]
 
 
+# Space-prefixed A-Z and 0-8 are single tokens, as in `rich_tokenizer`.
 class Tokenizer:
-    """Space-prefixed A-Z and 0-8 are single tokens, as `rich_tokenizer`."""
-
     single = {f" {c}" for c in ascii_uppercase} | {f" {i}" for i in range(9)}
 
     def encode(self, text: str, add_special_tokens: bool = True) -> list[int]:
         return [1] if text in self.single else [1] * (len(text) + 1)
 
 
+# Real routing and orders, with scripted content, key, slot and packing effects.
 class FakeEngine:
-    """Use real routing and orders with scripted content, key, slot, and packing effects."""
-
     def __init__(self, slot0=0.0, content=None, packing=0.0, key_pull=None, **config):
         self.real = DecisionEngine(model=None, tokenizer=Tokenizer(), config=EngineConfig(**config))
         self.slot0, self.content, self.packing = slot0, content or {}, packing
@@ -178,8 +176,8 @@ class TestChecks:
             assert r[kind]["first_slot"]["argmax_by_slot"][0] == 0
             assert r[kind]["first_slot"]["decisions"] == 18
 
+    # Argmax would credit slot zero for every flat distribution.
     def test_ties_are_split_between_the_tied_slots(self):
-        """Argmax would incorrectly credit slot zero for every flat distribution."""
         r = run(FakeEngine(), ["a", "b"])
         for kind in KINDS:
             assert r[kind]["first_slot"]["metric"] == pytest.approx(1 / 3)
@@ -194,9 +192,9 @@ class TestChecks:
             alone["choice"]["identical"]["metric"]
         )
 
+    # Order averaging hides the raw position bias this probe measures.
     @pytest.mark.parametrize("mode", ["reversed", "cyclic"])
     def test_the_identical_check_reads_one_order_whatever_the_engine_averages(self, mode):
-        """Order averaging hides the raw position bias this probe measures."""
         single = run(FakeEngine(slot0=-2.0, order_average=False), ["a"])
         averaged = run(FakeEngine(slot0=-2.0, score_order_average=mode), ["a"])
         for kind in KINDS:
@@ -409,8 +407,8 @@ class TestAveragedTokenLimit:
         assert engine.prepare("short", question).rows == 3
         assert self.engine(rich_tokenizer).prepare(LONG, question).rows == 1
 
+    # The batcher runs oversized requests alone.
     def test_without_score_averaging_a_large_request_is_never_refused(self, rich_tokenizer):
-        """The batcher runs oversized requests alone."""
         prepared = self.engine(rich_tokenizer).prepare("x" * 400, BIG)
         assert prepared.rows == 80 and prepared.rows * prepared.width > MAX_BATCH_TOKENS
         assert [v.order for v in prepared.variants] == [None, [3, 2, 1, 0]] * 20 + [None] * 40
@@ -485,9 +483,8 @@ class TestCommittedReport:
         assert drift(committed["checks"], committed["checks"], 0.0) == []
 
 
+# Settings mismatches exit 2; metric failures exit 1.
 class TestCompareGuardsItsSettings:
-    """Settings mismatches exit 2; metric failures exit 1."""
-
     def cli(self, monkeypatch, tmp_path, engine, *extra):
         from lev.cli import main
 

@@ -43,7 +43,6 @@ class Decision:
 
 
 def describe(game: SnakeGame, prompt: str) -> tuple[str, dict[str, Any], dict]:
-    """Build prompts and planner truth without calling the server."""
     if prompt not in PROMPTS:
         raise ValueError(f"prompt must be one of {PROMPTS}, got {prompt!r}")
     moves = game.moves()

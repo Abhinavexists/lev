@@ -21,7 +21,6 @@ load_dotenv()
 
 
 def repo_data_dir() -> Path:
-    """Find the repository data directory relative to this module."""
     for parent in Path(__file__).resolve().parents:
         if (candidate := parent / "data").is_dir():
             return candidate
@@ -42,7 +41,6 @@ def _require_key(backend: str, base_url: str | None = None) -> None:
 
 
 def _task_files(path: str | None) -> Sequence[Path | None]:
-    """Return task files, or None to use the built-in fixture."""
     if path is None:
         return [None]
     target = Path(path)

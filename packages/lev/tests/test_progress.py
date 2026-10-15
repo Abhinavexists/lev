@@ -30,8 +30,8 @@ class TestProgressLog:
             log.record(step, 1.0, "A", 1e-4, tokens=10)
         assert "step      7/7" in capsys.readouterr().out
 
+    # Mode B starts near ln(K), so averaging the modes hides their separate losses.
     def test_modes_are_reported_separately(self, capsys):
-        """Mode B starts near ln(K), so averaging modes hides their separate losses."""
         log = self.make(total=2, every=2)
         log.record(0, 1.0, "A", 1e-4, tokens=10)
         log.record(1, 5.0, "B", 1e-4, tokens=10)
@@ -68,12 +68,11 @@ class TestProgressLog:
         assert hms(3661) == "1:01:01"
 
 
+# Windowed rates keep startup delay out of steady-state throughput and ETA.
 class TestWindowedRate:
-    """Windowed rates exclude startup delay from steady-state throughput and ETA."""
-
+    # Set `clock["t"]` to move the time `ProgressLog` reads.
     @pytest.fixture
     def clock(self, monkeypatch):
-        """Set `clock["t"]` to move the time `ProgressLog` reads."""
         now = {"t": 0.0}
         monkeypatch.setattr(progress.time, "monotonic", lambda: now["t"])
         return now
