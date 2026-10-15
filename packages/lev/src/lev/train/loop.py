@@ -190,19 +190,14 @@ def load_for_eval(config: TrainConfig, checkpoint_dir, model_cache: str | None =
     return model, tokenizer, head
 
 
-def scored_rows(model, tokenizer, head, config: TrainConfig, rows, batch_size, bucket_window=64):
-    """Yield `(example, logits, mode, width)` per row, batched as training batches.
-
-    Callers differ only in how they bucket the result, so the forward pass lives here;
-    `bucket_window` is explicit because calibration and evaluation have always passed
-    different values.
-    """
+def scored_rows(model, tokenizer, head, config: TrainConfig, rows, batch_size):
+    """Yield `(example, logits, mode, width)` per row, batched as training batches."""
     import torch
 
     routes = RouteCache(tokenizer, config.max_label_options, Style(config.prompt_style))
     collator = DecisionCollator(tokenizer, max_seq_len=config.max_seq_len, routes=routes)
     batcher = ModeBatcher(
-        tokenizer, batch_size=batch_size, bucket_window=bucket_window, routes=routes
+        tokenizer, batch_size=batch_size, bucket_window=config.bucket_window, routes=routes
     )
     device = device_of(model)
     with torch.no_grad():

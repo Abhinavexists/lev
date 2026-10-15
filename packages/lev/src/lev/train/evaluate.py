@@ -126,7 +126,7 @@ def evaluate_split(
     # Bucketed like training: each row is scored once whatever the order.
     collected: dict[tuple[str, str, str, int], list[tuple[list[float], int]]] = {}
     for example, logits, mode, width in scored_rows(
-        model, tokenizer, head, config, rows, batch_size, bucket_window=config.bucket_window
+        model, tokenizer, head, config, rows, batch_size
     ):
         key = (example.source, example.question.type, mode, width)
         collected.setdefault(key, []).append((logits, example.target))
