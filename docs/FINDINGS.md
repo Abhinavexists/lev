@@ -677,3 +677,38 @@ A user on a 3090 reported that lev "suffers in boundary conditions. When the ans
 **What should, in order:** graded or smoothed Noul targets through the existing `soft_targets` path, instead of one-hot 0/8; a paired consistency loss across whitespace and paraphrase variants of the same row; distillation toward the frozen model's Noul distribution, which these measurements show is well behaved at the boundary. Stripping trailing whitespace from the state before rendering is a near-free partial patch.
 
 **Limits.** The sample is 30 items per subset with one seed, so per-subset rates are noisy (civil_comments, the worst, is 8 of 30 counting the layout flips). bf16 on MPS is not the reporter's CUDA. On the same weights, batching alone moves p by up to 0.07 in bf16 (ADR-030), so small differences between perturbations are within that floor; spreads of 0.5 or more are not.
+
+## 19. The adapter scale is an out-of-distribution knob, and it is worth +3.9 macro points
+
+The released adapter is applied at full strength. Scaling it down at serving time interpolates back toward the frozen backbone — WiSE-FT ([arXiv 2109.01903](https://arxiv.org/abs/2109.01903)), except applied to a LoRA scale rather than a weight average. Swept 2026-10-07/08 on one H100, over all 13 pinned S1Bench subsets, by setting `LoraLayer.set_scale` on each of the 128 adapter layers. Scale 1.0 scores 0.6892 against the 0.6893 measured in §17, which is the control for the whole table.
+
+```text
+                                 0     0.25      0.5     0.75        1     LOFO scale
+    aegis2                  0.4320   0.8360   0.8200   0.8040   0.8000  <- 0.25
+    boolq                   0.4200   0.8533   0.8467   0.8367   0.8267  <- 0.25
+    civil_comments          0.8900   0.7867   0.7767   0.7800   0.7600  <- 0.25
+    helpsteer2              0.3133   0.3574   0.3855   0.3896   0.3855  <- 0.25
+    massive-de-DE           0.8000   0.8257   0.8486   0.8429   0.8229  <- 0.25
+    massive-en-US           0.8257   0.8686   0.8743   0.8686   0.8571  <- 0.25
+    multinli                0.7893   0.8495   0.8662   0.8729   0.8896  <- 0.25
+    paws                    0.5160   0.8520   0.8360   0.8040   0.7760  <- 0.25
+    pubmedqa                0.7040   0.7160   0.7160   0.7160   0.7320  <- 0.25
+    squad2                  0.5017   0.8227   0.8161   0.8294   0.8127  <- 0.25
+    summeval-consistency    0.8264   0.8056   0.6250   0.3958   0.2708  <- 0.5
+    summeval-relevance      0.4750   0.3792   0.3458   0.3667   0.3583  <- 0.5
+    vitaminc-dev            0.6912   0.7279   0.7179   0.6828   0.6678  <- 0.25
+    -------------------------------------------------------------------
+    macro                   0.6296   0.7447   0.7288   0.7069   0.6892
+```
+
+**Scale 0.25 beats full strength by 5.5 macro points — but that number is test-selected.**
+Choosing the scale on the same 13 subsets we report is fitting the benchmark, which is exactly what the contamination guard exists to forbid. Two honest selections:
+
+**The calibration split cannot do it.** Swept 2026-10-08 on 6,000 of its 48,691 rows at seven scales: accuracy is monotone in scale — 0.6233, 0.6508, 0.6810, 0.7112, 0.7393, 0.7942, 0.8133 at 0.125 through 1.0 — and picks 1.0, the scale already shipped. The split is drawn from the training mixture, so it is in-distribution, and shrinking the adapter *costs* in-distribution accuracy while buying out-of-distribution robustness. An in-distribution split is structurally blind to the trade, whatever its size. (Uncalibrated ECE moves the other way, 0.0619 at 0.125 to 0.1400 at 1.0.)
+
+**Leave-one-family-out over S1Bench can.** The 13 subsets share task families with training but no datasets. Grouping them into 7 families — safety, qa-bool, nli, paraphrase, intent, summeval, rating — and scoring each family at the scale chosen on the *other* six gives a macro of **0.7282**, against 0.6892 shipped and 0.7610 for Jev. Six of seven families pick 0.25 independently; only summeval picks 0.5, because summeval-consistency is the one subset that prefers a weak adapter (0.8264 frozen, 0.2708 at full strength) and the remaining subsets cannot see that when it is held
+out. The estimate is robust to the grouping: merging helpsteer2 into summeval, splitting vitaminc off NLI, and leave-one-*subset*-out give 0.7447, 0.7282 and 0.7447.
+
+**This needs no retraining.** The scale is a serving-time multiplier on weights we already ship.
+
+**Limits.** The grid is coarse — 0, 0.25, 0.5, 0.75, 1.0 — and the optimum sits at its low end next to 0.25, so a finer sweep may do better; it would have to be selected under the same leave-one-out discipline to stay quotable. Accuracy is an argmax and so is invariant to temperature, which is why these numbers hold even though the shipped temperatures were fitted at scale 1.0; every *calibration* figure at any other scale requires a refit, which is what `fit_at_adapter_scale` in `modal/app.py` does. Per-subset n runs from 144 (summeval-consistency) to 599 (vitaminc-dev), so a single-subset move under about 6 points is noise at the small end and about 3 at the large end; the macro, pooled over all 13, is tighter than either. Closing the gap to Jev takes 3.3 points more than this buys.
