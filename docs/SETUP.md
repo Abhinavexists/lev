@@ -79,6 +79,7 @@ Set on the machine where `modal deploy` runs, from the environment or `.env`; th
 | --- | --- | --- |
 | `LEV_SERVE_PRESET` | `4b` | Which preset's newest checkpoint to serve. `make deploy PRESET=...` sets it |
 | `LEV_SERVE_MODEL` | unset | Serve this model frozen instead — no adapter, binary Noul, the zero-shot baseline |
+| `LEV_SERVE_RELEASE` | unset | Serve `releases/<name>` instead of the training output, with its manifest's adapter scale and calibration. `make deploy NAME=...` sets it |
 | `LEV_SERVE_COMPILE` | `0` | `torch.compile`. Off unless asked: measured slower than eager here (ADR-023) |
 | `LEV_SERVE_MAX_LABEL_OPTIONS` | unset | Cap on label options. Unset means Mode A up to the tokenizer limit (ADR-025) |
 | `LEV_SERVE_PROMPT` | the preset's | Override the prompt style, mainly for a frozen model |

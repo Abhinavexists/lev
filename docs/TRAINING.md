@@ -260,7 +260,7 @@ make publish RELEASE=4b-instruct REPO=org/name  # -> huggingface.co/org/name (HF
 
 ### On Modal: which checkpoint, and `serve` vs `deploy`
 
-`make deploy PRESET=4b-instruct` serves that preset's newest checkpoint; the preset travels to the container as `LEV_SERVE_PRESET`. `LEV_SERVE_MODEL=Qwen/Qwen3.5-4B make deploy` serves that model frozen — no adapter, binary Noul — the zero-shot baseline.
+`make deploy PRESET=4b-instruct` serves that preset's newest checkpoint; the preset travels to the container as `LEV_SERVE_PRESET`. `make deploy NAME=lev` serves the packaged release instead — what the Hub ships, including an `adapter_scale` or calibration refit after export. `LEV_SERVE_MODEL=Qwen/Qwen3.5-4B make deploy` serves that model frozen — no adapter, binary Noul — the zero-shot baseline.
 
 `modal serve` is an ephemeral dev server. So is every `modal run` of this app file, and each one registers the `serve` web function under the same `-dev` label — so running an export or a diagnostic while the dev server is up steals its URL, and the URL returns 404 when the run exits. `make deploy` gives the server a stable URL that runs cannot take.
 
