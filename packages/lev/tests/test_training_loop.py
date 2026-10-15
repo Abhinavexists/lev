@@ -291,8 +291,9 @@ class TestScoredRows:
         )
         return rows, out
 
-    def test_every_row_is_scored_exactly_once(self, monkeypatch):
-        rows, out = self.rows_through(monkeypatch, 32)
+    @pytest.mark.parametrize("n_rows", [32, 29])
+    def test_every_row_is_scored_exactly_once(self, monkeypatch, n_rows):
+        rows, out = self.rows_through(monkeypatch, n_rows)
         assert len(out) == len(rows)
         assert {e.state for e, _, _, _ in out} == {r.state for r in rows}
 
@@ -304,7 +305,3 @@ class TestScoredRows:
             assert width == len(example.question.criteria)
             assert len(logits) == width
             assert mode == Mode.LABEL_TOKEN.value
-
-    def test_bucket_window_does_not_drop_or_duplicate_rows(self, monkeypatch):
-        rows, wide = self.rows_through(monkeypatch, 24)
-        assert sorted(e.state for e, _, _, _ in wide) == sorted(r.state for r in rows)
