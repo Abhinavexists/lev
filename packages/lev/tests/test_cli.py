@@ -1,3 +1,4 @@
+import os
 from dataclasses import replace
 
 from lev import cli
@@ -42,3 +43,39 @@ def test_training_output_override_does_not_change_the_next_runs_defaults(monkeyp
 
     assert outputs == [override, default_output]
     assert preset.output_dir == default_output
+
+
+def published_token(monkeypatch, tmp_path, env_file: str | None, exported: str | None):
+    from lev import release
+
+    monkeypatch.chdir(tmp_path)
+    if env_file is not None:
+        (tmp_path / ".env").write_text(env_file)
+    if exported is None:
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("HF_TOKEN", exported)
+    monkeypatch.setattr(os, "environ", dict(os.environ))  # load_dotenv writes here
+    seen = {}
+
+    def fake_publish(*args, **kwargs):
+        seen["token"] = os.environ.get("HF_TOKEN") or None
+        return "url"
+
+    monkeypatch.setattr(release, "publish", fake_publish)
+    cli.main(["release", "publish", "weights/lev", "--repo", "org/name"])
+    return seen["token"]
+
+
+def test_publish_takes_the_write_key_from_dot_env(monkeypatch, tmp_path, capsys):
+    env = 'TYPESAFE_API_KEY=x\nexport HF_TOKEN="hf_write"\n'
+    assert published_token(monkeypatch, tmp_path, env, None) == "hf_write"
+
+
+def test_an_exported_token_wins_over_dot_env(monkeypatch, tmp_path, capsys):
+    assert published_token(monkeypatch, tmp_path, "HF_TOKEN=hf_file\n", "hf_shell") == "hf_shell"
+
+
+def test_without_either_publish_falls_back_to_the_hub_login(monkeypatch, tmp_path, capsys):
+    assert published_token(monkeypatch, tmp_path, None, None) is None
+    assert published_token(monkeypatch, tmp_path, "HF_TOKEN=\n", None) is None
