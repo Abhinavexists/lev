@@ -21,7 +21,6 @@ load_dotenv()
 
 
 def repo_data_dir() -> Path:
-    """Find the repository data directory relative to this module."""
     for parent in Path(__file__).resolve().parents:
         if (candidate := parent / "data").is_dir():
             return candidate
@@ -42,7 +41,6 @@ def _require_key(backend: str, base_url: str | None = None) -> None:
 
 
 def _task_files(path: str | None) -> Sequence[Path | None]:
-    """Return task files, or None to use the built-in fixture."""
     if path is None:
         return [None]
     target = Path(path)
@@ -104,15 +102,18 @@ def cmd_compare(args: argparse.Namespace) -> None:
     cost_ratio = llm.total_cost / jev.total_cost if jev.total_cost else 0.0
     speed_ratio = llm.pct(0.5) / jev.pct(0.5) if jev.pct(0.5) else 0.0
     print(
-        f"cost   jev ${jev.total_cost:.6f}  vs  llm ${llm.total_cost:.6f}"
+        f"{'cost':<18} jev ${jev.total_cost:.6f}  vs  llm ${llm.total_cost:.6f}"
         f"   ({cost_ratio:.1f}x cheaper)"
     )
     print(
-        f"p50    jev {jev.pct(0.5):.3f}s  vs  llm {llm.pct(0.5):.3f}s   ({speed_ratio:.1f}x faster)"
+        f"{'p50':<18} jev {jev.pct(0.5):.3f}s  vs  llm {llm.pct(0.5):.3f}s"
+        f"   ({speed_ratio:.1f}x faster)"
     )
-    print(f"schema retries  jev {jev.total_schema_retries}  vs  llm {llm.total_schema_retries}")
     print(
-        f"transient retries  jev {jev.total_transient_retries}"
+        f"{'schema retries':<18} jev {jev.total_schema_retries}  vs  llm {llm.total_schema_retries}"
+    )
+    print(
+        f"{'transient retries':<18} jev {jev.total_transient_retries}"
         f"  vs  llm {llm.total_transient_retries}"
     )
 
@@ -181,11 +182,15 @@ def cmd_confidence(args: argparse.Namespace) -> None:
     client, model = runner.build_client("jev", args.model, args.base_url)
 
     answers: list = []
+    served: set[str] = set()
     for item in items:
-        answers.extend(runner.call_once(client, item.state, questions).answers.values())
+        result = runner.call_once(client, item.state, questions)
+        answers.extend(result.answers.values())
+        served.add(result.served_by)
 
     samples = confidence_id.collect(answers)
-    print(f"model: {model}   answers with a distribution: {len(samples)}\n")
+    shown = ", ".join(sorted(served)) or model
+    print(f"model: {shown}   answers with a distribution: {len(samples)}\n")
     print(confidence_id.format_fits(confidence_id.identify(samples)))
 
 

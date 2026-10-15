@@ -18,15 +18,13 @@ class Layout(StrEnum):
     SCHEMA_FIRST = "schema_first"
 
 
+# The prompt format must match training (ADR-027).
 class Style(StrEnum):
-    """Plain or ChatML prompts; the format must match training (ADR-027)."""
-
     PLAIN = "plain"
     CHAT = "chat"
 
 
 def label_prefix(style: Style) -> str:
-    """Use a space after plain Answer: and no prefix at the start of a chat answer."""
     return " " if style is Style.PLAIN else ""
 
 
@@ -43,10 +41,9 @@ CHAT_ASK = {
 }
 
 
+# The prefix is reusable and the suffix varies; the suffix's final token is the one scored.
 @dataclass(frozen=True)
 class Rendered:
-    """Reusable prefix and varying suffix; score the suffix's final token."""
-
     prefix: str
     suffix: str
 
@@ -69,6 +66,7 @@ def _ordered(items: list, order: list[int] | None) -> list:
     return items if order is None else [items[i] for i in order]
 
 
+# Two Noul codes select the binary readout.
 def render_question(
     name: str,
     question: Question,
@@ -76,7 +74,6 @@ def render_question(
     order: list[int] | None = None,
     style: Style = Style.PLAIN,
 ) -> str:
-    """Render positional label codes or Mode B text; two Noul codes select binary readout."""
     if style is Style.CHAT:
         return _render_question_chat(name, question, codes, order)
     lines = [f"Question: {question.instructions or name}"]
@@ -119,7 +116,6 @@ def render_question(
 def _render_question_chat(
     name: str, question: Question, codes: list[str] | None, order: list[int] | None
 ) -> str:
-    """Render ChatML criterion and option sections with positional codes."""
     lines = [f"# Criterion\n{question.instructions or name}\n"]
 
     if isinstance(question, Choice):
@@ -164,13 +160,13 @@ def _render_question_chat(
     return "\n".join(lines)
 
 
+# Sorted object keys keep the rendering deterministic.
 def render_content(value: JSONContent) -> str:
-    """Render JSON content deterministically, sorting object keys."""
     return value if isinstance(value, str) else json.dumps(value, sort_keys=True)
 
 
+# Shared by Mode B serving and training, so both see the same candidate text.
 def candidate_texts(question: Question) -> list[str]:
-    """Candidate text shared by the Mode B serving and training paths."""
     if isinstance(question, Noul):
         return list(NOUL_RATING_TOKENS)
     if isinstance(question, Score):
@@ -188,7 +184,6 @@ def build(
     order: list[int] | None = None,
     style: Style = Style.PLAIN,
 ) -> Rendered:
-    """Render one question against one state, cut for the chosen layout."""
     if style is Style.CHAT:
         return _build_chat(state, name, question, codes, layout, cached_schema, order)
     state_block = f"Context:\n{render_state(state)}\n\n"
@@ -202,8 +197,8 @@ def build(
     return Rendered(prefix=prefix, suffix=f"{state_block}{ANSWER_CUE}")
 
 
+# Score the boundary after the empty think block.
 def _build_chat(state, name, question, codes, layout, cached_schema, order) -> Rendered:
-    """Render ChatML evidence and criterion; score the boundary after the empty think block."""
     head = f"<|im_start|>system\n{CHAT_SYSTEM_PROMPT}<|im_end|>\n<|im_start|>user\n"
     evidence = f"# Evidence\n{render_state(state)}\n\n"
     criterion = render_question(name, question, codes, order, Style.CHAT)
@@ -213,12 +208,12 @@ def _build_chat(state, name, question, codes, layout, cached_schema, order) -> R
     return Rendered(prefix=f"{head}{catalogue}\n\n", suffix=f"{evidence.rstrip()}\n{CHAT_TAIL}")
 
 
+# The full question catalogue, so schema-first caching can share it across states.
 def schema_block(
     questions: Mapping[str, Question],
     codes: Mapping[str, list[str] | None],
     style: Style = Style.PLAIN,
 ) -> str:
-    """The full question catalogue, for schema-first caching across states."""
     return "\n\n".join(
         render_question(n, q, codes.get(n), style=style) for n, q in questions.items()
     )

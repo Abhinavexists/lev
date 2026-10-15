@@ -309,9 +309,9 @@ def serve():
     )
 
 
+# Default entrypoint: print the budget without spending it.
 @app.local_entrypoint()
 def main(preset: str = "4b", dry_run: bool = True):
-    """Default entrypoint: print the budget without spending it."""
     result = train.remote(preset=preset, dry_run=dry_run)
     print(result)
 
@@ -336,8 +336,8 @@ def export_checkpoint(preset: str = "4b", name: str | None = None) -> dict:
     print(
         f"release {manifest['name']} -> {RELEASES_DIR}/{target}  ({len(manifest['files'])} files)"
     )
-    print(f"  pull it:    make weights RELEASE={target}")
-    print(f"  publish it: make publish RELEASE={target} REPO=<org/name>")
+    print(f"  {'pull it:':<12}make weights RELEASE={target}")
+    print(f"  {'publish it:':<12}make publish RELEASE={target} REPO=<org/name>")
     return manifest
 
 
@@ -394,13 +394,121 @@ def check_release(name: str = "4b") -> dict:
     return {"health": health, "response": served}
 
 
+# `split` is in-distribution and favours full strength, so the scale is chosen by
+# leave-one-family-out over S1Bench (FINDINGS §19). `scales` only reports; it never selects.
+@app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=4 * 60 * 60)
+def fit_at_adapter_scale(
+    name: str = "lev",
+    preset: str = "4b-instruct",
+    scale: float = 0.25,
+    scales: str = "",
+    split: str = "calibration",
+    search_rows: int = 6000,
+    apply: bool = False,
+) -> dict:
+    import json
+    import random
+
+    from lev import load
+    from lev.calibrate import CalibrationProfile, fit_for_transfer
+    from lev.data.build import load_split
+    from lev.data.sources import family_of
+    from lev.data.splits import Split
+    from lev.train.checkpoints import CALIBRATION
+    from lev.train.config import PRESETS
+    from lev.train.evaluate import score
+    from lev.train.loop import scored_rows
+    from peft.tuners.lora import LoraLayer
+
+    release = Path(f"{RELEASES_DIR}/{name}")
+    engine = load(str(release), cache_dir=MODELS_DIR, merge_adapter=False)
+    layers = [m for m in engine.model.modules() if isinstance(m, LoraLayer)]
+    if not layers:
+        raise RuntimeError("adapter already merged; nothing to scale")
+
+    config = PRESETS[preset]
+    everything = [r for r in load_split(DATA_DIR, Split(split)) if not r.abstain]
+    # The search only has to separate scales that differ by points, so it runs on a
+    # shuffled subsample; the chosen scale is then fitted on the whole split.
+    search_set = everything
+    if search_rows and search_rows < len(everything):
+        search_set = random.Random(17).sample(everything, search_rows)
+    print(
+        f"{len(layers)} lora layers, {len(everything)} {split} rows, "
+        f"searching on {len(search_set)}",
+        flush=True,
+    )
+
+    def collect(scale: float, rows):
+        for m in layers:
+            for adapter in m.scaling:
+                m.set_scale(adapter, scale)
+        buckets: dict[str, list[tuple[list[float], int, str]]] = {}
+        flat: list[tuple[list[float], int]] = []
+        for example, logits, mode, width in scored_rows(
+            engine.model, engine.tokenizer, engine.mode_b_head, config, rows, 32
+        ):
+            flat.append((logits, example.target))
+            sample = (logits, example.target, family_of(example.source))
+            for key in {
+                CalibrationProfile.key(example.question.type, mode, width),
+                CalibrationProfile.key(example.question.type, mode),
+            }:
+                buckets.setdefault(key, []).append(sample)
+        return buckets, flat
+
+    results: dict[str, dict] = {}
+    for swept in [float(x) for x in scales.split(",") if x.strip()]:
+        _, flat = collect(swept, search_set)
+        accuracy, ece, brier, log_loss = score(flat, 1.0)
+        results[f"{swept:g}"] = {
+            "accuracy": round(accuracy, 4),
+            "ece_uncalibrated": round(ece, 4),
+            "brier": round(brier, 4),
+            "log_loss": round(log_loss, 4),
+        }
+        print(f"  scale {swept:<7g} {split} accuracy {accuracy:.4f}  ECE {ece:.4f}", flush=True)
+
+    print(f"fitting temperatures at scale {scale} on all {len(everything)} rows", flush=True)
+    buckets, flat = collect(scale, everything)
+    profile, report = fit_for_transfer(buckets, split_name=split)
+    after = score(flat, 1.0)
+    out = {
+        "scale": scale,
+        "fitted_on": split,
+        "per_scale": results,
+        "search_rows": len(search_set) if results else 0,
+        "temperatures": profile.temperatures,
+        "calibration_accuracy": round(after[0], 4),
+        "calibration_ece_uncalibrated": round(after[1], 4),
+    }
+    if apply:
+        profile.save(release / CALIBRATION)
+        manifest = json.loads((release / "lev_release.json").read_text())
+        manifest["adapter_scale"] = scale
+        (release / "lev_release.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        checkpoints.commit()
+        print(f"wrote scale {scale} and refitted temperatures into {release}")
+    print(json.dumps(out, indent=2))
+    return out
+
+
+# Mirrors levbench's label rule so a sweep is comparable with a `levbench eval` run.
+def _predicted_label(answer):
+    if answer.type == "noul":
+        return float(answer.noul) >= 0.5
+    if answer.type == "choice":
+        return answer.choice
+    return max(answer.probabilities.items(), key=lambda kv: kv[1])[0]
+
+
+# Scale zero is the frozen-backbone control.
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=2 * 60 * 60)
 def diagnose_ordinal(
     name: str = "lev",
     scales: str = "0,0.25,0.5,0.75,1.0",
     subsets: str = "summeval-consistency,summeval-relevance,helpsteer2",
 ) -> dict:
-    """Sweep adapter scales on rating tasks; use scale zero as the frozen-backbone control."""
     import collections
     import json
 
@@ -426,9 +534,8 @@ def diagnose_ordinal(
             picks: collections.Counter = collections.Counter()
             for item in items:
                 answer = engine.system_one(item.state, {"decision": question}).answers["decision"]
-                probs = {int(k): float(v) for k, v in answer.probabilities.items()}
-                pick = max(probs, key=probs.get)
-                picks[pick] += 1
+                pick = _predicted_label(answer)
+                picks[str(pick)] += 1
                 hits += pick == item.truth
             row = report["subsets"].setdefault(subset, {})
             row[f"{scale:g}"] = {
@@ -445,7 +552,6 @@ def diagnose_ordinal(
 
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=30 * 60)
 def diagnose_candidates(model_id: str = "Qwen/Qwen3.5-4B-Base") -> dict:
-    """Compare candidate embeddings alone, batched, reversed, and left-padded."""
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -549,7 +655,6 @@ def _probabilities(answer: Answer) -> dict[Any, float]:
 
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=30 * 60)
 def profile_engine(preset: str = "4b", rounds: int = 20) -> dict:
-    """Time CUDA-synchronized engine stages after warmup, excluding network time."""
     import statistics
     import time
 

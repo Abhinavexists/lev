@@ -174,8 +174,6 @@ class Batcher:
             rows, width = grown_rows, grown_width
 
     def _take(self, block: bool) -> _Job | None:
-        """Return the next request worth computing."""
-
         while True:
             if self._held is not None:
                 job, self._held = self._held, None

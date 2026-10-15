@@ -72,8 +72,8 @@ class TestResolution:
     def test_innocent_datasets_pass(self, innocent):
         assert resolve(innocent) is None
 
+    # Includes subsets absent from the completed runs.
     def test_subsets_that_did_not_run_are_blocked_too(self):
-        """All evaluation subsets are blocked, including those absent from completed runs."""
         unrun = [
             "massive-de-DE",
             "squad2",

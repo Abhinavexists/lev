@@ -27,7 +27,6 @@ def label_codes(n: int) -> list[str]:
 def single_token_codes(
     tokenizer, n: int, prefix: str = " ", skip_multi_token: bool = False
 ) -> list[str] | None:
-    """Find n single-token codes using the prompt boundary prefix; optionally skip split codes."""
     if not skip_multi_token:
         try:
             codes = label_codes(n)
@@ -60,6 +59,5 @@ NOUL_RATING_TOKENS = [str(i) for i in range(9)]
 
 
 def noul_probability(level_probs: dict[int, float]) -> float:
-    """Collapse a 9-level rating distribution to p(yes) = sum(i/8 * p_i)."""
     top = len(NOUL_RATING_TOKENS) - 1
     return sum((level / top) * p for level, p in level_probs.items())

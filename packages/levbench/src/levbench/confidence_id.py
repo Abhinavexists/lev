@@ -11,7 +11,6 @@ Distribution = list[float]
 
 
 def gini(p: Distribution) -> float:
-    """Normalized Gini concentration: (K*sum(p^2) - 1) / (K - 1)."""
     k = len(p)
     if k <= 1:
         return 1.0
@@ -38,7 +37,6 @@ def top_two_margin(p: Distribution) -> float:
 
 
 def normalized_max_prob(p: Distribution) -> float:
-    """Normalize maximum probability relative to uniform chance."""
     k = len(p)
     if k <= 1:
         return 1.0
@@ -63,7 +61,6 @@ CANDIDATES: dict[str, Callable[[Distribution], float]] = {
 
 
 def detect_precision(values: list[float], max_decimals: int = 6) -> float:
-    """Find a shared quantization step, or return zero if none matches."""
     for decimals in range(1, max_decimals + 1):
         unit = 10.0**-decimals
         if all(abs(v / unit - round(v / unit)) < 1e-6 for v in values):
@@ -72,7 +69,6 @@ def detect_precision(values: list[float], max_decimals: int = 6) -> float:
 
 
 def rounding_sensitivity(fn: Callable[[Distribution], float], p: Distribution, eps: float) -> float:
-    """Bound how probability rounding affects a confidence formula."""
     base = fn(p)
     raised = fn([min(1.0, x + eps) for x in p])
     lowered = fn([max(0.0, x - eps) for x in p])
@@ -87,14 +83,13 @@ class Fit:
     max_abs_error: float
     tolerance: float = 5e-3
 
+    # Tolerance allows for quantization error, as amplified by the candidate formula.
     @property
     def matches(self) -> bool:
-        """Allow quantization error amplified by the candidate formula."""
         return self.max_abs_error <= self.tolerance
 
 
 def collect(answers: Iterable[Any]) -> list[tuple[Distribution, float]]:
-    """Pull (distribution, reported confidence) from answers that have both."""
     samples: list[tuple[Distribution, float]] = []
     for answer in answers:
         reported = getattr(answer, "confidence", None)
@@ -106,7 +101,6 @@ def collect(answers: Iterable[Any]) -> list[tuple[Distribution, float]]:
 
 
 def identify(samples: list[tuple[Distribution, float]]) -> list[Fit]:
-    """Rank candidate formulas by how closely they reproduce `confidence`."""
     if not samples:
         return []
     everything = [v for dist, reported in samples for v in (*dist, reported)]
@@ -129,7 +123,6 @@ def identify(samples: list[tuple[Distribution, float]]) -> list[Fit]:
 
 
 def identify_by_size(samples: list[tuple[Distribution, float]]) -> dict[int, list[Fit]]:
-    """Fit confidence formulas separately for each candidate-set size."""
     by_size: dict[int, list[tuple[Distribution, float]]] = {}
     for dist, reported in samples:
         by_size.setdefault(len(dist), []).append((dist, reported))
@@ -139,7 +132,6 @@ def identify_by_size(samples: list[tuple[Distribution, float]]) -> dict[int, lis
 def worst_residuals(
     samples: list[tuple[Distribution, float]], name: str, limit: int = 3
 ) -> list[tuple[Distribution, float, float]]:
-    """Return the worst fits as (distribution, reported, predicted)."""
     fn = CANDIDATES[name]
     scored = [(dist, reported, fn(dist)) for dist, reported in samples]
     return sorted(scored, key=lambda row: abs(row[2] - row[1]), reverse=True)[:limit]
@@ -172,7 +164,6 @@ def format_fits(fits: list[Fit]) -> str:
 
 
 def format_diagnosis(samples: list[tuple[Distribution, float]]) -> str:
-    """Format per-size fits and worst residuals."""
     out: list[str] = []
 
     off = [abs(sum(dist) - 1.0) for dist, _ in samples]

@@ -18,9 +18,8 @@ from ..router import Mode, Route, candidate_count, route
 IGNORE_INDEX = -100
 
 
+# Shared by the batcher and collator so each example is tokenised once.
 class RouteCache:
-    """Cache routes shared by the batcher and collator to avoid repeated tokenization."""
-
     def __init__(self, tokenizer, max_label_options: int | None = None, style: Style = Style.PLAIN):
         self.tokenizer = tokenizer
         self.max_label_options = max_label_options
@@ -42,8 +41,6 @@ class RouteCache:
 
 @dataclass
 class Batch:
-    """A training batch with one readout mode."""
-
     mode: Mode
     input_ids: Tensor  # (B, T)
     attention_mask: Tensor  # (B, T)
@@ -78,8 +75,6 @@ def render(example: Example, codes: list[str] | None, style: Style = Style.PLAIN
 
 
 class ModeBatcher:
-    """Group by mode, sort within length windows, and shuffle batches without dropping examples."""
-
     def __init__(
         self,
         tokenizer,
@@ -99,9 +94,9 @@ class ModeBatcher:
     def route_for(self, example: Example) -> Route:
         return self.routes.route_for(example)
 
+    # Character count stands in for length, to avoid tokenising twice.
     @staticmethod
     def length_of(example: Example) -> int:
-        """Use character count as a length proxy to avoid tokenizing twice."""
         return len(str(example.state))
 
     def __call__(self, examples: Iterable[Example], epoch: int = 0) -> Iterator[list[Example]]:
@@ -131,8 +126,6 @@ class ModeBatcher:
 
 
 class DecisionCollator:
-    """Collate rows sharing one readout mode."""
-
     def __init__(
         self,
         tokenizer,
@@ -231,7 +224,6 @@ class DecisionCollator:
         return ids
 
     def _attach_candidate_pool(self, batch: Batch, examples: list[Example], k_max: int) -> None:
-        """Encode each distinct candidate string once and index into the pool."""
         import torch
 
         pool: dict[str, int] = {}

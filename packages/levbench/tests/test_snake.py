@@ -40,9 +40,8 @@ def unsafe_direction(game: SnakeGame) -> str:
     return next(m.direction for m in game.moves() if not m.safe)
 
 
+# Answers from a chosen direction, with two Noul probabilities.
 class StubServer:
-    """Answers from a chosen direction and two Noul probabilities"""
-
     def __init__(self, pick=None, route=0.9, food=0.9, follow_planner=False, invert=False):
         self.pick, self.route, self.food = pick, route, food
         self.follow_planner, self.invert = follow_planner, invert
@@ -248,8 +247,8 @@ class TestPlannerBackend:
 
 
 class TestRounds:
+    # A small board clears within the step budget, forcing a new round.
     def test_guarded_run_continues_past_a_cleared_board(self):
-        """A small board clears within the step budget, forcing a new round."""
         summary = play(
             PlannerClient(), "planner", "planner", width=4, height=4, initial_length=2, steps=60
         )

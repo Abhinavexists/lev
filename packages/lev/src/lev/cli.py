@@ -118,7 +118,9 @@ def cmd_data_build(args: argparse.Namespace) -> None:
         f"(oversample {ratio}x)"
         + ("  <- raise --limit-per-source to lower this" if ratio > 2 else "")
     )
-    print(f"  sources      {len(manifest['sources'])} ({', '.join(sorted(manifest['sources']))})")
+    print(
+        f"  {'sources':<12} {len(manifest['sources'])} ({', '.join(sorted(manifest['sources']))})"
+    )
 
 
 def cmd_data_eval(args: argparse.Namespace) -> None:
@@ -245,7 +247,6 @@ def _weights_dtype(engine) -> str | None:
 
 
 def cmd_presentation_checks(args: argparse.Namespace) -> None:
-    """Run presentation checks; exit 2 for settings mismatches and 1 for failed checks."""
     import time
 
     from . import presentation

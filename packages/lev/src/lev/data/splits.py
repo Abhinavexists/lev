@@ -32,8 +32,8 @@ def row_key(source: str, index: int, text: str) -> str:
     return f"{source}|{index}|{text[:512]}"
 
 
+# Python's hash() is salted per process; splits must stay stable across runs.
 def hash_position(key: str, salt: str = SPLIT_SALT) -> float:
-    """Map a key to a process-stable float in [0, 1)."""
     digest = hashlib.blake2b(f"{salt}|{key}".encode(), digest_size=8).digest()
     return int.from_bytes(digest, "big") / float(1 << 64)
 
@@ -84,7 +84,6 @@ def split_examples(
 
 
 def check_coverage(splits: dict[Split, list[Example]], strict: bool = True) -> SplitReport:
-    """Check observed labels appear in train and offered labels appear in the data."""
     seen: dict[str, set[int]] = defaultdict(set)
     in_train: dict[str, set[int]] = defaultdict(set)
     offered: dict[str, int] = {}

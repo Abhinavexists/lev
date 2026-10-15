@@ -13,8 +13,8 @@ from lev.types import Noul  # noqa: E402
 
 
 class TestDecisionLoss:
+    # Padded slots must avoid 0 * -inf, which produces NaN.
     def test_padded_slots_do_not_produce_nan(self, train_config):
-        """Padded slots must avoid 0 * -inf, which produces NaN."""
         logits = torch.tensor(
             [[1.0, 2.0, 0.5, 0.1], [0.3, 1.2, float("-inf"), float("-inf")]],
             requires_grad=True,

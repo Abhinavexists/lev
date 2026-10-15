@@ -17,7 +17,6 @@ from lev.calibrate import (
 
 
 def overconfident_samples(n: int = 600, seed: int = 7, sharpness: float = 4.0):
-    """Generate roughly 70% accuracy at 96% confidence."""
     rng = random.Random(seed)
     samples = []
     for _ in range(n):
@@ -137,8 +136,8 @@ class TestOptionBands:
 
 
 class TestTransferSelectedCalibration:
+    # Large easy families outnumber a small hard family at equal confidence.
     def family_rows(self):
-        """Large easy families outnumber a small hard family at equal confidence."""
         rows = []
         for fam, n, acc in (
             ("easy1", 400, 0.97),

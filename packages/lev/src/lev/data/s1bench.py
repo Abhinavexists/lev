@@ -24,8 +24,6 @@ QUESTION_NAME = "decision"
 
 @dataclass(frozen=True)
 class EvalItem:
-    """An evaluation record with a Choice key, Score index, or Noul bool as truth."""
-
     id: str
     state: dict | str
     truth: bool | int | str
@@ -33,8 +31,6 @@ class EvalItem:
 
 @dataclass(frozen=True)
 class EvalSubset:
-    """A subset with published Jev 1.13 and measured s1-fast scores."""
-
     name: str
     hf_id: str
     jev_published: float
@@ -66,12 +62,10 @@ def subset_names() -> list[str]:
 
 
 def get_subset(name: str) -> EvalSubset:
-    """Resolve a subset by name or alias. Raises unless it is S1Bench evaluation data."""
     return EVAL_SUBSETS[assert_eval_only(name)]
 
 
 def definition(name: str) -> dict:
-    """The vendored definition: `instructions`, `criteria`, `ids`, `labels`, provenance."""
     return json.loads((SUBSET_DIR / f"{name}.json").read_text(encoding="utf-8"))
 
 
@@ -254,7 +248,6 @@ _READERS: dict[str, Callable[[], Iterator[EvalItem]]] = {
 
 
 def load_eval_subset(name: str) -> tuple[Question, list[EvalItem]]:
-    """Load a S1Bench subset, validating its records against pinned ids and labels."""
     subset = get_subset(name)
     spec = definition(subset.name)
     by_id = {item.id: item for item in _READERS[subset.name]()}
@@ -273,7 +266,6 @@ def load_eval_subset(name: str) -> tuple[Question, list[EvalItem]]:
 
 
 def export(out_dir: str | Path, subsets: list[str] | None = None) -> dict:
-    """Write `<subset>.json` levbench task files, plus an `index.json`."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 

@@ -88,7 +88,6 @@ def sweep(
     bank: list[tuple[str, Any]] | None = None,
     errors: list[tuple[int, str]] | None = None,
 ) -> list[SweepRow]:
-    """Run the sweep, appending any per-count failure to `errors`."""
     bank = QUESTION_BANK if bank is None else bank
     rows: list[SweepRow] = []
     errors = errors if errors is not None else []

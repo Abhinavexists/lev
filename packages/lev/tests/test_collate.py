@@ -19,8 +19,8 @@ class TestCollator:
     def collator(self, batching_tokenizer):
         return DecisionCollator(batching_tokenizer, max_seq_len=512)
 
+    # Right padding makes seq - 1 point at a pad token.
     def test_last_position_is_the_final_real_token_not_seq_minus_one(self, collator):
-        """Right padding makes seq - 1 point to a pad token."""
         batch = collator(
             [an_example(a_choice(), state="short"), an_example(a_choice(), state="x" * 200)]
         )
@@ -117,8 +117,6 @@ class TestModeBatcher:
 
 
 class TestLengthBucketing:
-    """Test padding savings without global length ordering."""
-
     def rows(self, n=512):
         rng = random.Random(0)
         # Bimodal, like the real mixture: short intents and long reviews.

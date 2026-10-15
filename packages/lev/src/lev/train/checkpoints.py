@@ -10,8 +10,8 @@ MODE_B_HEAD = "mode_b_head.pt"
 CALIBRATION = "calibration.json"
 
 
+# Highest step number, not newest mtime.
 def latest_checkpoint(output: str | Path) -> Path | None:
-    """Return the highest numbered step with adapter weights, regardless of mtime."""
     source = Path(output)
     steps = sorted(
         (d for d in source.glob("step-*") if (d / ADAPTER_WEIGHTS).is_file()),
@@ -21,7 +21,6 @@ def latest_checkpoint(output: str | Path) -> Path | None:
 
 
 def fetch_checkpoint(spec: str | Path, cache_dir: str | None = None) -> Path:
-    """Use an existing local path or download a Hub id; report ambiguous missing paths clearly."""
     local = Path(spec)
     if local.exists():
         return local
@@ -40,7 +39,6 @@ def fetch_checkpoint(spec: str | Path, cache_dir: str | None = None) -> Path:
 
 
 def resolve_checkpoint(path: str | Path, cache_dir: str | None = None) -> Path:
-    """Resolve a step directory, training output, flat release, or Hub id."""
     source = fetch_checkpoint(path, cache_dir)
     if (source / ADAPTER_WEIGHTS).is_file():
         return source
@@ -54,7 +52,6 @@ def resolve_checkpoint(path: str | Path, cache_dir: str | None = None) -> Path:
 
 
 def load_training_state(path: str | Path) -> dict | None:
-    """Load resume state, or return None for a weights-only checkpoint."""
     import torch
 
     file = resolve_checkpoint(path) / TRAINING_STATE
@@ -64,8 +61,9 @@ def load_training_state(path: str | Path) -> dict | None:
     return torch.load(file, map_location="cpu", weights_only=True)
 
 
+# Restores in place so the optimizer keeps valid parameter references; head mismatches are
+# rejected.
 def load_checkpoint(model, head, path: str | Path) -> None:
-    """Restore weights in place to preserve optimizer references; reject head mismatches."""
     import torch
     from peft import set_peft_model_state_dict
     from safetensors.torch import load_file
@@ -91,6 +89,7 @@ def load_checkpoint(model, head, path: str | Path) -> None:
         )
 
 
+# An interrupted save may leave the checkpoint incomplete.
 def save_checkpoint(
     model,
     head,
@@ -100,7 +99,6 @@ def save_checkpoint(
     on_checkpoint=None,
     state: dict | None = None,
 ) -> Path:
-    """Write weights, tokenizer, and optional resume state; interrupted saves may be incomplete."""
     import torch
 
     path = output / f"step-{step}"

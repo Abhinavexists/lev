@@ -69,7 +69,6 @@ class ContaminationError(RuntimeError):
 
 
 def normalise(name: str) -> str:
-    """Canonicalise a dataset name for lookup."""
     cleaned = name.strip().lower()
     cleaned = re.sub(r"[\s_]+", "-", cleaned)
     return re.sub(r":(train|validation|dev|test)$", "", cleaned)
@@ -86,7 +85,6 @@ _ALIAS_SEGMENTS: tuple[tuple[frozenset[str], str], ...] = tuple(
 
 
 def resolve(name: str) -> str | None:
-    """Map a dataset name to the blocked subset it belongs to, if any."""
     normalised = normalise(name)
 
     if normalised in _BLOCKED_BY_NORMALISED:
@@ -117,7 +115,6 @@ def check_mixture(dataset_names: Iterable[str]) -> dict[str, str]:
 
 
 def assert_eval_only(dataset_name: str) -> str:
-    """Resolve an evaluation subset or raise ContaminationError."""
     subset = resolve(dataset_name)
     if subset is None:
         raise ContaminationError(

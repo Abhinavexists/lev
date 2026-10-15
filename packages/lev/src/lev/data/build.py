@@ -74,7 +74,6 @@ def read_jsonl(path: Path) -> list[Example]:
 
 
 def verify_round_trip(path: Path, sample: int = 1000) -> int:
-    """Check sampled rows round-trip exactly, including option order; return the count."""
     rows = read_jsonl(path)
     step = max(1, len(rows) // sample)
     with path.open(encoding="utf-8") as handle:
@@ -104,7 +103,6 @@ def build_dataset(
     cache_dir: str | None = None,
     loader: Callable | None = None,
 ) -> dict:
-    """Write each split's JSONL and the manifest to `out_dir`; return the manifest."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     weights = sources or default_weights()

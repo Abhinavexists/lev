@@ -35,8 +35,8 @@ class TestAccuracyInterval:
     def test_matches_the_normal_approximation(self):
         assert accuracy_interval(0.86, 200) == pytest.approx(0.048, abs=0.001)
 
+    # Perfect observed accuracy does not imply zero uncertainty.
     def test_a_certain_estimate_still_reports_a_finite_interval(self):
-        """Perfect observed accuracy does not imply zero uncertainty."""
         assert 0.0 <= accuracy_interval(1.0, 200) < 0.01
 
     def test_no_items_means_no_information(self):

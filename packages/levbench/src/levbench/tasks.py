@@ -227,8 +227,8 @@ def dataset(path: str | Path | None = None) -> tuple[Sequence[Item | FileItem], 
     return ITEMS, questions()
 
 
+# Comparing two runs needs more data than this single-run margin.
 def detectable_difference(n: int, baseline: float = 0.8, z: float = 1.96) -> float:
-    """Estimate the accuracy margin (95% at default z); comparing runs needs more data."""
     if n <= 0:
         return 1.0
     return min(1.0, z * math.sqrt(baseline * (1 - baseline) / n))

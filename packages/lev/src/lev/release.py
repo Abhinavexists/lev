@@ -23,7 +23,6 @@ def build_release(
     metrics: dict | None = None,
     prompt_style: str = "plain",
 ) -> dict:
-    """Package a checkpoint; default to parent calibration, otherwise serve raw softmax."""
     step_dir = resolve_checkpoint(checkpoint)
     target = Path(out)
     target.mkdir(parents=True, exist_ok=True)
@@ -63,7 +62,6 @@ def build_release(
 
 
 def model_card(manifest: dict) -> str:
-    """Build Hub metadata and usage instructions for a release."""
     metrics = manifest.get("metrics") or {}
     metric_lines = "\n".join(f"| {k} | {v} |" for k, v in metrics.items()) or "| — | not recorded |"
     calibration = (
@@ -127,7 +125,6 @@ Numbers on S1Bench, the harness and the decision log are in the repository.
 
 
 def publish(release_dir: str | Path, repo_id: str, *, private: bool = False) -> str:
-    """Upload a release using HF authentication; create the repo if needed and return its URL."""
     from huggingface_hub import HfApi
 
     folder = Path(release_dir)

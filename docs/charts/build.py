@@ -30,7 +30,6 @@ def pct(v: float) -> str:
 
 
 def bar_path(x0: float, x1: float, y: float, h: float, r: float = 4) -> str:
-    """Square at the baseline, 4px rounded at the data end."""
     if x1 - x0 <= 0.5:
         return ""
     r = min(r, (x1 - x0) / 2, h / 2)
@@ -62,7 +61,6 @@ def table(headers, rows) -> str:
 
 
 def leaderboard(rows, vmin=0.2, vmax=0.8) -> str:
-    """Ranked horizontal bars. Rows: dicts with name, value, var, meta, bold."""
     label_w, meta_w, row_h, bar_h, top = 196, 150, 23, 13, 6
     plot_w = W - label_w - meta_w - 40
     x = lambda v: label_w + (v - vmin) / (vmax - vmin) * plot_w  # noqa: E731
@@ -275,7 +273,6 @@ def load_inputs() -> Inputs:
 
 
 def majority_rate(subset: str) -> float:
-    """Accuracy of always answering the most common label."""
     labels = definition(subset)["labels"]
     return max(labels.values()) / sum(labels.values())
 

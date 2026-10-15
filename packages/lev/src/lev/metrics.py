@@ -6,8 +6,8 @@ import math
 from collections.abc import Sequence
 
 
+# Multiclass Brier: squared error summed over the whole vector.
 def brier(probs: Sequence[float], truth: int) -> float:
-    """Multiclass Brier score: summed squared error over the whole vector."""
     return sum((p - (1.0 if i == truth else 0.0)) ** 2 for i, p in enumerate(probs))
 
 

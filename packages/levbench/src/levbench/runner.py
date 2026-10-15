@@ -69,6 +69,8 @@ class EvalReport:
 
 
 DEFAULT_LOCAL_BASE_URL = "http://localhost:8000"
+# Label for Jev runs left on the SDK's default model; reports name the version served instead.
+JEV_DEFAULT = "jev"
 
 
 # Modal's 4B cold start measured 20-55 s, against the SDK's 10 s default (ADR-022).
@@ -81,14 +83,13 @@ def build_client(
     base_url: str | None = None,
     timeout: float | None = None,
 ):
-    """Build a Jev, local lev, or Anthropic client and return its model name."""
     if backend in ("jev", "lev"):
         if backend == "lev":
             base_url = base_url or DEFAULT_LOCAL_BASE_URL
         from typesafe_sdk import TypeSafeClient
 
-        resolved = model or ("jev-latest" if backend == "jev" else "local")
-        kwargs: dict[str, Any] = {"model": resolved}
+        resolved = model or (JEV_DEFAULT if backend == "jev" else "local")
+        kwargs: dict[str, Any] = {"model": None if resolved == JEV_DEFAULT else resolved}
         if timeout is not None:
             kwargs["timeout"] = timeout
         elif backend == "lev":
@@ -116,8 +117,8 @@ def build_client(
     raise ValueError(f"Unknown backend {backend!r} (expected 'jev', 'lev' or 'anthropic')")
 
 
+# Billed retry totals win; zero counts are accepted, missing counts raise.
 def _token_count(usage: Any, total_field: str, base_field: str) -> int:
-    """Prefer billed retry totals; accept zero counts and reject missing counts."""
     for field_name in (total_field, base_field):
         value = getattr(usage, field_name, None)
         if value is not None:
@@ -161,7 +162,6 @@ def run_eval(
     questions: dict[str, Any],
     concurrency: int = 1,
 ) -> EvalReport:
-    """Evaluate concurrently, returning results in item order and per-call latencies."""
     from concurrent.futures import ThreadPoolExecutor
 
     report = EvalReport(backend=backend, model=model)
@@ -191,7 +191,7 @@ def run_eval(
             )
 
     served = report.served_by
-    if backend == "lev" and len(served) == 1:
+    if (backend == "lev" or model == JEV_DEFAULT) and len(served) == 1:
         # The label was a placeholder; the server knows what it loaded.
         report.model = served.pop()
 
@@ -212,29 +212,29 @@ def _format_summary(report: EvalReport) -> list[str]:
         lines.append(
             f"{'wall time':<18} {report.wall_seconds:.1f}s  ({n / report.wall_seconds:.2f} items/s)"
         )
-    lines.append(f"calls              {n}")
+    lines.append(f"{'calls':<18} {n}")
     if n:
-        lines.append(f"latency p50        {report.pct(0.5):.3f}s")
-        lines.append(f"latency mean       {statistics.mean(report.latencies):.3f}s")
+        lines.append(f"{'latency p50':<18} {report.pct(0.5):.3f}s")
+        lines.append(f"{'latency mean':<18} {statistics.mean(report.latencies):.3f}s")
         # Report the maximum for small samples, where p95 is dominated by connection setup.
         if n >= 100:
-            lines.append(f"latency p95        {report.pct(0.95):.3f}s")
+            lines.append(f"{'latency p95':<18} {report.pct(0.95):.3f}s")
         else:
             lines.append(
-                f"latency slowest    {report.latencies[-1]:.3f}s  (n={n}; too few for a p95)"
+                f"{'latency slowest':<18} {report.latencies[-1]:.3f}s  (n={n}; too few for a p95)"
             )
-    lines.append(f"input tokens       {sum(call.input_tokens for call in report.calls):,}")
-    lines.append(f"output tokens      {sum(call.output_tokens for call in report.calls):,}")
+    lines.append(f"{'input tokens':<18} {sum(call.input_tokens for call in report.calls):,}")
+    lines.append(f"{'output tokens':<18} {sum(call.output_tokens for call in report.calls):,}")
     if pricing.is_self_hosted(report.model):
-        lines.append("total cost         self-hosted (GPU time, not per-token)")
+        lines.append(f"{'total cost':<18} self-hosted (GPU time, not per-token)")
     else:
-        lines.append(f"total cost         ${report.total_cost:.6f}")
-    lines.append(f"schema retries     {report.total_schema_retries}")
-    lines.append(f"transient retries  {report.total_transient_retries}")
+        lines.append(f"{'total cost':<18} ${report.total_cost:.6f}")
+    lines.append(f"{'schema retries':<18} {report.total_schema_retries}")
+    lines.append(f"{'transient retries':<18} {report.total_transient_retries}")
     served = report.served_by
     if served and served != {report.model} and not pricing.is_self_hosted(report.model):
         lines.append(
-            f"WARNING            requested {report.model!r} but server served "
+            f"{'WARNING':<18} requested {report.model!r} but server served "
             f"{sorted(served)} -- cost figures use the requested model's price"
         )
     lines.append("")

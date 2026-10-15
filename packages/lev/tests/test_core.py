@@ -34,8 +34,8 @@ from lev.router import BINARY_NOUL, Mode, route, route_all
 from lev.types import Choice, Noul, Score
 
 
+# Every space-prefixed letter and letter pair is one token, except `missing`.
 def two_letter_tokenizer(missing: str | None = None) -> FakeTokenizer:
-    """Every space-prefixed letter and letter pair is one token, except `missing`."""
     pairs = {f" {a}{b}" for a in ascii_uppercase for b in ascii_uppercase}
     if missing is not None:
         pairs.discard(f" {missing}")
@@ -267,8 +267,8 @@ class TestWhichQuestionsGetTwoOrders:
             [1, 0],
         ]
 
+    # Training presents ordered levels from low to high.
     def test_score_keeps_its_level_order(self, rich_tokenizer):
-        """Training presents ordered levels from low to high."""
         assert self.orders(Score(criteria=["low", "mid", "high"]), rich_tokenizer) == [None]
 
     def test_rating_noul_keeps_its_scale(self, rich_tokenizer):
@@ -381,7 +381,6 @@ class TestSkipMultiTokenCodes:
 
 class TestRoutePreviewMatchesServing:
     def preview(self, tokenizer, request, tmp_path, monkeypatch, capsys) -> str:
-        """Run the route CLI with an injected tokenizer."""
         from lev.cli import main
 
         stub = types.ModuleType("transformers")
@@ -431,16 +430,15 @@ class TestSystemOneAcceptsPlainDicts:
         with pytest.raises(RuntimeError, match="need Mode B"):
             engine.system_one("state", questions)
 
+    # The server maps ValueError to HTTP 422.
     def test_a_malformed_dict_is_a_value_error(self, rich_tokenizer):
-        """The server maps ValueError to HTTP 422."""
         engine = self.engine(rich_tokenizer)
         with pytest.raises(ValueError, match="at least 2 options"):
             engine.system_one("state", {"pick": {"type": "choice", "criteria": {"a": None}}})
 
 
+# Concurrent access to a fast tokenizer can corrupt settings or raise Already borrowed.
 class TestTokenizerIsUsedOneCallAtATime:
-    """Concurrent access to a fast tokenizer can corrupt settings or raise Already borrowed."""
-
     class OverlapDetector:
         def __init__(self, inner):
             self.inner = inner

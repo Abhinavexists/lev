@@ -35,8 +35,8 @@ NOUL = Noul(instructions="is it urgent?")
 
 
 class TestRoundTrip:
+    # Sorting cache keys changes what positional targets refer to (ADR-024).
     def test_same_options_in_a_different_order_are_different_questions(self, tmp_path):
-        """Sorting cache keys changes what positional targets refer to (ADR-024)."""
         forward = Choice(instructions="q", criteria={"a": None, "b": None, "c": None})
         backward = Choice(instructions="q", criteria={"c": None, "b": None, "a": None})
         rows = [an_example(forward, target=0, state="x"), an_example(backward, target=0, state="y")]
@@ -51,7 +51,6 @@ class TestRoundTrip:
         assert back[0].question is not back[1].question
 
     def test_round_trip_guard_catches_an_order_blind_reader(self, tmp_path, monkeypatch):
-        """Inject an order-blind cache and require the guard to reject it."""
         import lev.data.build as build
         from lev.data.build import verify_round_trip
 
@@ -152,8 +151,8 @@ class TestExport:
 
 
 class TestVariableQuestions:
+    # One task file cannot represent different option sets per row.
     def test_sources_whose_question_varies_per_row_are_skipped_and_listed(self, tmp_path):
-        """One task file cannot represent different option sets per row."""
         rows = [example(CHOICE, i % 2, i, source="a") for i in range(MIN_USEFUL_ITEMS + 10)]
         rows += [
             example(
