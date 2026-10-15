@@ -394,6 +394,15 @@ def check_release(name: str = "4b") -> dict:
     return {"health": health, "response": served}
 
 
+def _predicted_label(answer):
+    """levbench's label rule, so a sweep is comparable with a `levbench eval` run."""
+    if answer.type == "noul":
+        return float(answer.noul) >= 0.5
+    if answer.type == "choice":
+        return answer.choice
+    return max(answer.probabilities.items(), key=lambda kv: kv[1])[0]
+
+
 @app.function(gpu="H100", volumes=VOLUMES, secrets=SECRETS, timeout=2 * 60 * 60)
 def diagnose_ordinal(
     name: str = "lev",
@@ -426,9 +435,8 @@ def diagnose_ordinal(
             picks: collections.Counter = collections.Counter()
             for item in items:
                 answer = engine.system_one(item.state, {"decision": question}).answers["decision"]
-                probs = {int(k): float(v) for k, v in answer.probabilities.items()}
-                pick = max(probs, key=probs.get)
-                picks[pick] += 1
+                pick = _predicted_label(answer)
+                picks[str(pick)] += 1
                 hits += pick == item.truth
             row = report["subsets"].setdefault(subset, {})
             row[f"{scale:g}"] = {
