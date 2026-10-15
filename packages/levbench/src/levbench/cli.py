@@ -104,15 +104,18 @@ def cmd_compare(args: argparse.Namespace) -> None:
     cost_ratio = llm.total_cost / jev.total_cost if jev.total_cost else 0.0
     speed_ratio = llm.pct(0.5) / jev.pct(0.5) if jev.pct(0.5) else 0.0
     print(
-        f"cost   jev ${jev.total_cost:.6f}  vs  llm ${llm.total_cost:.6f}"
+        f"{'cost':<18} jev ${jev.total_cost:.6f}  vs  llm ${llm.total_cost:.6f}"
         f"   ({cost_ratio:.1f}x cheaper)"
     )
     print(
-        f"p50    jev {jev.pct(0.5):.3f}s  vs  llm {llm.pct(0.5):.3f}s   ({speed_ratio:.1f}x faster)"
+        f"{'p50':<18} jev {jev.pct(0.5):.3f}s  vs  llm {llm.pct(0.5):.3f}s"
+        f"   ({speed_ratio:.1f}x faster)"
     )
-    print(f"schema retries  jev {jev.total_schema_retries}  vs  llm {llm.total_schema_retries}")
     print(
-        f"transient retries  jev {jev.total_transient_retries}"
+        f"{'schema retries':<18} jev {jev.total_schema_retries}  vs  llm {llm.total_schema_retries}"
+    )
+    print(
+        f"{'transient retries':<18} jev {jev.total_transient_retries}"
         f"  vs  llm {llm.total_transient_retries}"
     )
 
